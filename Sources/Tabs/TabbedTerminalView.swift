@@ -10,9 +10,10 @@ struct TabbedTerminalView: View {
                 ForEach(controller.tabs) { tab in
                     Button(action: { controller.selectedTabID = tab.id }) {
                         Text(tab.title)
+                            .foregroundColor(controller.selectedTabID == tab.id ? NeoLinkTheme.textPrimary : NeoLinkTheme.textSecondary)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(controller.selectedTabID == tab.id ? Color.accentColor.opacity(0.2) : Color.clear)
+                            .background(controller.selectedTabID == tab.id ? NeoLinkTheme.selectionBlue.opacity(0.6) : Color.clear)
                             .cornerRadius(4)
                     }
                     .buttonStyle(.plain)
@@ -31,13 +32,14 @@ struct TabbedTerminalView: View {
                 .buttonStyle(.plain)
             }
             .padding(6)
+            .background(NeoLinkTheme.panelBackground)
 
-            Divider()
+            NeoLinkTheme.horizontalSeparator()
 
             HStack {
                 Text(terminalState.currentDirectory ?? "")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(NeoLinkTheme.textSecondary)
                     .lineLimit(1)
                 Spacer()
             }

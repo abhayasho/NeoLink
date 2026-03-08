@@ -9,24 +9,24 @@ struct SftpBrowserView: View {
     @State private var renameText: String = ""
     @State private var newFolderName: String = ""
     @State private var showingDownloadPanelFor: SftpItem?
+    @State private var hoveredID: UUID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
                 Button {
                     Task { await viewModel.goUp(using: connection) }
                 } label: {
                     Image(systemName: "chevron.up")
+                        .font(.system(size: 10, weight: .medium))
                 }
                 .buttonStyle(.plain)
-
                 Text(viewModel.currentPath)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 10))
+                    .foregroundColor(NeoLinkTheme.textSecondary)
                     .lineLimit(1)
-
-                Spacer()
-
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
                 Button {
                     newFolderName = ""
                     renameItem = nil
@@ -37,6 +37,8 @@ struct SftpBrowserView: View {
                 }
                 .buttonStyle(.plain)
             }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
 
             if viewModel.isLoading {
                 ProgressView()
@@ -44,13 +46,16 @@ struct SftpBrowserView: View {
             } else if viewModel.items.isEmpty {
                 Text("No remote files.")
                     .font(.footnote)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(NeoLinkTheme.textSecondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 List(viewModel.items) { item in
                     row(for: item)
+                        .listRowBackground(Color.clear)
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .listRowSeparatorTint(NeoLinkTheme.divider)
                 .dropDestination(for: URL.self) { urls, _ in
                     for url in urls {
                         Task { await viewModel.upload(localURL: url, using: connection) }
@@ -82,16 +87,30 @@ struct SftpBrowserView: View {
         } label: {
             HStack {
                 Image(systemName: item.isDirectory ? "folder" : "doc.text")
-                    .foregroundColor(item.isDirectory ? .accentColor : .primary)
+                    .foregroundColor(item.isDirectory ? NeoLinkTheme.textPrimary : NeoLinkTheme.textSecondary)
                 Text(item.name)
+                    .foregroundColor(NeoLinkTheme.textPrimary)
                 Spacer()
             }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill((hoveredID == item.id) ? NeoLinkTheme.rowHoverWhite : NeoLinkTheme.rowFill)
+            )
         }
         .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6))
+        .onHover { hovering in
+            hoveredID = hovering ? item.id : (hoveredID == item.id ? nil : hoveredID)
+        }
         .contextMenu {
             if item.isDirectory {
                 Button("Open") {
                     Task { await viewModel.navigateInto(item, using: connection) }
+                }
+                Button("Download folder…") {
+                    downloadFolder(item: item)
                 }
             } else {
                 Button("Download…") {
@@ -155,6 +174,18 @@ struct SftpBrowserView: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             Task { await viewModel.download(item, to: url, using: connection) }
+        }
+    }
+
+    private func downloadFolder(item: SftpItem) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Download"
+        panel.begin { response in
+            guard response == .OK, let base = panel.url else { return }
+            Task { await viewModel.downloadFolder(item, into: base, using: connection) }
         }
     }
 }

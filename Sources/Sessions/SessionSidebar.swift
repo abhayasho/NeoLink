@@ -49,6 +49,9 @@ struct SessionSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(NeoLinkTheme.sidebarBackground)
+        .foregroundStyle(NeoLinkTheme.textPrimary)
         .sheet(item: $sessionToEdit) { session in
             SessionEditSheet(
                 session: session,

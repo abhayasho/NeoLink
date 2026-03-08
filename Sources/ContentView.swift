@@ -14,18 +14,28 @@ struct ContentView: View {
                 let backend = tabsController.selectedTab?.configuration.backend ?? .localShell
 
                 FileBrowserPane(backend: backend, terminalState: terminalState)
-                    .frame(minWidth: 260, idealWidth: 280, maxWidth: 320)
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 380)
 
-                Divider()
+                NeoLinkTheme.verticalSeparator()
 
                 TabbedTerminalView(controller: tabsController, terminalState: terminalState)
-                    .padding(.leading, 4)
+                    .padding(.trailing, 8)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(NeoLinkTheme.background)
+            .overlay(alignment: .leading) {
+                NeoLinkTheme.verticalSeparator()
             }
         }
         .environmentObject(sessionManager)
         .environmentObject(tabsController)
         .environmentObject(sftpConnectionPool)
         .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 260)
+        .tint(NeoLinkTheme.accent)
+        .environment(\.colorScheme, .dark)
+        .font(NeoLinkTheme.font)
+        .background(NeoLinkTheme.background)
     }
 }
 

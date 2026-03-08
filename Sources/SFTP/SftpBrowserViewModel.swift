@@ -86,7 +86,12 @@ final class SftpBrowserViewModel: ObservableObject {
     func upload(localURL: URL, using connection: SSHConnection) async {
         lastError = nil
         do {
-            try await SftpManager.shared.uploadFile(connection: connection, localURL: localURL, into: currentPath)
+            let isDir = (try? localURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            if isDir {
+                try await SftpManager.shared.uploadDirectory(connection: connection, localDirectoryURL: localURL, into: currentPath)
+            } else {
+                try await SftpManager.shared.uploadFile(connection: connection, localURL: localURL, into: currentPath)
+            }
             await refresh(using: connection)
         } catch {
             lastError = error.localizedDescription
@@ -97,6 +102,15 @@ final class SftpBrowserViewModel: ObservableObject {
         lastError = nil
         do {
             try await SftpManager.shared.downloadFile(connection: connection, item: item, to: localURL)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func downloadFolder(_ item: SftpItem, into localDirectoryURL: URL, using connection: SSHConnection) async {
+        lastError = nil
+        do {
+            try await SftpManager.shared.downloadDirectory(connection: connection, item: item, into: localDirectoryURL)
         } catch {
             lastError = error.localizedDescription
         }

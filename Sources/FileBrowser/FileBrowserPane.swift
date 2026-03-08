@@ -9,15 +9,16 @@ struct FileBrowserPane: View {
     @StateObject private var remoteVM = SftpBrowserViewModel()
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack {
+        VStack(spacing: 2) {
+            HStack(spacing: 4) {
                 Text(title)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(NeoLinkTheme.textSecondary)
                 Spacer()
             }
+            .padding(.vertical, 2)
 
-            Divider()
+            NeoLinkTheme.horizontalSeparator()
 
             Group {
                 switch backend {
@@ -50,7 +51,9 @@ struct FileBrowserPane: View {
                 }
             }
         }
-        .padding(8)
+        .padding(6)
+        .background(NeoLinkTheme.panelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private var title: String {

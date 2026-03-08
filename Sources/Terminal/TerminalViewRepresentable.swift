@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftTerm
+import AppKit
 
 enum TerminalBackend: Equatable {
     case localShell
@@ -54,6 +55,10 @@ struct TerminalViewRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         let view = LocalProcessTerminalView(frame: .zero)
         view.processDelegate = context.coordinator
+        // Match terminal colors to the app theme (avoid the “black gap”).
+        view.nativeBackgroundColor = NSColor(red: 0x1e / 255, green: 0x1e / 255, blue: 0x1e / 255, alpha: 1)
+        view.nativeForegroundColor = NSColor(red: 0xd4 / 255, green: 0xd4 / 255, blue: 0xd4 / 255, alpha: 1)
+        view.caretColor = NSColor(white: 0.9, alpha: 1)
         startProcess(for: configuration, in: view)
         return view
     }

@@ -174,24 +174,29 @@ struct LocalFileBrowserView: View {
     @ObservedObject var terminalState: TerminalState
     @State private var renameItem: LocalFileItem?
     @State private var renameText: String = ""
+    @State private var hoveredID: UUID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
                 Button {
                     viewModel.goUp()
                 } label: {
                     Image(systemName: "chevron.up")
+                        .font(.system(size: 10, weight: .medium))
                 }
                 .buttonStyle(.plain)
-
                 Text(viewModel.currentURL.path)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 10))
+                    .foregroundColor(NeoLinkTheme.textSecondary)
                     .lineLimit(1)
-
-                Spacer()
-
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                if viewModel.copiedURL != nil {
+                    Button("Paste") { viewModel.paste() }
+                        .font(.system(size: 10))
+                        .buttonStyle(.plain)
+                }
                 Menu {
                     ForEach(FileSortOrder.allCases, id: \.self) { order in
                         Button(viewModel.sortOrder == order ? "✓ \(order.rawValue)" : order.rawValue) {
@@ -201,31 +206,36 @@ struct LocalFileBrowserView: View {
                     }
                 } label: {
                     Image(systemName: "arrow.up.arrow.down.circle")
-                        .font(.body)
+                        .font(.system(size: 12))
                 }
                 .menuStyle(.borderlessButton)
             }
             .padding(.horizontal, 4)
+            .padding(.vertical, 2)
 
             if let err = viewModel.lastError {
                 Text(err)
-                    .font(.caption2)
+                    .font(.system(size: 10))
                     .foregroundColor(.red)
                     .padding(.horizontal, 4)
             }
 
             List {
                 if viewModel.copiedURL != nil {
-                    Button("Paste") {
-                        viewModel.paste()
-                    }
-                    .buttonStyle(.plain)
+                    Button("Paste") { viewModel.paste() }
+                        .font(.system(size: 11))
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.clear)
                 }
                 ForEach(viewModel.items) { item in
                     row(for: item)
+                        .listRowBackground(Color.clear)
                 }
             }
             .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .listRowSeparatorTint(NeoLinkTheme.divider)
+            .listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
             .dropDestination(for: URL.self) { urls, _ in
                 for url in urls { viewModel.copyToCurrentDirectory(from: url) }
                 return true
@@ -240,16 +250,28 @@ struct LocalFileBrowserView: View {
         Button {
             if item.isDirectory {
                 viewModel.navigate(to: item)
-                terminalState.pendingCommand = "cd \(item.url.path)\n"
             }
         } label: {
-            HStack {
+            HStack(spacing: 6) {
                 Image(systemName: item.isDirectory ? "folder" : "doc.text")
+                    .foregroundColor(item.isDirectory ? NeoLinkTheme.textPrimary : NeoLinkTheme.textSecondary)
+                    .font(.system(size: 14))
                 Text(item.url.lastPathComponent)
+                    .foregroundColor(NeoLinkTheme.textPrimary)
+                    .lineLimit(1)
                 Spacer()
             }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill((hoveredID == item.id) ? NeoLinkTheme.rowHoverWhite : NeoLinkTheme.rowFill)
+            )
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredID = hovering ? item.id : (hoveredID == item.id ? nil : hoveredID)
+        }
         .onTapGesture(count: 2) {
             viewModel.open(item: item)
         }

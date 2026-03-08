@@ -28,14 +28,22 @@ you can work with local and remote files from a single window.
 
 ### Building and running
 
-Clone the repository and run:
+**Option 1 – Run from terminal**
 
 ```bash
 swift build
 swift run
 ```
 
-This launches NeoLink as a regular Mac app with a single window.
+**Option 2 – Build a double‑clickable app (with icon)**
+
+To get a `NeoLink.app` you can open from Finder or drag to Applications:
+
+```bash
+./scripts/build-app.sh
+```
+
+This builds a release binary, creates `NeoLink.app` in the project root, and embeds the app icon from `Resources/AppIcon.png`. You can then double‑click `NeoLink.app` or move it to `/Applications`.
 
 ### Using NeoLink
 

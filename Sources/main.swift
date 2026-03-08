@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "NeoLink"
+        window.title = ""
         window.minSize = NSSize(width: 1024, height: 700)
         window.setFrameAutosaveName("NeoLinkMainWindow")
         window.contentViewController = hosting
