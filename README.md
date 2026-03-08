@@ -1,5 +1,9 @@
 ## NeoLink
 
+<p align="center">
+  <img src="assets/NeoLinkLogo.png" alt="NeoLink logo" width="160">
+</p>
+
 NeoLink is a native macOS terminal app inspired by ones that I liked.
 It combines tabbed local / SSH terminals with an integrated file browser so
 you can work with local and remote files from a single window.
