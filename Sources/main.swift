@@ -21,25 +21,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             y: screenFrame.midY - initialSize.height / 2
         )
 
-        let window = WorkspaceWindow(
+        let window = NSWindow(
             contentRect: NSRect(origin: origin, size: initialSize),
-            styleMask: [.borderless, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "NeoLink"
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = true
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.backgroundColor = NSColor(NeoLinkTheme.sidebarBackground)
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.appearance = NSAppearance(named: .darkAqua)
         window.tabbingMode = .disallowed
         window.minSize = NSSize(width: 900, height: 560)
         window.setFrameAutosaveName("NeoLinkMainWindow")
         window.contentViewController = hosting
-        hosting.view.wantsLayer = true
-        hosting.view.layer?.cornerRadius = 12
-        hosting.view.layer?.masksToBounds = true
         window.makeKeyAndOrderFront(nil)
 
         self.window = window

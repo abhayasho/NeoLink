@@ -89,8 +89,7 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         NotificationCenter.default.post(name: Notification.Name(name), object: nil)
     }
 
-    // AppKit's default validation expects title-bar buttons. Explicit actions keep
-    // these menus available for the workspace's title-bar-free window.
+    // Keep menu and keyboard window actions available alongside the native buttons.
     @objc private func closeWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.close() }
     @objc private func minimizeWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.miniaturize(sender) }
     @objc private func zoomWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.zoom(sender) }

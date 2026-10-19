@@ -68,7 +68,7 @@ This builds a release binary, wraps it in `NeoLink.app` in the project root and 
 | Close a tab | Click its **×**, or press **⌘W** |
 | Toggle files / connections | **⇧⌘E** / **⌃⌘S** |
 | Move the window | Drag an empty part of the **Workspace** header |
-| Close / minimize / full screen | **⇧⌘W** / **⌘M** / **⌃⌘F**, or use the application menus |
+| Close / minimize / full screen | Use the standard red, yellow, and green window buttons, or **⇧⌘W** / **⌘M** / **⌃⌘F** |
 
 ## Verify changes
 
