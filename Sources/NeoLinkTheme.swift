@@ -1,62 +1,60 @@
 import SwiftUI
 
-/// Cursor IDE–style dark theme: charcoal grays, white/light gray text, subtle blue selection.
+/// Shared surfaces, typography and interaction colors for the workspace.
 enum NeoLinkTheme {
-    // Cursor / VS Code Dark+ style
-    /// Main editor and content area background. #1e1e1e
-    static let editorBackground = Color(red: 0x1e / 255.0, green: 0x1e / 255.0, blue: 0x1e / 255.0)
-    /// Sidebar (saved sessions, etc.). #252526
-    static let sidebarBackground = Color(red: 0x25 / 255.0, green: 0x25 / 255.0, blue: 0x26 / 255.0)
-    /// File/panel background. #252526
-    static let panelBackground = Color(red: 0x25 / 255.0, green: 0x25 / 255.0, blue: 0x26 / 255.0)
-    /// Selection / active item (Cursor blue). #094771
-    static let selectionBlue = Color(red: 0x09 / 255.0, green: 0x47 / 255.0, blue: 0x71 / 255.0)
-    /// Hover background for list rows. #2a2d2e
-    static let listHover = Color(red: 0x2a / 255.0, green: 0x2d / 255.0, blue: 0x2e / 255.0)
-    /// Inactive list row
-    static let rowFill = Color.white.opacity(0.04)
-    /// Section separator (1pt line between panels). Cursor uses #3c3c3c.
-    static let separator = Color(red: 0x3c / 255.0, green: 0x3c / 255.0, blue: 0x3c / 255.0)
-    /// Legacy; use separator for section lines.
+    static let editorBackground = Color(hex: 0x11151D)
+    static let sidebarBackground = Color(hex: 0x171C26)
+    static let panelBackground = Color(hex: 0x1B222E)
+    static let elevated = Color(hex: 0x232D3B)
+    static let surface = panelBackground
+    static let selectionBlue = Color(hex: 0x263F4A)
+    static let listHover = Color.white.opacity(0.055)
+    static let rowFill = Color.clear
+    static let separator = Color.white.opacity(0.075)
     static let divider = separator
-    static let panelBorder = Color.white.opacity(0.08)
-    /// Primary text. #d4d4d4
-    static let textPrimary = Color(red: 0xd4 / 255.0, green: 0xd4 / 255.0, blue: 0xd4 / 255.0)
-    /// Secondary / dimmed text. #858585
-    static let textSecondary = Color(red: 0x85 / 255.0, green: 0x85 / 255.0, blue: 0x85 / 255.0)
-    /// Accent for buttons/links (use selection blue, not purple).
-    static let accent = selectionBlue
-    /// Row hover (subtle gray like Cursor).
+    static let panelBorder = Color.white.opacity(0.09)
+    static let textPrimary = Color(hex: 0xE7EDF5)
+    static let textSecondary = Color(hex: 0x939FB1)
+    static let accent = Color(hex: 0x72DCC5)
+    static let success = Color(hex: 0x80CFAC)
+    static let warning = Color(hex: 0xE9BD78)
     static let rowHover = listHover
     static let rowHoverWhite = listHover
-
-    /// Single-color main background (no gradient).
     static let background = editorBackground
+    static let fontSize: CGFloat = 13
+    static let font = Font.system(size: fontSize)
 
     static func panelFill(cornerRadius: CGFloat = 10) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(panelBackground)
+        RoundedRectangle(cornerRadius: cornerRadius).fill(panelBackground)
     }
 
-    /// Cursor-style 1pt vertical line (e.g. between sidebar and content).
     static func verticalSeparator() -> some View {
-        Rectangle()
-            .fill(separator)
-            .frame(width: 1)
+        Rectangle().fill(separator).frame(width: 1)
     }
 
-    /// Cursor-style 1pt horizontal line (e.g. below tab bar).
     static func horizontalSeparator() -> some View {
-        Rectangle()
-            .fill(separator)
-            .frame(height: 1)
+        Rectangle().fill(separator).frame(height: 1)
     }
 }
 
-// MARK: - Cursor-style typography (VS Code / Cursor default: monospace, 13–14pt)
-extension NeoLinkTheme {
-    /// Editor/list font size (Cursor default 14; 13 for tighter UI).
-    static let fontSize: CGFloat = 13
-    /// Monospaced font matching Cursor/VS Code editor.
-    static let font = Font.system(size: fontSize, weight: .regular, design: .monospaced)
+private extension Color {
+    init(hex: UInt32) {
+        self.init(
+            red: Double((hex >> 16) & 0xff) / 255,
+            green: Double((hex >> 8) & 0xff) / 255,
+            blue: Double(hex & 0xff) / 255
+        )
+    }
+}
+
+struct WorkspaceIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(configuration.isPressed ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
+            .frame(width: 28, height: 28)
+            .background(configuration.isPressed ? NeoLinkTheme.selectionBlue : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+    }
 }

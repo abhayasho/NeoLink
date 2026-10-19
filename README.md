@@ -17,16 +17,17 @@
 
 ## Features
 
-- **Tabbed terminals.** Open several local and SSH sessions side by side, powered by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
-- **Session sidebar.** Open a new local tab or a saved SSH session in one click.
-- **Directory-aware.** The current working directory is shown above the terminal.
-- **Local file browser.** Follows the active tab. Browse, create, rename, delete, and drag and drop files and folders.
+- **Persistent terminal tabs.** Switch between local and SSH sessions without restarting shells or losing scrollback, powered by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
+- **Connection sidebar.** Search saved hosts, create a validated SSH connection, or open a local shell in one click.
+- **Directory-aware.** Local zsh sessions report their working directory automatically without editing your shell configuration. Each tab keeps its own directory and file browser state.
+- **Responsive local browser.** Browse, filter, sort, rename, move to Trash, and drag and drop files while filesystem work runs in the background. Copies preserve existing files by choosing a unique name. Resume **Follow terminal** after browsing manually.
 - **Remote SFTP browser.** When you SSH into a host, NeoLink notices and switches the file pane to an SFTP view:
   - browse remote folders, and create, rename or delete entries;
   - upload by dragging files in from Finder;
-  - download single files from the context menu.
+  - download files and folders from the context menu;
+  - reuse connections and stream large transfers without buffering whole files on the UI thread.
 - **Keychain storage.** Enter your SFTP password once. NeoLink saves it in the macOS Keychain and reconnects without asking again.
-- **Dark theme.** A charcoal, editor-style look with a monospaced UI font.
+- **Refined workspace.** A dark navy palette with mint accents, native UI typography, monospaced terminal text, resizable file pane, visible tab controls, and keyboard shortcuts.
 
 ## Requirements
 
@@ -58,11 +59,22 @@ This builds a release binary, wraps it in `NeoLink.app` in the project root and 
 
 | To… | Do this |
 | --- | --- |
-| Open a local shell | Pick **Local terminal** in the sidebar, or **New local tab** |
-| Connect over SSH | Run `ssh user@host` in a local tab, or create a saved session with the **SSH** button |
-| Browse remote files | Start an SSH session. The file pane switches to **Remote files (SFTP)** |
+| Open a local shell | Pick **Local terminal**, click **New terminal**, or press **⌘T** |
+| Connect over SSH | Use **+** beside **Connections** or **⇧⌘N** to save a host, then click the connection. You can also run `ssh user@host` in a local tab |
+| Browse remote files | Select an SSH tab, then **Connect to files**. Local shell title detection also recognizes remote hosts |
 | Upload | Drag files from Finder into the SFTP pane |
 | Download | Right-click a remote file and choose download |
+| Switch tabs | **⇧⌘]** / **⇧⌘[** |
+| Close a tab | Click its **×**, or press **⌘W** |
+| Toggle files / connections | **⇧⌘E** / **⌃⌘S** |
+
+## Verify changes
+
+```bash
+swift test
+```
+
+The regression suite covers isolated tab state, native screen and scrollback retention, shell startup and directory reporting, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials. Authenticated SFTP transfers still need an integration check against a server.
 
 ## Project layout
 

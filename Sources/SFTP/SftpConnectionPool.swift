@@ -2,13 +2,19 @@ import Foundation
 
 @MainActor
 final class SftpConnectionPool: ObservableObject {
-    private var holders: [String: SftpConnectionHolder] = [:]
+    private struct Endpoint: Hashable {
+        let host: String
+        let port: Int
+        let username: String
+    }
+
+    private var holders: [Endpoint: SftpConnectionHolder] = [:]
 
     func holder(host: String, port: Int, username: String) -> SftpConnectionHolder {
-        let key = "\(host):\(port):\(username)"
+        let key = Endpoint(host: host, port: port, username: username)
         if let existing = holders[key] { return existing }
-        let h = SftpConnectionHolder(host: host, port: port, username: username)
-        holders[key] = h
-        return h
+        let holder = SftpConnectionHolder(host: host, port: port, username: username)
+        holders[key] = holder
+        return holder
     }
 }

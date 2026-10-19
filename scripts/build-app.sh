@@ -2,7 +2,7 @@
 # Build NeoLink as a double-clickable macOS .app with icon.
 # Run from repo root: ./scripts/build-app.sh
 
-set -e
+set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 APP_NAME="NeoLink"
@@ -13,8 +13,8 @@ ICONSET="$ROOT/Resources/AppIcon.iconset"
 echo "Building release binary..."
 swift build -c release
 
-# SPM puts the binary in .build/<triplet>/release/NeoLink (exclude .dSYM copy)
-BINARY=$(find "$ROOT/.build" -type f -name "$APP_NAME" -path "*/release/*" ! -path "*.dSYM*" 2>/dev/null | head -1)
+# Ask SwiftPM for the current architecture's binary instead of choosing a stale build.
+BINARY="$(swift build -c release --show-bin-path)/$APP_NAME"
 if [[ -z "$BINARY" || ! -x "$BINARY" ]]; then
   echo "Error: release binary not found. Run: swift build -c release"
   exit 1

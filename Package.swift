@@ -25,6 +25,11 @@ let package = Package(
                 .product(name: "SSHClient", package: "swift-ssh-client")
             ],
             path: "Sources"
+        ),
+        .testTarget(
+            name: "NeoLinkTests",
+            dependencies: ["NeoLink"],
+            path: "Tests/NeoLinkTests"
         )
     ]
 )

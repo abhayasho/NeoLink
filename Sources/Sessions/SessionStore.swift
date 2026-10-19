@@ -27,7 +27,7 @@ final class SessionStore {
     func save(_ sessions: [Session]) {
         do {
             let data = try JSONEncoder().encode(sessions)
-            try data.write(to: fileURL)
+            try data.write(to: fileURL, options: .atomic)
         } catch {
         }
     }

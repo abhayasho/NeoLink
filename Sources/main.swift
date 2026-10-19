@@ -3,8 +3,11 @@ import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
+    private let commands = WorkspaceCommands()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        commands.install()
         let contentView = ContentView()
         let hosting = NSHostingController(rootView: contentView)
 
@@ -21,8 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = ""
-        window.minSize = NSSize(width: 1024, height: 700)
+        window.title = "NeoLink"
+        window.titlebarAppearsTransparent = true
+        window.backgroundColor = NSColor(NeoLinkTheme.sidebarBackground)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.tabbingMode = .disallowed
+        window.minSize = NSSize(width: 900, height: 560)
         window.setFrameAutosaveName("NeoLinkMainWindow")
         window.contentViewController = hosting
         window.makeKeyAndOrderFront(nil)
