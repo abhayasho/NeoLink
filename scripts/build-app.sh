@@ -8,7 +8,7 @@ ROOT="$PWD"
 APP_NAME="NeoLink"
 APP="$ROOT/$APP_NAME.app"
 ICON_SRC="$ROOT/Resources/AppIcon.png"
-ICONSET="$ROOT/Resources/AppIcon.iconset"
+ICON_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$ROOT/Resources/Info.plist")
 
 echo "Building release binary..."
 swift build -c release
@@ -32,39 +32,32 @@ chmod +x "$APP/Contents/MacOS/$APP_NAME"
 # Copy Info.plist
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 
-# Generate .icns from AppIcon.png (crop to content so artwork fills the icon, no dark border)
-if [[ -f "$ICON_SRC" ]]; then
-  echo "Generating app icon..."
-  rm -rf "$ICONSET"
-  mkdir -p "$ICONSET"
-  # Crop to focus on the axolotl: shift crop down and right to cut off the top-left (terminal prompt >_)
-  W=$(sips -g pixelWidth "$ICON_SRC" 2>/dev/null | awk '/pixelWidth/{print $2}')
-  H=$(sips -g pixelHeight "$ICON_SRC" 2>/dev/null | awk '/pixelHeight/{print $2}')
-  if [[ -n "$W" && -n "$H" && "$W" -gt 0 && "$H" -gt 0 ]]; then
-    MIN=$(( W < H ? W : H ))
-    CROP=$(( MIN * 90 / 100 ))
-    # Offset crop toward bottom-right so top-left (prompt) is excluded
-    OX=$(( (W - CROP) * 22 / 100 ))
-    OY=$(( (H - CROP) * 38 / 100 ))
-    sips -s format png --cropOffset "$OY" "$OX" -c "$CROP" "$CROP" "$ICON_SRC" --out "$ICONSET/_src.png" 2>/dev/null
-    sips -s format png -z 1024 1024 "$ICONSET/_src.png" --out "$ICONSET/_src.png" 2>/dev/null
-    ICON_SRC="$ICONSET/_src.png"
-  fi
-  for size in 16 32 64 128 256 512; do
-    sips -s format png -z $size $size "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}.png" 2>/dev/null
-    size2=$((size * 2))
-    sips -s format png -z $size2 $size2 "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}@2x.png" 2>/dev/null
-  done
-  rm -f "$ICONSET/_src.png"
-  if iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns" 2>/dev/null; then
-    echo "App icon created."
-  else
-    echo "Warning: could not create .icns (iconutil failed); app will use default icon."
-  fi
-  rm -rf "$ICONSET"
-else
-  echo "Warning: $ICON_SRC not found; app will use default icon."
+# The source is already framed on a square, transparent canvas. Preserve it as-is:
+# cropping or flattening it adds padding, clips artwork, or creates a second tile.
+if [[ ! -f "$ICON_SRC" ]]; then
+  echo "Error: missing icon source: $ICON_SRC" >&2
+  exit 1
 fi
+W=$(sips -g pixelWidth "$ICON_SRC" | awk '/pixelWidth/{print $2}')
+H=$(sips -g pixelHeight "$ICON_SRC" | awk '/pixelHeight/{print $2}')
+if [[ "$W" != "$H" || "$W" -lt 1024 ]]; then
+  echo "Error: AppIcon.png must be square and at least 1024 × 1024 pixels." >&2
+  exit 1
+fi
+
+echo "Generating app icon..."
+ICON_TMP=$(mktemp -d "${TMPDIR:-/tmp}/NeoLinkIcon.XXXXXX")
+trap 'rm -rf "$ICON_TMP"' EXIT
+ICONSET="$ICON_TMP/AppIcon.iconset"
+mkdir -p "$ICONSET"
+# Standard macOS icon representations, including every Retina size.
+for size in 16 32 128 256 512; do
+  sips -s format png -z "$size" "$size" "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  size2=$((size * 2))
+  sips -s format png -z "$size2" "$size2" "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/$ICON_NAME.icns"
+echo "App icon created."
 
 echo "Done: $APP"
 echo "You can double-click NeoLink.app or drag it to Applications."
