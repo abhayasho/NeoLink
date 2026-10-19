@@ -5,14 +5,15 @@ struct ContentView: View {
     @StateObject private var tabsController = TabsController()
     @StateObject private var sftpConnectionPool = SftpConnectionPool()
     @StateObject private var fileBrowsers = WorkspaceFileBrowsers()
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var showConnectionsSidebar = true
     @AppStorage("showFileBrowser") private var showFileBrowser = true
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SessionSidebar()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 300)
-        } detail: {
+        HSplitView {
+            if showConnectionsSidebar {
+                SessionSidebar()
+                    .frame(minWidth: 200, idealWidth: 230, maxWidth: 300)
+            }
             VStack(spacing: 0) {
                 workspaceHeader
                 NeoLinkTheme.horizontalSeparator()
@@ -36,6 +37,7 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .font(NeoLinkTheme.font)
         .background(NeoLinkTheme.background)
+        .ignoresSafeArea(.container, edges: .top)
         .onChange(of: tabsController.tabs.map(\.id)) { ids in
             fileBrowsers.retainTabs(Set(ids))
         }
@@ -49,7 +51,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkPreviousTab)) { _ in selectTab(offset: -1) }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkToggleFiles)) { _ in showFileBrowser.toggle() }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkToggleSidebar)) { _ in
-            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            showConnectionsSidebar.toggle()
         }
     }
 
@@ -85,6 +87,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 48)
+        .background(WindowDragArea())
         .background(NeoLinkTheme.sidebarBackground)
     }
 

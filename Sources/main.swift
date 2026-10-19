@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         commands.install()
         let contentView = ContentView()
         let hosting = NSHostingController(rootView: contentView)
+        if #available(macOS 13.3, *) {
+            hosting.safeAreaRegions = []
+        }
 
         let initialSize = NSSize(width: 1280, height: 800)
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -18,20 +21,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             y: screenFrame.midY - initialSize.height / 2
         )
 
-        let window = NSWindow(
+        let window = WorkspaceWindow(
             contentRect: NSRect(origin: origin, size: initialSize),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.borderless, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "NeoLink"
-        window.titlebarAppearsTransparent = true
-        window.backgroundColor = NSColor(NeoLinkTheme.sidebarBackground)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.collectionBehavior.insert(.fullScreenPrimary)
         window.appearance = NSAppearance(named: .darkAqua)
         window.tabbingMode = .disallowed
         window.minSize = NSSize(width: 900, height: 560)
         window.setFrameAutosaveName("NeoLinkMainWindow")
         window.contentViewController = hosting
+        hosting.view.wantsLayer = true
+        hosting.view.layer?.cornerRadius = 12
+        hosting.view.layer?.masksToBounds = true
         window.makeKeyAndOrderFront(nil)
 
         self.window = window

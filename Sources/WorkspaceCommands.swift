@@ -29,7 +29,7 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         command("New SSH Connection…", name: .neoLinkNewSSHSession, key: "n", modifiers: [.command, .shift], to: file)
         file.addItem(.separator())
         command("Close Tab", name: .neoLinkCloseTab, key: "w", to: file)
-        add("Close Window", action: #selector(NSWindow.performClose(_:)), key: "w", modifiers: [.command, .shift], to: file)
+        add("Close Window", action: #selector(closeWindow(_:)), key: "w", modifiers: [.command, .shift], target: self, to: file)
         attach(file, to: main)
 
         let edit = NSMenu(title: "Edit")
@@ -49,12 +49,12 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         command("Next Tab", name: .neoLinkNextTab, key: "]", modifiers: [.command, .shift], to: view)
         command("Previous Tab", name: .neoLinkPreviousTab, key: "[", modifiers: [.command, .shift], to: view)
         view.addItem(.separator())
-        add("Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), key: "f", modifiers: [.command, .control], to: view)
+        add("Toggle Full Screen", action: #selector(toggleFullScreen(_:)), key: "f", modifiers: [.command, .control], target: self, to: view)
         attach(view, to: main)
 
         let window = NSMenu(title: "Window")
-        add("Minimize", action: #selector(NSWindow.performMiniaturize(_:)), key: "m", to: window)
-        add("Zoom", action: #selector(NSWindow.performZoom(_:)), to: window)
+        add("Minimize", action: #selector(minimizeWindow(_:)), key: "m", target: self, to: window)
+        add("Zoom", action: #selector(zoomWindow(_:)), target: self, to: window)
         window.addItem(.separator())
         add("Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), to: window)
         attach(window, to: main)
@@ -68,9 +68,10 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         parent.addItem(item)
     }
 
-    private func add(_ title: String, action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = [.command], to menu: NSMenu) {
+    private func add(_ title: String, action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = [.command], target: AnyObject? = nil, to menu: NSMenu) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.keyEquivalentModifierMask = modifiers
+        item.target = target
         menu.addItem(item)
     }
 
@@ -87,6 +88,13 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         guard let name = sender.representedObject as? String else { return }
         NotificationCenter.default.post(name: Notification.Name(name), object: nil)
     }
+
+    // AppKit's default validation expects title-bar buttons. Explicit actions keep
+    // these menus available for the workspace's title-bar-free window.
+    @objc private func closeWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.close() }
+    @objc private func minimizeWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.miniaturize(sender) }
+    @objc private func zoomWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.zoom(sender) }
+    @objc private func toggleFullScreen(_ sender: NSMenuItem) { NSApp.keyWindow?.toggleFullScreen(sender) }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { !isEditingSheet }
 
