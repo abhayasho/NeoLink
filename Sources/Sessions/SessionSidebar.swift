@@ -8,6 +8,16 @@ struct SessionSidebar: View {
     let onEditConnection: (Session) -> Void
     @State private var search = ""
 
+    private static let logo: NSImage = {
+        let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String ?? "NeoLinkAxolotl"
+        if let url = Bundle.main.url(forResource: name, withExtension: "icns"), let image = NSImage(contentsOf: url) {
+            return image
+        }
+        // Support swift run from the repository as well as the packaged app.
+        return NSImage(contentsOfFile: "Resources/AppIcon.png")
+            ?? NSImage(named: NSImage.applicationIconName) ?? NSImage(size: NSSize(width: 36, height: 36))
+    }()
+
     private var savedSessions: [Session] {
         sessionManager.sessions.filter {
             $0.type == .ssh && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)
@@ -19,12 +29,12 @@ struct SessionSidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "terminal.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(NeoLinkTheme.accent)
-                    .frame(width: 36, height: 36)
-                    .background(NeoLinkTheme.accent.opacity(0.10))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                Image(nsImage: Self.logo)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 40, height: 40)
+                    .accessibilityLabel("NeoLink logo")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("NeoLink").font(.system(size: 17, weight: .semibold))
                     Text("Your connections, together")

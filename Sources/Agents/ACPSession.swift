@@ -98,7 +98,7 @@ final class ACPSession: ObservableObject, Identifiable {
             defer { self.isBusy = false }
             do {
                 let result = try await channel.request("initialize", ["protocolVersion":1,
-                    "clientInfo":["name":"neolink", "title":"NeoLink", "version":"1.5.0"],
+                    "clientInfo":["name":"neolink", "title":"NeoLink", "version":Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"],
                     "clientCapabilities":["fs":["readTextFile":false,"writeTextFile":false],"terminal":false]])
                 guard result["protocolVersion"] as? Int == 1 else { throw ACPFailure(message: "The adapter requires an unsupported ACP version.") }
                 // Only advertise and offer authentication flows this client can perform.

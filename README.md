@@ -1,6 +1,9 @@
 <p align="center">
-  <img src="assets/banner.png" alt="NeoLink: a native macOS terminal with tabbed SSH sessions and an SFTP browser" width="100%">
+  <img src="Resources/AppIcon.png" alt="NeoLink axolotl logo" width="180">
 </p>
+
+<h1 align="center">NeoLink</h1>
+<p align="center">A native macOS coding workspace, terminal, and agent companion.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+">
