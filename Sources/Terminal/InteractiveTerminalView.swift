@@ -23,10 +23,16 @@ struct WheelScrollAccumulator {
 /// SwiftTerm's macOS wheel handler scrolls history even when a TUI requested mouse input.
 /// Forward wheel reports to that application; ordinary shells retain native scrollback.
 class InteractiveTerminalView: LocalProcessTerminalView {
+    private(set) lazy var rendering = TerminalRendering(view: self)
     var onActivate: (() -> Void)?
     private var wheel = WheelScrollAccumulator()
     private var fontObservation: AnyCancellable?
     private var wheelMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        rendering.attachToWindow()
+    }
 
     func observeTextSize() {
         fontObservation = TextSizePreferences.shared.$pointSize.sink { [weak self] size in

@@ -7,7 +7,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+">
-  <img src="https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white" alt="Swift 5.10">
+  <img src="https://img.shields.io/badge/Swift-6.0%2B-F05138?logo=swift&logoColor=white" alt="Swift 6.0+">
   <img src="https://img.shields.io/badge/UI-SwiftUI-0A84FF" alt="SwiftUI">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
   <img src="https://img.shields.io/badge/status-prototype-orange" alt="Prototype">
@@ -21,6 +21,7 @@
 ## Features
 
 - **Persistent terminal tabs.** Switch between local and SSH sessions without restarting shells or losing scrollback, powered by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
+- **GPU text rendering.** Shells, SSH sessions, agent terminals, and the Neovim editor use SwiftTerm's native Metal renderer by default: cached CoreText glyphs are drawn as GPU quads, with unchanged rows reused. **View → Use GPU Text Rendering** saves your preference and switches existing sessions without restarting them. **Renderer Information…** reports the focused surface's actual renderer and presented frame count. Initialization/recovery failures fall back to CoreGraphics. This is a native Metal integration; GPUI is not embedded, and 120 FPS or zero typing latency are not guaranteed. [Rendering details](docs/RENDERING.md).
 - **Code and PDFs in tabs.** One shared, on-demand Neovim engine provides a dark code editor inside NeoLink. PDFs use a native viewer. Reopening a file selects its existing tab and preserves editing state. A native text editor is available when Neovim is not installed.
 - **Code intelligence.** Syntax highlighting, completion, diagnostics, definition, references, hover, rename and code actions use installed language servers. Run supported files in a terminal directly from the code toolbar.
 - **Native agent conversations.** Connect an installed ACP adapter from **Agent → Native conversation (ACP)**. Stream replies, inspect tool input and file-change previews, approve or reject requested actions, change advertised modes, and stop a turn in the right panel. Multiple sessions can run alongside code; hiding the panel keeps them alive. Optional stdio MCP server configurations are passed to the adapter. [Setup and limits](docs/AGENT_GUIDE.md).
@@ -45,9 +46,9 @@
 ## Requirements
 
 - macOS 13 Ventura or later
-- Xcode 15, or a Swift 5.10+ toolchain
+- Xcode 16 or later, or a Swift 6.0+ toolchain with the macOS SDK
 
-> The package deliberately targets Swift 5.10, because Swift 6's strict concurrency checks conflict with the current version of `swift-ssh-client`.
+> The app uses Swift 5 language mode for compatibility with `swift-ssh-client`; the Metal-enabled SwiftTerm dependency requires a Swift 6.0+ toolchain.
 
 ## Build and run
 

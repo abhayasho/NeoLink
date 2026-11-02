@@ -8,6 +8,8 @@ NeoLink keeps its native SwiftUI/AppKit shell, SwiftTerm terminals, and PDFKit v
 
 The app deliberately has no Electron runtime, extension marketplace, plugin manager, always-running project indexer, or recursive workspace watcher. Neovim 0.12 splits that session into TUI and editor processes; tabs do not spawn separate editors. A private local socket carries user actions; a single directory event source observes the editor's metadata file. Closing the last buffer attached to a language server stops that server. Terminal and editor views survive tab changes.
 
+Version 1.6 enables SwiftTerm's Metal text renderer for terminals and Neovim, retaining CoreGraphics as a selectable fallback. GPU glyph-atlas rendering and cached row geometry replace CPU text drawing on those surfaces; the surrounding interface and PDF/text fallbacks retain their native rendering paths. See [rendering behavior and performance limits](RENDERING.md). The earlier memory snapshots below predate Metal integration and are not measurements of 1.6.
+
 Sources: [Swift compiler architecture](https://www.swift.org/documentation/swift-compiler/), [Neovim remote control](https://neovim.io/doc/user/remote/).
 
 ## Neovim versus Emacs

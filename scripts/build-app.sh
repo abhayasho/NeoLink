@@ -33,6 +33,27 @@ chmod +x "$APP/Contents/MacOS/$APP_NAME"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp -R "$ROOT/Resources/Editor" "$APP/Contents/Resources/Editor"
 
+# SwiftTerm's Metal renderer loads its glyph shaders from this SwiftPM bundle.
+# Package it beside the editor resources so installed copies never depend on .build.
+SWIFTTERM_RESOURCES="$(dirname "$BINARY")/SwiftTerm_SwiftTerm.bundle"
+if [[ ! -d "$SWIFTTERM_RESOURCES" ]]; then
+  echo "Error: missing SwiftTerm Metal shader resource bundle." >&2
+  exit 1
+fi
+cp -R "$SWIFTTERM_RESOURCES" "$APP/Contents/Resources/"
+# Compile the shaders once while packaging, rather than on the first terminal's
+# GPU initialization. Keep the bundled source as a fallback for source-only SDKs.
+if xcrun --find metal >/dev/null 2>&1; then
+  SHADER_TMP=$(mktemp -d "${TMPDIR:-/tmp}/NeoLinkShaders.XXXXXX")
+  trap 'rm -rf "$SHADER_TMP"' EXIT
+  xcrun -sdk macosx metal -mmacosx-version-min=13.0 -c \
+    "$SWIFTTERM_RESOURCES/Shaders.metal" -o "$SHADER_TMP/Shaders.air"
+  xcrun -sdk macosx metallib "$SHADER_TMP/Shaders.air" \
+    -o "$APP/Contents/Resources/SwiftTerm_SwiftTerm.bundle/default.metallib"
+  rm -rf "$SHADER_TMP"
+  trap - EXIT
+fi
+
 # The source is already framed on a square, transparent canvas. Preserve it as-is:
 # cropping or flattening it adds padding, clips artwork, or creates a second tile.
 if [[ ! -f "$ICON_SRC" ]]; then

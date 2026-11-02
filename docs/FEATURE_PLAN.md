@@ -19,7 +19,7 @@ NeoLink continues incrementally on SwiftUI/AppKit, SwiftTerm, PDFKit and a share
 | Edit predictions | Planned. No model is downloaded and no source is sent for background predictions. Zeta is not bundled. |
 | DAP debugger | Planned. Requires adapter lifecycle, breakpoint state, stack/variable inspection, launch configuration and terminal routing. Running a file or opening a REPL is not debugging. |
 | Extensions | Planned after an explicit permission/lifecycle model. There is no extension marketplace, plugin auto-installation or compatibility claim with another editor's extensions. |
-| Rendering | Native AppKit/SwiftUI and SwiftTerm remain. GPUI/Alacritty are not embedded. No 120 FPS, zero-latency or VS Code performance superiority claim is made without measurements. |
+| Rendering | SwiftTerm 1.20's native Metal glyph-atlas renderer powers shells, SSH, agent terminals and Neovim by default, with a saved View-menu switch and CoreGraphics fallback. AppKit/SwiftUI/PDFKit still draw the surrounding UI and PDFs. GPUI/Alacritty are not embedded. [Details and frame-rate limits](RENDERING.md). |
 
 ## Research notes
 

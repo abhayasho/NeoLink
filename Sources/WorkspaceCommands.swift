@@ -22,6 +22,7 @@ extension Notification.Name {
 }
 
 /// Native menus also provide standard text editing and terminal keyboard shortcuts.
+@MainActor
 final class WorkspaceCommands: NSObject, NSMenuItemValidation {
     func install() {
         let main = NSMenu()
@@ -93,6 +94,9 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         equalZoom.isHidden = true; equalZoom.allowsKeyEquivalentWhenHidden = true
         view.addItem(equalZoom)
         view.addItem(.separator())
+        add("Use GPU Text Rendering", action: #selector(toggleGPUTextRendering(_:)), target: self, to: view)
+        add("Renderer Information…", action: #selector(showRendererInformation(_:)), target: self, to: view)
+        view.addItem(.separator())
         command("Toggle Connections Sidebar", name: .neoLinkToggleSidebar, key: "s", modifiers: [.command, .control], to: view)
         command("Toggle File Browser", name: .neoLinkToggleFiles, key: "e", modifiers: [.command, .shift], to: view)
         command("Toggle Agent Panel", name: .neoLinkToggleAgentPanel, key: "b", modifiers: [.command, .control], to: view)
@@ -152,6 +156,28 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         NotificationCenter.default.post(name: .neoLinkOpenREPL, object: sender.representedObject)
     }
 
+    @objc private func toggleGPUTextRendering(_ sender: NSMenuItem) {
+        let preferences = TerminalRenderingPreferences.shared
+        preferences.setUseGPU(!preferences.useGPU)
+    }
+
+    @objc private func showRendererInformation(_ sender: NSMenuItem) {
+        let alert = NSAlert()
+        alert.messageText = "Text Rendering"
+        alert.informativeText = activeTerminal?.rendering.summary ?? "Select a terminal or code editor to inspect its renderer."
+        alert.addButton(withTitle: "OK")
+        if let window = NSApp.keyWindow { alert.beginSheetModal(for: window) }
+    }
+
+    private var activeTerminal: InteractiveTerminalView? {
+        var responder = NSApp.keyWindow?.firstResponder
+        while let current = responder {
+            if let terminal = current as? InteractiveTerminalView { return terminal }
+            responder = current.nextResponder
+        }
+        return nil
+    }
+
     @objc private func selectAll(_ sender: NSMenuItem) {
         if let editor = NSApp.keyWindow?.firstResponder as? CodeTerminalView { editor.selectCode(sender) }
         else { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: sender) }
@@ -164,6 +190,9 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
     @objc private func toggleFullScreen(_ sender: NSMenuItem) { NSApp.keyWindow?.toggleFullScreen(sender) }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleGPUTextRendering(_:)) {
+            menuItem.state = TerminalRenderingPreferences.shared.useGPU ? .on : .off
+        }
         // Native dialog text fields still need Select All. Workspace shortcuts,
         // including Shift-Command-G, must defer to the file picker's commands.
         if menuItem.action == #selector(selectAll(_:)) { return true }
