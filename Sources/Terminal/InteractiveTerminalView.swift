@@ -28,15 +28,35 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     private var wheel = WheelScrollAccumulator()
     private var fontObservation: AnyCancellable?
     private var wheelMonitor: Any?
+    private lazy var smoothScroll = SmoothScrollDriver(view: self)
+
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size { smoothScroll.reset() }
+        super.setFrameSize(newSize)
+    }
+
+    /// Native scrollback scrolls pixel by pixel with a trackpad; other input keeps SwiftTerm's line steps.
+    private func smoothScrollback(_ event: NSEvent) -> Bool {
+        guard !isDisplayingAlternateScreen, event.hasPreciseScrollingDeltas, event.scrollingDeltaY != 0,
+              abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX), smoothScroll.isAvailable else { return false }
+        smoothScroll.scroll(event, source: .scrollback) { [weak self] lines in self?.scrollViewport(towardTop: lines) ?? 0 }
+        return true
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         rendering.attachToWindow()
     }
 
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        rendering.noteOutput()
+        super.dataReceived(slice: slice)
+    }
+
     func observeTextSize() {
         fontObservation = TextSizePreferences.shared.$pointSize.sink { [weak self] size in
             guard let self, self.font.pointSize != size else { return }
+            self.smoothScroll.reset()
             self.font = .monospacedSystemFont(ofSize: size, weight: .regular)
         }
         if wheelMonitor == nil {
@@ -49,12 +69,15 @@ class InteractiveTerminalView: LocalProcessTerminalView {
                     if window.firstResponder !== self { self.onActivate?() }
                     return event
                 }
-                return self.forwardWheel(event) ? nil : event
+                return self.forwardWheel(event) || self.smoothScrollback(event) ? nil : event
             }
         }
     }
 
     deinit { if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) } }
+
+    /// The wheel path for an event already known to target this view (used by the benchmark).
+    func deliverWheel(_ event: NSEvent) { if !forwardWheel(event), !smoothScrollback(event) { scrollWheel(with: event) } }
 
     private func forwardWheel(_ event: NSEvent) -> Bool {
         let terminal = getTerminal()
@@ -64,7 +87,11 @@ class InteractiveTerminalView: LocalProcessTerminalView {
         let pixels = cellSizeInPixels(source: terminal) ?? (width: 8, height: 16)
         let scale = window?.backingScaleFactor ?? 1
         let cell = CGSize(width: CGFloat(pixels.width) / scale, height: CGFloat(pixels.height) / scale)
-        let steps = wheel.consume(x: event.scrollingDeltaX, y: event.scrollingDeltaY,
+        // Trackpad scrolling in a full-screen program follows the fingers pixel by pixel:
+        // the program scrolls whole lines ahead and the renderer draws the remainder.
+        let smooth = event.hasPreciseScrollingDeltas && isDisplayingAlternateScreen && smoothScroll.isAvailable
+            && event.scrollingDeltaY != 0 && abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+        let steps = wheel.consume(x: event.scrollingDeltaX, y: smooth ? 0 : event.scrollingDeltaY,
                                   precise: event.hasPreciseScrollingDeltas, cell: cell,
                                   newGesture: event.phase == .began)
         let point = convert(event.locationInWindow, from: nil)
@@ -77,7 +104,14 @@ class InteractiveTerminalView: LocalProcessTerminalView {
                                    pixelX: max(0, Int(point.x)), pixelY: max(0, Int(topY)))
             }
         }
-        report(steps.y > 0 ? 64 : 65, count: steps.y)
+        if smooth {
+            smoothScroll.scroll(event, source: .program) { lines in
+                report(lines > 0 ? 64 : 65, count: min(80, abs(lines)))
+                return nil
+            }
+        } else {
+            report(steps.y > 0 ? 64 : 65, count: steps.y)
+        }
         report(steps.x > 0 ? 66 : 67, count: steps.x)
         return true
     }

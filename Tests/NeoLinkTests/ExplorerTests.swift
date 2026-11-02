@@ -37,12 +37,14 @@ final class ExplorerTests: XCTestCase {
         XCTAssertTrue(tree.rows.contains { $0.name == "App.java" })
         XCTAssertNil(tree.children[root.appendingPathComponent("dependencies")])
         tree.collapseAll()
+        try await wait { !tree.isLoading }
         XCTAssertFalse(tree.rows.contains { $0.name == "App.java" })
         let file = root.appendingPathComponent("src/main/java/App.java")
         tree.reveal(file)
         try await wait { tree.rowID(for: file) != nil }
         XCTAssertEqual(tree.selectedURL, file)
         tree.setDiagnostics([file.path: ExplorerDiagnostics(errors: 2, warnings: 1)])
+        try await wait { !tree.isLoading }
         XCTAssertEqual(tree.rows.first { $0.name == "src/main/java" }?.diagnostics.count, 3)
         XCTAssertEqual(tree.rows.first { $0.name == "App.java" }?.diagnostics.errors, 2)
         let revision = tree.revealRevision
@@ -123,8 +125,10 @@ final class ExplorerTests: XCTestCase {
         XCTAssertTrue(tree.rows.contains { $0.name == "cache" && $0.git == .ignored })
         XCTAssertTrue(tree.rows.contains { $0.name == "deleted.py" && $0.missing })
         tree.toggle(try XCTUnwrap(tree.rows.first { $0.name == "nested" }))
+        try await wait { !tree.isLoading }
         XCTAssertTrue(tree.rows.contains { $0.name == "gone.txt" && $0.missing })
         tree.configure(root: root, hidden: false, compact: true, hideIgnored: true)
+        try await wait { !tree.isLoading }
         XCTAssertFalse(tree.rows.contains { $0.name == "cache" })
         XCTAssertNil(tree.children[root.appendingPathComponent("cache").standardizedFileURL])
     }

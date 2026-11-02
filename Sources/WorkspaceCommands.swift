@@ -97,6 +97,7 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         view.addItem(.separator())
         add("Use GPU Text Rendering", action: #selector(toggleGPUTextRendering(_:)), target: self, to: view)
         add("Renderer Information…", action: #selector(showRendererInformation(_:)), target: self, to: view)
+        add("Performance Monitor…", action: #selector(showPerformanceMonitor(_:)), target: self, to: view)
         view.addItem(.separator())
         command("Toggle Connections Sidebar", name: .neoLinkToggleSidebar, key: "s", modifiers: [.command, .control], to: view)
         command("Toggle File Browser", name: .neoLinkToggleFiles, key: "e", modifiers: [.command, .shift], to: view)
@@ -168,6 +169,10 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         alert.informativeText = activeTerminal?.rendering.summary ?? "Select a terminal or code editor to inspect its renderer."
         alert.addButton(withTitle: "OK")
         if let window = NSApp.keyWindow { alert.beginSheetModal(for: window) }
+    }
+
+    @objc private func showPerformanceMonitor(_ sender: NSMenuItem) {
+        PerformanceMonitor.shared.show(for: NSApp.mainWindow)
     }
 
     private var activeTerminal: InteractiveTerminalView? {

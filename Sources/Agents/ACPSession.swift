@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 struct ACPMessage: Identifiable {
     let id: UUID
@@ -49,6 +49,8 @@ final class ACPSession: ObservableObject, Identifiable {
     private var receivedCharacters = 0
     private var cancelling = false
     private var closed = false
+    private var pendingText = ""
+    private var streamFlushScheduled = false
     private let mcpServers: [[String: Any]]
 
     init(agent: CodingAgent, directory: URL, mcpServers: [[String: Any]] = []) {
@@ -87,6 +89,7 @@ final class ACPSession: ObservableObject, Identifiable {
         channel.onMessage = { [weak self] in self?.receive($0) }
         channel.onDisconnect = { [weak self] message in
             guard let self, !self.closed else { return }
+            self.flushStream()
             self.isReady = false; self.isBusy = false; self.permissions = []
             self.status = "Disconnected"; self.error = message
         }
@@ -152,6 +155,7 @@ final class ACPSession: ObservableObject, Identifiable {
         let turn = UUID(); generation = turn
         task = Task {
             defer {
+                flushStream()
                 if generation == turn { isBusy = false; cancelling = false; cancelPermissions(); onTurnFinished?() }
             }
             do {
@@ -178,6 +182,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func cancel() {
         guard isBusy, !cancelling, let sessionID else { return }
+        flushStream()
         cancelling = true; status = "Stopping…"
         cancelPermissions()
         transport?.notify("session/cancel", ["sessionId":sessionID])
@@ -200,6 +205,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func cancelPermissions() { for permission in permissions { answer(permission, option: nil) } }
 
     func close() {
+        flushStream()
         closed = true; generation = UUID(); cancelPermissions(); transport?.close(); transport = nil
         task?.cancel(); task = nil; isReady = false; isBusy = false; status = "Closed"
     }
@@ -213,6 +219,7 @@ final class ACPSession: ObservableObject, Identifiable {
         guard let method = message["method"] as? String else { return }
         let params = message["params"] as? [String: Any] ?? [:]
         if let requestID = message["id"] {
+            flushStream()
             guard method == "session/request_permission", params["sessionId"] as? String == sessionID else {
                 transport?.reject(id: requestID); return
             }
@@ -236,6 +243,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         guard method == "session/update", params["sessionId"] as? String == sessionID,
               let update = params["update"] as? [String: Any], let kind = update["sessionUpdate"] as? String else { return }
+        if kind != "agent_message_chunk" { flushStream() }
         switch kind {
         case "agent_message_chunk":
             guard let content = update["content"] as? [String: Any], content["type"] as? String == "text", let text = content["text"] as? String else { return }
@@ -243,10 +251,17 @@ final class ACPSession: ObservableObject, Identifiable {
             if receivedCharacters > 512 * 1024 { error = "This response exceeded the display limit. The turn was stopped."; cancel(); return }
             let nextMessage = update["messageId"] as? String
             if responseID == nil || (nextMessage != nil && messageID != nextMessage) {
+                flushStream()
                 appendMessage(role: agent.name, text: ""); responseID = messages.last?.id
             }
             messageID = nextMessage
-            if let index = messages.firstIndex(where: { $0.id == responseID }) { messages[index].text += text }
+            pendingText += text
+            if !streamFlushScheduled {
+                streamFlushScheduled = true
+                let flush = { [weak self] in self?.flushStream(); return }
+                if let frames = WindowFrameScheduler.forWindow(NSApp?.mainWindow) { frames.enqueue(flush) }
+                else { DispatchQueue.main.async { flush() } }
+            }
         case "tool_call", "tool_call_update":
             guard let id = update["toolCallId"] as? String else { return }
             responseID = nil
@@ -263,6 +278,15 @@ final class ACPSession: ObservableObject, Identifiable {
         case "current_mode_update": currentMode = update["currentModeId"] as? String ?? currentMode
         default: break
         }
+    }
+
+    /// Publish streamed text once per window frame, rather than relaying every
+    /// token through SwiftUI layout. Permission/finish boundaries flush immediately.
+    private func flushStream() {
+        streamFlushScheduled = false
+        guard !pendingText.isEmpty else { return }
+        if let index = messages.firstIndex(where: { $0.id == responseID }) { messages[index].text += pendingText }
+        pendingText = ""
     }
 
     private static func details(_ value: [String: Any]) -> String {

@@ -23,14 +23,15 @@ final class TerminalRenderingPreferences: ObservableObject {
 }
 
 /// Configures SwiftTerm's glyph-atlas/Metal-quad renderer after its view has a window.
-/// The upstream renderer owns dirty rows, drawable lifetimes, recovery, and idle draws;
-/// do not add a second timer or a continuously running display link around it.
+/// SwiftTerm owns dirty rows, drawable lifetimes and recovery. The window owns
+/// frame pacing, shared with native controls and all other visible surfaces.
 @MainActor
 final class TerminalRendering {
     private weak var view: InteractiveTerminalView?
     private let preferences: TerminalRenderingPreferences
     private var observation: AnyCancellable?
     private var attemptedGPU = false
+    private weak var frames: WindowFrameScheduler?
     private(set) var failure: String?
 
     init(view: InteractiveTerminalView, preferences: TerminalRenderingPreferences? = nil) {
@@ -42,7 +43,66 @@ final class TerminalRendering {
         }
     }
 
-    func attachToWindow() { apply(enabled: preferences.useGPU, retry: false) }
+    /// When program output first arrived since the last frame; that frame answers pending key presses.
+    private var outputSinceLastFrame: Double?
+    func noteOutput() { if outputSinceLastFrame == nil { outputSinceLastFrame = CACurrentMediaTime() } }
+
+    func attachToWindow() {
+        guard let view else { return }
+        let id = ObjectIdentifier(view)
+        frames?.unregister(id)
+        frames = WindowFrameScheduler.forWindow(view.window)
+        frames?.register(id) { [weak view] in
+            guard let view, Self.isVisible(view), view.isUsingMetalRenderer else { return nil }
+            return (view is CodeTerminalView ? "Editor" : "Terminal", view.metalRendererStatus.presentedFrameCount)
+        }
+        view.metalFramePresented = { [weak self] tag, presentedTime in
+            guard tag != 0 else { return }
+            MainActor.assumeIsolated { self?.frames?.framePresented(tag: tag, presentedTime: presentedTime) }
+        }
+        view.displayUpdateScheduler = { [weak self] update in
+            Self.onMain {
+                guard let self, let view = self.view, Self.isVisible(view), let frames = self.frames else {
+                    DispatchQueue.main.async { update() }
+                    return
+                }
+                frames.enqueue(update)
+            }
+        }
+        view.metalFrameScheduler = { [weak self] present in
+            Self.onMain {
+                guard let self, let view = self.view, Self.isVisible(view) else { return }
+                if let frames = self.frames {
+                    let output = self.outputSinceLastFrame
+                    self.outputSinceLastFrame = nil
+                    frames.requestPresentation(ObjectIdentifier(view), outputAt: output) { [weak view, weak frames] in
+                        guard let view, let frames else { return }
+                        let tag = frames.presentationTag
+                        if tag != 0 {
+                            if view.metalNextFrameTag != 0 { frames.mergeTag(view.metalNextFrameTag, into: tag) }
+                            view.metalNextFrameTag = tag
+                        }
+                        view.metalPresentsImmediately = frames.presentationMayBypassVsync
+                        present()
+                    }
+                } else {
+                    DispatchQueue.main.async { [weak view] in
+                        if let view, Self.isVisible(view) { present() }
+                    }
+                }
+            }
+        }
+        apply(enabled: preferences.useGPU, retry: false)
+    }
+
+    nonisolated private static func onMain(_ work: @escaping @MainActor () -> Void) {
+        if Thread.isMainThread { MainActor.assumeIsolated(work) }
+        else { DispatchQueue.main.async { work() } }
+    }
+
+    private static func isVisible(_ view: InteractiveTerminalView) -> Bool {
+        !view.isHiddenOrHasHiddenAncestor && view.window?.isVisible == true && view.window?.isMiniaturized == false
+    }
 
     private func apply(enabled: Bool, retry: Bool) {
         guard let view, view.window != nil else { return }
@@ -76,6 +136,6 @@ final class TerminalRendering {
         case .disabled: status = failure.map { "CoreGraphics — \($0)" } ?? "CoreGraphics"
         }
         let refresh = view.window?.screen?.maximumFramesPerSecond ?? 60
-        return "\(status)\nPresented GPU frames: \(view.metalRendererStatus.presentedFrameCount)\nDisplay maximum refresh rate: \(refresh) Hz\n\nThe display limit is not a measured application frame rate. Rendering runs on demand; idle views do not continuously redraw."
+        return "\(status)\nPresented GPU frames: \(view.metalRendererStatus.presentedFrameCount)\nDisplay maximum refresh rate: \(refresh) Hz\n\n\(frames?.summary ?? "Native on-demand drawing")"
     }
 }

@@ -1,0 +1,30 @@
+# AGENTS.md
+
+NeoLink is a native macOS (13+) SwiftUI/AppKit coding workspace: tabbed terminal + SSH/SFTP, shared Neovim editor, native ACP agents, Git review.
+
+## Build & run
+- `swift build` / `swift run` — debug executable from repo root.
+- `./scripts/build-app.sh` — release `NeoLink.app` in repo root; copies `Resources/`, embeds `SwiftTerm_SwiftTerm.bundle`, precompiles Metal shaders when `xcrun metal` exists, then ad-hoc signs. Set `NEOLINK_SIGNING_IDENTITY` for stable signing. `NeoLink.app` and `.build/` are gitignored build artifacts.
+- One executable module: everything under `Sources/` is the `NeoLink` target. The directory split (`Terminal/`, `Documents/`, etc.) is organizational only, so cross-folder `internal` access is normal. No `@main`; `Sources/main.swift` starts `NSApplication` directly.
+
+## Verify
+- `swift test` — 92 native tests, temporary files only; no SSH server or credentials needed. `SmoothScrollRenderingTests` renders with Metal and compares pixels (skips without a GPU).
+- `python3 scripts/test-editor.py` — real Neovim runtime regression; requires `nvim` on `PATH`. Uses `Resources/Editor/neolink.lua` and checks buffers, saves, external conflicts, UTF-16/CRLF, large-file mode, optional Pyright LSP.
+- ACP tests launch the offline fixture `scripts/fixtures/acp-agent.py` via `python3`.
+- No CI, linter, or formatter config exists in the repo; those two commands are the verification path.
+- Rendering/latency changes: run the interaction benchmark (`NEOLINK_BENCHMARK=...`, see `docs/RENDERING.md`) on a release build with the window frontmost and the screen unlocked; an occluded window pauses its clock and invalidates the run.
+
+## Architecture wiring
+- `Sources/main.swift` creates the `WorkspaceWindow` + `WindowFrameScheduler` (frame pacing, capped at 120 Hz); `Sources/ContentView.swift` composes sidebar, file browser, tabbed terminals, and right agent panel.
+- `Sources/Tabs/TabsController.swift` owns all workspace tabs (`WorkspaceTab`: terminal or document) and the single shared `NeovimSession`.
+- `Sources/Documents/NeovimSession.swift` lazily starts one Neovim per app in `/tmp/neolink-*`, communicates via a unix socket and watched `status.json`, and uses `Resources/Editor/neolink.lua`. Missing `nvim` degrades to the native text editor.
+- GPU rendering: `Sources/Terminal/TerminalRendering.swift` + `Sources/Rendering/WindowFrameScheduler.swift` (display-link pacing, immediate frames for typed output, presentation backpressure, latency stats), persisted View-menu preference. Trackpad smooth scrolling: `Sources/Terminal/SmoothScroll.swift`. SwiftTerm's Metal bundle must be present in packaged apps.
+- Agents: ACP transport/session in `Sources/Agents/ACPTransport.swift` and `ACPSession.swift`; terminal agents use `CodingAgent`/launcher. See `docs/AGENT_GUIDE.md`.
+- Project access uses security-scoped bookmarks in `Sources/Workspace/WorkspaceAccess.swift`; Git review is `Sources/Workspace/GitChanges*` and explorer decoration is `Sources/FileBrowser/ExplorerGit.swift`.
+
+## Repo-specific constraints
+- `Package.swift` intentionally uses `swift-tools-version: 5.10` (Swift 5 language mode) to avoid Swift 6 concurrency conflicts with `swift-ssh-client`. Don't bump it casually.
+- SwiftTerm is a pinned local snapshot (`Vendor/SwiftTerm`, v1.20.0), not a normal remote package. NeoLink changed its frame scheduling, Metal renderer (row cache by line identity, smooth-scroll region, shared shaders, a `float4` viewport uniform in `Shaders.metal`) and region-scroll reporting in `Terminal.swift`; `Vendor/SwiftTerm/UPSTREAM.md` lists every change. Read it before updating and reapply/test them.
+- `Resources/` is not a SwiftPM resource target. Code falls back to `#filePath`-relative paths; `scripts/build-app.sh` must copy `Resources/Editor` and the SwiftTerm bundle for a packaged app to work.
+- Resource limits are deliberate: >2 MiB files skip LSP/Tree-sitter, code tabs cap at 128 MiB, SFTP remote previews are read-only. See `docs/CODING_WORKSPACE.md`, `docs/RENDERING.md`, and `docs/EXPLORER.md` for behavior worth preserving.
+- Ad-hoc rebuilds can change app identity and re-trigger macOS folder permissions; bookmark behavior depends on consistent signing.

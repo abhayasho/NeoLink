@@ -16,7 +16,8 @@ struct TabbedTerminalView: View {
 
             ZStack {
                 VStack(spacing: 0) {
-                    TerminalViewRepresentable(tabs: controller.workspaceTerminalTabs, selectedTabID: controller.selectedTerminalTab?.id)
+                    TerminalViewRepresentable(tabs: controller.workspaceTerminalTabs, selectedTabID: controller.selectedTerminalTab?.id,
+                                              isActive: controller.selectedTab?.document == nil)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.leading, 8)
                         .padding(.top, 8)

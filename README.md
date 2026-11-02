@@ -21,12 +21,12 @@
 ## Features
 
 - **Persistent terminal tabs.** Switch between local and SSH sessions without restarting shells or losing scrollback, powered by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
-- **GPU text rendering.** Shells, SSH sessions, agent terminals, and the Neovim editor use SwiftTerm's native Metal renderer by default: cached CoreText glyphs are drawn as GPU quads, with unchanged rows reused. **View → Use GPU Text Rendering** saves your preference and switches existing sessions without restarting them. **Renderer Information…** reports the focused surface's actual renderer and presented frame count. Initialization/recovery failures fall back to CoreGraphics. This is a native Metal integration; GPUI is not embedded, and 120 FPS or zero typing latency are not guaranteed. [Rendering details](docs/RENDERING.md).
+- **GPU text rendering at up to 120 Hz.** Shells, SSH sessions, agent terminals, and the Neovim editor draw with Metal: CoreText glyphs are cached in an atlas and drawn as GPU quads, and a row that only moved is translated instead of being shaped again. One display-link clock per window paces every surface and stops when nothing changes. Typed output is drawn as soon as it arrives instead of waiting for the next refresh. On a 120 Hz MacBook Pro, the median time from key press to frame on screen measured 11 ms in a shell and 15 ms in the editor (previously 36–38 ms). These figures come from synthetic input and exclude keyboard and panel hardware delay. **View → Performance Monitor…** shows the same latency and frame-interval numbers live; **View → Use GPU Text Rendering** switches renderers without restarting sessions, and failures fall back to CoreGraphics. GPUI is not embedded; this is a native Metal integration. [Rendering details and benchmarks](docs/RENDERING.md).
 - **Code and PDFs in tabs.** One shared, on-demand Neovim engine provides a dark code editor inside NeoLink. PDFs use a native viewer. Reopening a file selects its existing tab and preserves editing state. A native text editor is available when Neovim is not installed.
 - **Code intelligence.** Syntax highlighting, completion, diagnostics, definition, references, hover, rename and code actions use installed language servers. Run supported files in a terminal directly from the code toolbar.
 - **Native agent conversations.** Connect an installed ACP adapter from **Agent → Native conversation (ACP)**. Stream replies, inspect tool input and file-change previews, approve or reject requested actions, change advertised modes, and stop a turn in the right panel. Multiple sessions can run alongside code; hiding the panel keeps them alive. Optional stdio MCP server configurations are passed to the adapter. [Setup and limits](docs/AGENT_GUIDE.md).
 - **Agent terminals.** Run Claude Code, continue its last project conversation, or launch another installed CLI in a panel or workspace tab. Authentication and terminal-based approvals stay in that CLI. Clean code buffers refresh after agent turns or when editor focus returns; unsaved buffers remain protected.
-- **Scrolling and text zoom.** Mouse wheels and trackpads scroll the active Neovim buffer or mouse-aware terminal application. Precise trackpad deltas accumulate instead of jumping on each tiny event. **⌘+**, **⌘−**, **⌘0**, the **View** menu, and the editor's text-size menu adjust code and terminal text. The chosen size is saved across launches; these shortcuts zoom the active PDF instead when it has focus.
+- **Pixel-smooth scrolling and text zoom.** With a trackpad, the editor, other mouse-aware full-screen terminal programs, and shell scrollback follow your fingers pixel by pixel, drawing a new frame at or near every 120 Hz refresh instead of jumping a line at a time. When you let go, the remaining part of a line eases out. Classic mouse wheels, Neovim side-by-side splits, and the CoreGraphics renderer keep line steps. **⌘+**, **⌘−**, **⌘0**, the **View** menu, and the editor's text-size menu adjust code and terminal text. The chosen size is saved across launches; these shortcuts zoom the active PDF instead when it has focus.
 - **Native source control.** **⇧⌘G** opens staged/unstaged diffs, file staging and unstaging, commits from the index, local branch creation/switching, and read-only stash previews. Commits use your configured Git identity and hooks. Save editor changes before Git operations; branch switching preserves Git’s normal conflict checks. Push, pull, merge, stash creation/apply, and generated commit messages remain terminal operations.
 - **Folding and REPLs.** Use the **Code** menu to fold/unfold code, toggle server-provided inlay hints, or open an installed Python, JavaScript, Swift, Ruby or Lua REPL in the current project.
 - **Project tools.** Open a project once and restore its saved folder access on launch. Use **⌘P** for ranked fuzzy filename/path search and **⇧⌘F** to search file contents. Searches skip dependency/build folders and run only on demand.
@@ -133,13 +133,16 @@ swift test
 python3 scripts/test-editor.py
 ```
 
-The regression suite covers wheel-delta accumulation, persisted text sizing, docked-agent lifecycle, Git staging/unstaging and commits (including an unborn repository), local branch conflicts, stash previews, literal filenames, ACP streaming/permissions/cancellation/timeouts and parallel session isolation, isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials. Authenticated SFTP transfers and remote previews still need an integration check against a server.
+The regression suite (92 tests) covers Metal rendering of smooth-scrolled frames compared pixel by pixel, the scroll model, frame scheduling and input-latency attribution, wheel-delta accumulation, persisted text sizing, docked-agent lifecycle, Git staging/unstaging and commits (including an unborn repository), local branch conflicts, stash previews, literal filenames, ACP streaming/permissions/cancellation/timeouts and parallel session isolation, isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials; the rendering tests skip without a Metal GPU. Authenticated SFTP transfers and remote previews still need an integration check against a server.
+
+To measure scrolling smoothness and typing latency on your machine, run the interaction benchmark described in [docs/RENDERING.md](docs/RENDERING.md#benchmark) on a release build.
 
 ## Project layout
 
 ```
 Sources/
-├── Terminal/       SwiftTerm view wrapper
+├── Terminal/       SwiftTerm view wrapper, GPU renderer setup, smooth scrolling
+├── Rendering/      per-window frame clock, Performance Monitor, interaction benchmark
 ├── Tabs/           tab controller and tabbed terminal view
 ├── Documents/      Neovim bridge, native text fallback, PDF viewer, file IO
 ├── Workspace/      remembered project access and bounded project search
@@ -150,6 +153,7 @@ Sources/
 ├── SFTP/           SFTP manager, connection pool, browser view, Keychain passwords
 ├── Security/       credential store
 └── NeoLinkTheme.swift
+Vendor/SwiftTerm/   SwiftTerm 1.20.0 with NeoLink's rendering changes (see UPSTREAM.md)
 ```
 
 ## Roadmap
@@ -165,7 +169,7 @@ The [feature plan](docs/FEATURE_PLAN.md) distinguishes shipped native tools from
 ## Built with
 
 - [Neovim](https://neovim.io) for the embedded coding engine
-- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) for terminal emulation
+- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) for terminal emulation and Metal rendering, vendored with NeoLink's changes listed in [`Vendor/SwiftTerm/UPSTREAM.md`](Vendor/SwiftTerm/UPSTREAM.md)
 - [swift-ssh-client](https://github.com/gaetanzanella/swift-ssh-client) for SSH and SFTP
 
 ## License

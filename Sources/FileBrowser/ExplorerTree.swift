@@ -61,10 +61,12 @@ final class ExplorerTree: ObservableObject {
     private var query = ""
     private var diagnostics: [String: ExplorerDiagnostics] = [:]
     private var pendingReveal = false
+    private var projectionTask: Task<Void, Never>?
+    private var projectionRevision = UUID()
 
     deinit {
         loads.values.forEach { $0.cancel() }
-        gitTask?.cancel(); refreshTask?.cancel(); watcher?.cancel()
+        gitTask?.cancel(); refreshTask?.cancel(); projectionTask?.cancel(); watcher?.cancel()
     }
     func configure(root: URL, hidden: Bool, compact: Bool, hideIgnored: Bool) {
         let root = root.standardizedFileURL
@@ -122,7 +124,8 @@ final class ExplorerTree: ObservableObject {
     }
     func setFilter(_ query: String) { self.query = query; rebuild() }
     func setDiagnostics(_ diagnostics: [String: ExplorerDiagnostics]) {
-        self.diagnostics = Dictionary(diagnostics.map { (URL(fileURLWithPath: $0.key).standardizedFileURL.path, $0.value) }, uniquingKeysWith: +)
+        guard self.diagnostics != diagnostics else { return }
+        self.diagnostics = diagnostics
         rebuild()
     }
     func collapseAll() { expanded = []; rebuild() }
@@ -148,69 +151,36 @@ final class ExplorerTree: ObservableObject {
 
     private func rebuild() {
         guard let root else { return }
-        var result: [ExplorerRow] = [], needed: [URL] = []
-        let filter = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        func entries(in directory: URL) -> [LocalFileItem] {
-            var source = children[directory] ?? []
-            let known = Set(source.map(\.id))
-            let deleted = (git?.deletedChildren(in: directory) ?? []).filter {
-                !known.contains($0.id) && (hidden || !$0.url.lastPathComponent.hasPrefix("."))
-            }
-            source += deleted
-            if !hidden {
-                source = source.filter { item in
-                    !item.url.lastPathComponent.hasPrefix(".") || selectedURL == item.id ||
-                        (item.isDirectory && selectedURL?.path.hasPrefix(item.url.path + "/") == true)
-                }
-            }
-            return deleted.isEmpty ? source : FileSortOrder.nameAsc.sorted(source)
+        projectionTask?.cancel()
+        let revision = UUID(); projectionRevision = revision
+        let children = children, expanded = expanded, failed = failed, git = git
+        let hidden = hidden, compact = compact, hideIgnored = hideIgnored, query = query
+        let diagnostics = diagnostics, selectedURL = selectedURL
+        isLoading = true
+        let worker = Task.detached(priority: .userInitiated) {
+            try ExplorerProjection.build(root: root, children: children, expanded: expanded, failed: failed,
+                git: git, hidden: hidden, compact: compact, hideIgnored: hideIgnored, query: query,
+                diagnostics: diagnostics, selectedURL: selectedURL)
         }
-        func walk(_ directory: URL, depth: Int) {
-            guard depth < 32, result.count < 5_000 else { limited = true; return }
-            if children[directory] == nil, !failed.contains(directory) { needed.append(directory) }
-            let known = Set((children[directory] ?? []).map(\.id))
-            for original in entries(in: directory) {
-                if result.count >= 5_000 { limited = true; break }
-                let state = git?.state(for: original.url, directory: original.isDirectory)
-                if hideIgnored && state == .ignored { continue }
-                var item = original, names = [original.url.lastPathComponent]
-                if compact, original.isDirectory, !original.isSymbolicLink {
-                    for _ in 0..<16 {
-                        let list = entries(in: item.url)
-                        guard list.count == 1, let child = list.first, child.isDirectory, !child.isSymbolicLink,
-                              children[item.url]?.contains(where: { $0.id == child.id }) == true,
-                              !ProjectSearch.excluded.contains(child.url.lastPathComponent),
-                              !failed.contains(child.url) else { break }
-                        item = child; names.append(child.url.lastPathComponent)
-                    }
+        projectionTask = Task { [weak self] in
+            do {
+                let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                try Task.checkCancellation()
+                guard let self, self.projectionRevision == revision else { return }
+                self.rows = result.rows
+                self.limited = self.limited || result.limited
+                for directory in result.virtualDirectories { self.children[directory] = self.children[directory] ?? [] }
+                for directory in result.needed where self.loads.count < 2 && self.loads[directory] == nil {
+                    if self.children.count >= 128 { self.limited = true; continue }
+                    self.startLoad(directory)
                 }
-                let isExpanded = expanded.contains(original.id)
-                var counts = diagnostics[item.url.standardizedFileURL.path] ?? ExplorerDiagnostics()
-                if item.isDirectory {
-                    counts = diagnostics.filter { $0.key.hasPrefix(item.url.path + "/") }.values.reduce(ExplorerDiagnostics(), +)
-                }
-                let row = ExplorerRow(id: original.id, item: item, name: names.joined(separator: "/"), depth: depth,
-                    expanded: isExpanded, missing: !known.contains(original.id), git: state, diagnostics: counts)
-                let index = result.count
-                result.append(row)
-                if isExpanded && item.isDirectory {
-                    if row.missing { children[item.url] = children[item.url] ?? [] }
-                    walk(item.url, depth: depth + 1)
-                }
-                // A tree filter deliberately searches loaded branches. Quick Open searches the project.
-                if !filter.isEmpty, !row.name.localizedCaseInsensitiveContains(filter), result.count == index + 1 {
-                    result.remove(at: index)
-                }
+                self.isLoading = !self.loads.isEmpty
+                if self.pendingReveal, self.rowID(for: self.selectedURL) != nil { self.pendingReveal = false; self.revealRevision += 1 }
+            } catch is CancellationError {} catch {
+                guard let self, self.projectionRevision == revision else { return }
+                self.isLoading = !self.loads.isEmpty
             }
         }
-        walk(root, depth: 0)
-        rows = result
-        for directory in needed where loads.count < 2 && loads[directory] == nil {
-            if children.count >= 128 { limited = true; continue }
-            startLoad(directory)
-        }
-        isLoading = !loads.isEmpty
-        if pendingReveal, rowID(for: selectedURL) != nil { pendingReveal = false; revealRevision += 1 }
     }
     private func startLoad(_ directory: URL) {
         let token = generation, compact = compact && directory != root
@@ -229,5 +199,90 @@ final class ExplorerTree: ObservableObject {
                 self.error = "\(directory.lastPathComponent): \(error.localizedDescription)"; self.rebuild()
             }
         }
+    }
+}
+
+/// Pure projection of cached directory entries. Filtering, Git decorations, compact
+/// chains and diagnostic aggregation never occupy the main-thread frame budget.
+struct ExplorerProjection: Sendable {
+    var rows: [ExplorerRow]
+    var needed: [URL]
+    var virtualDirectories: Set<URL>
+    var limited: Bool
+
+    static func build(root: URL, children: [URL: [LocalFileItem]], expanded: Set<URL>, failed: Set<URL>,
+                      git: ExplorerGitSnapshot?, hidden: Bool, compact: Bool, hideIgnored: Bool,
+                      query: String, diagnostics: [String: ExplorerDiagnostics], selectedURL: URL?) throws -> Self {
+        var limited = false, virtualDirectories: Set<URL> = []
+        let diagnostics = Dictionary(diagnostics.map { (URL(fileURLWithPath: $0.key).standardizedFileURL.path, $0.value) }, uniquingKeysWith: +)
+        var folderDiagnostics: [String: ExplorerDiagnostics] = [:]
+        for (path, counts) in diagnostics {
+            try Task.checkCancellation()
+            var parent = (path as NSString).deletingLastPathComponent
+            while !parent.isEmpty {
+                folderDiagnostics[parent, default: ExplorerDiagnostics()] = (folderDiagnostics[parent] ?? ExplorerDiagnostics()) + counts
+                let next = (parent as NSString).deletingLastPathComponent
+                if next == parent { break }
+                parent = next
+            }
+        }
+        var result: [ExplorerRow] = [], needed: [URL] = []
+        let filter = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        func entries(in directory: URL) -> [LocalFileItem] {
+            var source = children[directory] ?? []
+            let known = Set(source.map(\.id))
+            let deleted = (git?.deletedChildren(in: directory) ?? []).filter {
+                !known.contains($0.id) && (hidden || !$0.url.lastPathComponent.hasPrefix("."))
+            }
+            source += deleted
+            if !hidden {
+                source = source.filter { item in
+                    !item.url.lastPathComponent.hasPrefix(".") || selectedURL == item.id ||
+                        (item.isDirectory && selectedURL?.path.hasPrefix(item.url.path + "/") == true)
+                }
+            }
+            return deleted.isEmpty ? source : FileSortOrder.nameAsc.sorted(source)
+        }
+        func walk(_ directory: URL, depth: Int) throws {
+            guard depth < 32, result.count < 5_000 else { limited = true; return }
+            if children[directory] == nil, !failed.contains(directory) { needed.append(directory) }
+            let known = Set((children[directory] ?? []).map(\.id))
+            for original in entries(in: directory) {
+                try Task.checkCancellation()
+                if result.count >= 5_000 { limited = true; break }
+                let state = git?.state(for: original.url, directory: original.isDirectory)
+                if hideIgnored && state == .ignored { continue }
+                var item = original, names = [original.url.lastPathComponent]
+                if compact, original.isDirectory, !original.isSymbolicLink {
+                    for _ in 0..<16 {
+                        let list = entries(in: item.url)
+                        guard list.count == 1, let child = list.first, child.isDirectory, !child.isSymbolicLink,
+                              children[item.url]?.contains(where: { $0.id == child.id }) == true,
+                              !ProjectSearch.excluded.contains(child.url.lastPathComponent),
+                              !failed.contains(child.url) else { break }
+                        item = child; names.append(child.url.lastPathComponent)
+                    }
+                }
+                let isExpanded = expanded.contains(original.id)
+                var counts = diagnostics[item.url.standardizedFileURL.path] ?? ExplorerDiagnostics()
+                if item.isDirectory {
+                    counts = folderDiagnostics[item.url.path] ?? ExplorerDiagnostics()
+                }
+                let row = ExplorerRow(id: original.id, item: item, name: names.joined(separator: "/"), depth: depth,
+                    expanded: isExpanded, missing: !known.contains(original.id), git: state, diagnostics: counts)
+                let index = result.count
+                result.append(row)
+                if isExpanded && item.isDirectory {
+                    if row.missing { virtualDirectories.insert(item.url) }
+                    try walk(item.url, depth: depth + 1)
+                }
+                // A tree filter deliberately searches loaded branches. Quick Open searches the project.
+                if !filter.isEmpty, !row.name.localizedCaseInsensitiveContains(filter), result.count == index + 1 {
+                    result.remove(at: index)
+                }
+            }
+        }
+        try walk(root, depth: 0)
+        return Self(rows: result, needed: needed, virtualDirectories: virtualDirectories, limited: limited)
     }
 }

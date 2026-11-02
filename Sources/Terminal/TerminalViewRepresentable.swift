@@ -258,13 +258,16 @@ final class TerminalShellIntegration {
 struct TerminalViewRepresentable: NSViewRepresentable {
     let tabs: [TerminalTab]
     let selectedTabID: UUID?
+    /// False while a document covers the terminals. SwiftUI opacity does not hide an
+    /// NSView, and a visible terminal keeps rendering Metal frames nobody can see.
+    var isActive = true
 
     func makeNSView(context: Context) -> TerminalHostView {
         TerminalHostView(frame: .zero)
     }
 
     func updateNSView(_ nsView: TerminalHostView, context: Context) {
-        nsView.synchronize(tabs: tabs, selectedTabID: selectedTabID)
+        nsView.synchronize(tabs: tabs, selectedTabID: selectedTabID, isActive: isActive)
     }
 }
 
@@ -275,6 +278,7 @@ final class TerminalHostView: NSView {
     private var selectedTabID: UUID?
     private var mountedViews: [UUID: LocalProcessTerminalView] = [:]
     private var focusedTabID: UUID?
+    private var isActiveRequested = true
     private let makeTerminalView: (TerminalTab, NSSize) -> LocalProcessTerminalView
 
     init(frame: NSRect, makeTerminalView: @escaping (TerminalTab, NSSize) -> LocalProcessTerminalView = { tab, size in
@@ -286,9 +290,30 @@ final class TerminalHostView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func synchronize(tabs: [TerminalTab], selectedTabID: UUID?) {
+    func synchronize(tabs: [TerminalTab], selectedTabID: UUID?, isActive: Bool = true) {
         self.tabs = tabs
         self.selectedTabID = selectedTabID
+        if isHidden == isActive {
+            if isActive {
+                // Show at once so the terminal is not blank for a frame; focus it again.
+                isHidden = false
+                layoutTerminals()
+            } else {
+                // Hide outside SwiftUI's update. Hiding the view that holds the first responder
+                // makes AppKit search the key-view loop, which queries SwiftUI layout re-entrantly
+                // (AttributeGraph cycles) and walks the whole window; resign it directly instead.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.isHidden, !self.isActiveRequested else { return }
+                    if let window = self.window, let responder = window.firstResponder as? NSView,
+                       responder === self || responder.isDescendant(of: self) {
+                        window.makeFirstResponder(nil)
+                    }
+                    self.isHidden = true
+                    self.focusedTabID = nil
+                }
+            }
+        }
+        isActiveRequested = isActive
         let openIDs = Set(tabs.map(\.id))
         for id in Array(mountedViews.keys) where !openIDs.contains(id) {
             mountedViews.removeValue(forKey: id)?.removeFromSuperview()
@@ -323,11 +348,18 @@ final class TerminalHostView: NSView {
             addSubview(view)
         }
         for (id, view) in mountedViews {
-            view.isHidden = id != selectedTabID
+            let hide = id != selectedTabID
+            if hide, !view.isHidden, let window, let responder = window.firstResponder as? NSView,
+               responder === view || responder.isDescendant(of: view) {
+                // Hiding the first responder makes AppKit search the key-view loop, which
+                // re-enters SwiftUI layout during this update (AttributeGraph cycles).
+                window.makeFirstResponder(nil)
+            }
+            if view.isHidden != hide { view.isHidden = hide }
             if id == selectedTabID, view.frame != bounds { view.frame = bounds }
         }
         if selectedTabID == nil { focusedTabID = nil }
-        guard focusedTabID != selectedTabID, let id = selectedTabID, let view = mountedViews[id] else { return }
+        guard !isHidden, focusedTabID != selectedTabID, let id = selectedTabID, let view = mountedViews[id] else { return }
         focusedTabID = id
         DispatchQueue.main.async { [weak self, weak view] in
             guard let self, self.selectedTabID == id, let view, let window = self.window else { return }

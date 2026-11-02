@@ -226,7 +226,12 @@ final class NeovimHostView: NSView {
     func synchronize(session: NeovimSession, active: Bool, selection: UUID?) {
         let mounting = terminal == nil && session.terminal != nil
         if terminal == nil, let view = session.terminal { terminal = view; addSubview(view) }
-        terminal?.isHidden = !active
+        if !active, let terminal, !terminal.isHidden, let window, let responder = window.firstResponder as? NSView,
+           responder === terminal || responder.isDescendant(of: terminal) {
+            // Avoid AppKit's key-view search while SwiftUI is updating (see TerminalHostView).
+            window.makeFirstResponder(nil)
+        }
+        if terminal?.isHidden != !active { terminal?.isHidden = !active }
         needsLayout = true
         if active, terminal != nil, mounting || self.selection != selection {
             self.selection = selection

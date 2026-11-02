@@ -14,9 +14,8 @@ let package = Package(
         .executable(name: "NeoLink", targets: ["NeoLink"])
     ],
     dependencies: [
-        // 1.20 provides native Metal text rendering. Keep the 1.x API pinned;
-        // 1.99 and later introduce the separate SwiftTerm 2.0 API migration.
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.20.0"),
+        // Pinned, attributed source snapshot with window-synchronized frame hooks.
+        .package(path: "Vendor/SwiftTerm"),
         .package(url: "https://github.com/gaetanzanella/swift-ssh-client.git", from: "0.1.0")
     ],
     targets: [

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SwiftTerm
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -9,6 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let commands = WorkspaceCommands()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if TerminalRenderingPreferences.shared.useGPU {
+            // Shader compilation is shared by every terminal; keep it off the main thread.
+            DispatchQueue.global(qos: .userInitiated).async { TerminalView.prepareMetalRenderer() }
+        }
         NSApp.setActivationPolicy(.regular)
         commands.install()
         let contentView = ContentView(tabsController: tabsController)
@@ -24,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             y: screenFrame.midY - initialSize.height / 2
         )
 
-        let window = NSWindow(
+        let window = WorkspaceWindow(
             contentRect: NSRect(origin: origin, size: initialSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
@@ -45,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
 
         self.window = window
+        InteractionBenchmark.startIfRequested(window: window, tabs: tabsController)
 
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
