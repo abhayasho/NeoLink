@@ -209,6 +209,7 @@ final class WorkspaceDocument: NSObject, ObservableObject, Identifiable, NSTextV
             defer { isSaving = false }
             let result = await neovim.save(url)
             if !result { error = neovim.error }
+            else { NotificationCenter.default.post(name: .neoLinkFileSaved, object: url) }
             return result
         }
         guard !isSaving, !isClosed, !isReadOnly, let format = loaded?.format, case .local(let url) = source else { return false }
@@ -224,6 +225,7 @@ final class WorkspaceDocument: NSObject, ObservableObject, Identifiable, NSTextV
             }.value
             savedText = snapshot
             isModified = text != savedText
+            NotificationCenter.default.post(name: .neoLinkFileSaved, object: url)
             return true
         } catch {
             self.error = error.localizedDescription

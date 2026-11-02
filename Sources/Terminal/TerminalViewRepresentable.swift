@@ -23,6 +23,7 @@ enum TerminalProcessStatus: Equatable {
 final class TerminalState: NSObject, ObservableObject, LocalProcessTerminalViewDelegate, @unchecked Sendable {
     @Published var currentDirectory: String?
     @Published var terminalTitle: String?
+    @Published private(set) var directoryReportRevision = 0
     @Published private(set) var processStatus: TerminalProcessStatus = .idle
 
     /// Kept compatible with file-browser actions. Commands go directly to this tab's process,
@@ -119,8 +120,9 @@ final class TerminalState: NSObject, ObservableObject, LocalProcessTerminalViewD
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         let directory = Self.directoryPath(from: directory)
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isClosed, self.currentDirectory != directory else { return }
-            self.currentDirectory = directory
+            guard let self, !self.isClosed else { return }
+            if self.currentDirectory != directory { self.currentDirectory = directory }
+            self.directoryReportRevision &+= 1
         }
     }
 

@@ -103,8 +103,13 @@ function M.snapshot()
         local clients = vim.lsp.get_clients({bufnr=buf})
         local names = {}
         for _,c in ipairs(clients) do table.insert(names,c.name) end
+        local diagnostics, errors, warnings = vim.diagnostic.get(buf), 0, 0
+        for _, diagnostic in ipairs(diagnostics) do
+          if diagnostic.severity == vim.diagnostic.severity.ERROR then errors=errors+1
+          elseif diagnostic.severity == vim.diagnostic.severity.WARN then warnings=warnings+1 end
+        end
         table.insert(buffers,{path=path,modified=vim.bo[buf].modified,filetype=vim.bo[buf].filetype,
-          servers=table.concat(names,', '),diagnostics=#vim.diagnostic.get(buf),buf=buf})
+          servers=table.concat(names,', '),diagnostics=#diagnostics,errors=errors,warnings=warnings,buf=buf})
       end
     end
   end

@@ -36,7 +36,7 @@ struct ContentView: View {
                             localVM: fileBrowsers.browser(for: tab),
                             onClose: { showFileBrowser = false }
                         )
-                            .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
+                            .frame(minWidth: 200, idealWidth: 250, maxWidth: 400)
                     }
                     TabbedTerminalView(controller: tabsController)
                         .frame(minWidth: 380, idealWidth: 760, maxWidth: .infinity, maxHeight: .infinity)

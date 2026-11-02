@@ -6,6 +6,7 @@ NeoLink continues incrementally on SwiftUI/AppKit, SwiftTerm, PDFKit and a share
 | --- | --- |
 | Scroll and text size | Wheel events reach the active mouse-aware TUI; trackpad fractions accumulate. Persisted 9–32 pt text sizing, View commands, keyboard shortcuts and editor menu. PDF shortcuts adjust document zoom. |
 | Compact workspace | Explorer or Connections on the left, flat file tabs in the center, resizable agent sessions on the right. Panels can be hidden independently. |
+| IDE explorer | Lazy expandable local tree, compact expanded chains, active-file reveal, Git/ignore decorations and deleted placeholders, semantic icons, open-buffer diagnostics, fuzzy Quick Open, path/terminal hooks, and folder-targeted copy/drop. Folder List and SSH/SFTP workflows remain available. [Details](EXPLORER.md). |
 | Terminal threads / parallel agents | Installed CLI agents run in separate PTYs and project directories. The right panel switches among active sessions and preserves them when hidden. |
 | LSP | Existing completion, definitions, references, diagnostics, rename, code actions and server-dependent formatting. New inlay-hint toggle; availability depends on the language server. |
 | Parsing / folding | Neovim uses available Tree-sitter parsers, with syntax fallback. Tree-sitter folding where available, indentation folding otherwise. No parser auto-installation. |

@@ -7,6 +7,7 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
     let creationDate: Date?
     let modificationDate: Date?
     let fileSize: Int64?
+    var isSymbolicLink: Bool = false
 }
 
 enum FileSortOrder: String, CaseIterable, Sendable {
@@ -83,7 +84,7 @@ actor LocalFileOperations {
         return url
     }
     private static let resourceKeys: Set<URLResourceKey> = [
-        .isDirectoryKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey
+        .isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey
     ]
 
     nonisolated static func contents(at directory: URL, showHiddenFiles: Bool) throws -> [LocalFileItem] {
@@ -96,11 +97,12 @@ actor LocalFileOperations {
             try Task.checkCancellation()
             let values = try? url.resourceValues(forKeys: resourceKeys)
             return LocalFileItem(
-                url: url,
+                url: url.standardizedFileURL,
                 isDirectory: values?.isDirectory ?? false,
                 creationDate: values?.creationDate,
                 modificationDate: values?.contentModificationDate,
-                fileSize: values?.fileSize.map(Int64.init)
+                fileSize: values?.fileSize.map(Int64.init),
+                isSymbolicLink: values?.isSymbolicLink ?? false
             )
         }
     }
@@ -158,6 +160,7 @@ final class LocalFileBrowserViewModel: ObservableObject {
     @Published private(set) var totalItemCount = 0
     @Published private(set) var isLoading = false
     @Published private(set) var isWorking = false
+    @Published private(set) var mutationRevision = 0
     @Published private(set) var followsTerminal = true
     @Published var copiedURL: URL?
     @Published var lastError: String?
@@ -286,9 +289,9 @@ final class LocalFileBrowserViewModel: ObservableObject {
         copiedURL = item.url
     }
 
-    func paste() {
+    func paste(into folder: URL? = nil) {
         guard let copiedURL else { return }
-        copyToCurrentDirectory(from: [copiedURL])
+        copyFiles(from: [copiedURL], into: folder ?? currentURL)
     }
 
     func rename(item: LocalFileItem, newName: String) {
@@ -304,6 +307,7 @@ final class LocalFileBrowserViewModel: ObservableObject {
         defer { isWorking = false }
         do {
             let result = try await fileOperations.create(named: name, in: folder, isDirectory: isDirectory)
+            mutationRevision &+= 1
             if currentURL == folder { load() }
             return result
         } catch {
@@ -317,7 +321,10 @@ final class LocalFileBrowserViewModel: ObservableObject {
     }
 
     func copyToCurrentDirectory(from sourceURLs: [URL]) {
-        let destination = currentURL
+        copyFiles(from: sourceURLs, into: currentURL)
+    }
+
+    func copyFiles(from sourceURLs: [URL], into destination: URL) {
         performFileOperation(in: destination) { operations in
             for source in sourceURLs { try await operations.copy(source, into: destination) }
         }
@@ -335,6 +342,7 @@ final class LocalFileBrowserViewModel: ObservableObject {
             do { try await operation(fileOperations) }
             catch { operationError = error.localizedDescription }
             isWorking = false
+            mutationRevision &+= 1
             if currentURL.standardizedFileURL == directory.standardizedFileURL {
                 load()
             }
@@ -354,6 +362,11 @@ struct LocalFileBrowserView: View {
     @State private var isDropTargeted = false
     @State private var creation: Creation?
     @State private var newName = ""
+    @StateObject private var tree = ExplorerTree()
+    @AppStorage("explorerTreeMode") private var treeMode = true
+    @AppStorage("explorerCompactFolders") private var compactFolders = true
+    @AppStorage("explorerAutoReveal") private var autoReveal = true
+    @AppStorage("explorerHideIgnored") private var hideIgnored = false
 
     private struct Creation: Identifiable {
         let id = UUID()
@@ -366,12 +379,12 @@ struct LocalFileBrowserView: View {
             navigationBar
             searchBar
 
-            if let error = viewModel.lastError {
+            if let error = viewModel.lastError ?? (treeMode ? tree.error : nil) {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.circle")
                     Text(error).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    Button { viewModel.lastError = nil } label: { Image(systemName: "xmark") }
+                    Button { viewModel.lastError = nil; tree.error = nil } label: { Image(systemName: "xmark") }
                         .buttonStyle(.plain)
                         .help("Dismiss error")
                 }
@@ -381,7 +394,7 @@ struct LocalFileBrowserView: View {
                 .background(NeoLinkTheme.warning.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
             }
 
-            fileList
+            if treeMode { treeList } else { fileList }
             footer
         }
         .sheet(item: $renameItem) { item in renameSheet(item: item) }
@@ -399,6 +412,36 @@ struct LocalFileBrowserView: View {
                 }
             }.padding(24).frame(width: 360)
         }
+        .task(id: treeConfiguration) { configureTree() }
+        .onAppear { tree.setActive(treeMode) }
+        .onDisappear { tree.setActive(false) }
+        .onChange(of: treeMode) { tree.setActive($0); if $0 { configureTree() } }
+        .onChange(of: activeFileURL) { url in
+            if autoReveal, let url { tree.reveal(url) }
+            else if url == nil { tree.clearSelection() }
+        }
+        .onChange(of: tabsController.explorerDiagnostics) { tree.setDiagnostics($0) }
+        .onChange(of: terminalState.directoryReportRevision) { _ in if treeMode { tree.scheduleRefresh() } }
+        .onChange(of: viewModel.mutationRevision) { _ in if treeMode { tree.reload() } }
+        .onChange(of: viewModel.isLoading) { loading in if !loading && treeMode { tree.scheduleRefresh() } }
+        .onChange(of: viewModel.searchText) { tree.setFilter($0) }
+        .onReceive(NotificationCenter.default.publisher(for: .neoLinkFileSaved)) { _ in if treeMode { tree.scheduleRefresh() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in if treeMode { tree.scheduleRefresh() } }
+    }
+
+    private var activeFileURL: URL? {
+        guard case .local(let url) = tabsController.selectedTab?.document?.source else { return nil }
+        return url
+    }
+    private var treeConfiguration: String {
+        "\(viewModel.currentURL.path)|\(viewModel.showHiddenFiles)|\(compactFolders)|\(hideIgnored)"
+    }
+    private func configureTree() {
+        guard treeMode else { return }
+        tree.configure(root: viewModel.currentURL, hidden: viewModel.showHiddenFiles, compact: compactFolders, hideIgnored: hideIgnored)
+        tree.setDiagnostics(tabsController.explorerDiagnostics)
+        tree.setFilter(viewModel.searchText)
+        if autoReveal, let url = activeFileURL { tree.reveal(url) }
     }
 
     private var navigationBar: some View {
@@ -433,12 +476,24 @@ struct LocalFileBrowserView: View {
             .menuStyle(.borderlessButton)
             .help(viewModel.currentURL.path)
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button { viewModel.load() } label: {
+            if treeMode {
+                Button { tree.collapseAll() } label: { Image(systemName: "rectangle.compress.vertical").frame(width: 22, height: 24) }
+                    .buttonStyle(.plain).help("Collapse all folders").accessibilityLabel("Collapse all folders")
+            }
+            Button { viewModel.load(); if treeMode { tree.reload() } } label: {
                 Image(systemName: "arrow.clockwise").frame(width: 22, height: 24)
             }
             .buttonStyle(.plain)
             .help("Refresh files")
             Menu {
+                Picker("Explorer layout", selection: $treeMode) {
+                    Text("Project Tree").tag(true)
+                    Text("Folder List").tag(false)
+                }
+                Toggle("Compact Folders", isOn: $compactFolders).disabled(!treeMode)
+                Toggle("Reveal Active File", isOn: $autoReveal).disabled(!treeMode)
+                Toggle("Hide Git-Ignored Files", isOn: $hideIgnored).disabled(!treeMode)
+                Divider()
                 Toggle("Follow Terminal", isOn: Binding(
                     get: { viewModel.followsTerminal },
                     set: { viewModel.setFollowTerminal($0) }
@@ -447,7 +502,7 @@ struct LocalFileBrowserView: View {
                 Divider()
                 Picker("Sort by", selection: $viewModel.sortOrder) {
                     ForEach(FileSortOrder.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
+                }.disabled(treeMode)
             } label: { Image(systemName: "line.3.horizontal.decrease.circle").frame(width: 22, height: 24) }
             .menuStyle(.borderlessButton)
             .help("File browser options")
@@ -458,20 +513,54 @@ struct LocalFileBrowserView: View {
     private var searchBar: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass").foregroundColor(NeoLinkTheme.textSecondary)
-            TextField("Filter files…", text: $viewModel.searchText)
+            TextField(treeMode ? "Filter tree…" : "Filter files…", text: $viewModel.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11))
+                .help(treeMode ? "Filter loaded branches. Use ⌘P to search the entire project." : "Filter this folder")
             if !viewModel.searchText.isEmpty {
                 Button { viewModel.searchText = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
                     .foregroundColor(NeoLinkTheme.textSecondary)
                     .help("Clear filter")
             }
+            Button { NotificationCenter.default.post(name: .neoLinkQuickOpen, object: nil) } label: { Text("⌘P").font(.system(size: 10)) }
+                .buttonStyle(.plain).foregroundStyle(NeoLinkTheme.textSecondary).help("Quick Open: fuzzy search project files")
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
         .background(NeoLinkTheme.editorBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(NeoLinkTheme.panelBorder, lineWidth: 1))
+    }
+
+    private var treeList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(tree.rows) { entry in
+                        row(for: entry.item, selected: entry.item.id == activeFileURL?.standardizedFileURL, entry: entry)
+                            .id(entry.id)
+                    }
+                }.padding(.vertical, 2)
+            }
+            .onChange(of: tree.revealRevision) { _ in
+                if let id = tree.rowID(for: tree.selectedURL) { proxy.scrollTo(id, anchor: .center) }
+            }
+            .overlay {
+                if tree.rows.isEmpty {
+                    VStack(spacing: 8) {
+                        if tree.isLoading { ProgressView().controlSize(.small) }
+                        Text(tree.isLoading ? "Loading folder…" : (tree.error ?? (viewModel.searchText.isEmpty ? "This folder is empty" : "No matches in expanded folders")))
+                        if !viewModel.searchText.isEmpty { Button("Search entire project  ⌘P") { NotificationCenter.default.post(name: .neoLinkQuickOpen, object: nil) } }
+                    }.font(.system(size: 11)).foregroundStyle(NeoLinkTheme.textSecondary).padding(10)
+                }
+            }
+            .dropDestination(for: URL.self) { urls, _ in
+                guard !viewModel.isWorking, !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return false }
+                viewModel.copyToCurrentDirectory(from: urls); return true
+            } isTargeted: { isDropTargeted = $0 }
+            .background(isDropTargeted ? NeoLinkTheme.selection : Color.clear)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var fileList: some View {
@@ -529,7 +618,7 @@ struct LocalFileBrowserView: View {
             .foregroundColor(viewModel.followsTerminal ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
             .help(viewModel.followsTerminal ? "Pause folder synchronization" : "Return to the terminal’s current folder")
             Spacer(minLength: 0)
-            if viewModel.isWorking || viewModel.isLoading {
+            if viewModel.isWorking || viewModel.isLoading || (treeMode && tree.isLoading) {
                 ProgressView().controlSize(.mini)
             } else if viewModel.copiedURL != nil {
                 Button("Paste") { viewModel.paste() }
@@ -537,7 +626,7 @@ struct LocalFileBrowserView: View {
                     .foregroundColor(NeoLinkTheme.accent)
                     .help("Paste a copy; existing files are kept")
             } else {
-                Text(viewModel.searchText.isEmpty ? "\(viewModel.totalItemCount) items" : "\(viewModel.items.count) of \(viewModel.totalItemCount)")
+                Text(treeMode ? (tree.limited ? "Tree limit · use ⌘P" : "\(tree.rows.count) visible") : (viewModel.searchText.isEmpty ? "\(viewModel.totalItemCount) items" : "\(viewModel.items.count) of \(viewModel.totalItemCount)"))
                     .foregroundColor(NeoLinkTheme.textSecondary)
             }
         }
@@ -559,35 +648,69 @@ struct LocalFileBrowserView: View {
         return urls
     }
 
-    private func row(for item: LocalFileItem, selected: Bool) -> some View {
-        Button { open(item) } label: {
-            HStack(spacing: 9) {
-                Image(systemName: item.isDirectory ? "folder.fill" : fileIcon(for: item))
-                    .foregroundColor(fileColor(for: item))
-                    .font(.system(size: 12))
-                    .frame(width: 18)
-                Text(item.url.lastPathComponent)
-                    .font(.system(size: 12))
-                    .foregroundColor(NeoLinkTheme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 3)
-                if item.isDirectory {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(NeoLinkTheme.textSecondary.opacity(0.7))
-                }
-            }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 8)
-            .contentShape(Rectangle())
-            .background(selected ? NeoLinkTheme.selection : (hoveredID == item.id ? NeoLinkTheme.rowHoverWhite : .clear))
-        }
+    private func row(for item: LocalFileItem, selected: Bool, entry: ExplorerRow? = nil) -> some View {
+        let stateLabel = entry?.git?.label ?? ""
+        let title = entry?.name ?? item.url.lastPathComponent
+        let diagnosticsLabel = entry.map { $0.diagnostics.count > 0 ? ", \($0.diagnostics.errors) errors, \($0.diagnostics.warnings) warnings" : "" } ?? ""
+        return Button {
+            if let entry, item.isDirectory { tree.toggle(entry) }
+            else if entry?.missing != true { open(item) }
+        } label: { rowLabel(item, selected: selected, entry: entry) }
         .buttonStyle(.plain)
-        .help(item.url.path)
+        .opacity(entry?.git == .ignored ? 0.55 : 1)
+        .help(item.url.path + (stateLabel.isEmpty ? "" : " — " + stateLabel))
+        .accessibilityLabel(title + (item.isDirectory ? (entry?.expanded == true ? ", expanded folder" : ", folder") : "") + (stateLabel.isEmpty ? "" : ", " + stateLabel) + diagnosticsLabel)
         .onHover { hoveredID = $0 ? item.id : (hoveredID == item.id ? nil : hoveredID) }
-        .contextMenu {
-            Button(item.isDirectory ? "Open" : "Open in Tab") { open(item) }
+        .contextMenu { contextActions(item, entry: entry) }
+        .draggable(item.url)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard item.isDirectory, entry?.missing != true, !viewModel.isWorking,
+                  !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return false }
+            viewModel.copyFiles(from: urls, into: item.url); return true
+        }
+    }
+
+    private func rowLabel(_ item: LocalFileItem, selected: Bool, entry: ExplorerRow?) -> some View {
+        HStack(spacing: 5) {
+            if let entry {
+                Image(systemName: entry.expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold)).foregroundStyle(NeoLinkTheme.textSecondary).frame(width: 10)
+                    .opacity(item.isDirectory ? 1 : 0).accessibilityHidden(true)
+            }
+            SemanticFileIcon(url: item.url, directory: item.isDirectory, expanded: entry?.expanded ?? false)
+            Text(entry?.name ?? item.url.lastPathComponent)
+                .font(.system(size: 12))
+                .foregroundColor(entry?.git?.color ?? NeoLinkTheme.textPrimary)
+                .strikethrough(entry?.missing == true && !item.isDirectory)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 3)
+            if let entry, entry.diagnostics.count > 0 {
+                Text("\(entry.diagnostics.count)").font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(entry.diagnostics.errors > 0 ? NeoLinkTheme.error : NeoLinkTheme.warning)
+                    .help("\(entry.diagnostics.errors) errors, \(entry.diagnostics.warnings) warnings in open buffers")
+            }
+            if let state = entry?.git, state != .ignored {
+                Text(state.rawValue).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(state.color).help(state.label)
+            } else if item.isDirectory && entry == nil {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(NeoLinkTheme.textSecondary.opacity(0.7))
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .padding(.leading, CGFloat(entry?.depth ?? 0) * 12)
+        .contentShape(Rectangle())
+        .background(selected ? NeoLinkTheme.selection : (hoveredID == item.id ? NeoLinkTheme.rowHoverWhite : .clear))
+    }
+
+    @ViewBuilder
+    private func contextActions(_ item: LocalFileItem, entry: ExplorerRow?) -> some View {
+            if entry?.missing == true {
+                Button("Review Deletion in Source Control") { NotificationCenter.default.post(name: .neoLinkShowGit, object: tree.git?.root) }
+            } else {
+            Button(item.isDirectory ? "Browse This Folder" : "Open in Tab") { open(item) }
             if item.isDirectory {
                 Button("New File Here…") { beginCreate(in: item.url, isDirectory: false) }
                 Button("New Folder Here…") { beginCreate(in: item.url, isDirectory: true) }
@@ -596,9 +719,14 @@ struct LocalFileBrowserView: View {
                 Button("Open in Default App") { NSWorkspace.shared.open(item.url) }
             }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+            Button("Open in Integrated Terminal") { tabsController.openTerminal(in: item.isDirectory ? item.url : item.url.deletingLastPathComponent()) }
+            Button("Reveal Active File") { revealActiveFile() }.disabled(activeFileURL == nil)
+            Divider()
+            Button("Copy Path") { copyPath(item.url.path) }
+            Button("Copy Relative Path") { copyPath(ExplorerGitSnapshot.relativePath(item.url, in: WorkspaceAccess.shared.projectURL ?? viewModel.currentURL) ?? item.url.path) }
             Divider()
             Button("Copy") { viewModel.copy(item: item) }
-            if viewModel.copiedURL != nil { Button("Paste") { viewModel.paste() }.disabled(viewModel.isWorking) }
+            if viewModel.copiedURL != nil { Button("Paste Here") { viewModel.paste(into: item.isDirectory ? item.url : item.url.deletingLastPathComponent()) }.disabled(viewModel.isWorking) }
             Button("Rename…") {
                 renameText = item.url.lastPathComponent
                 renameItem = item
@@ -607,29 +735,14 @@ struct LocalFileBrowserView: View {
             Divider()
             Button("Move to Trash", role: .destructive) { viewModel.delete(item: item) }
                 .disabled(viewModel.isWorking)
-        }
-        .draggable(item.url)
+            }
     }
 
-    private func fileColor(for item: LocalFileItem) -> Color {
-        guard !item.isDirectory else { return NeoLinkTheme.textSecondary }
-        switch item.url.pathExtension.lowercased() {
-        case "html", "htm", "swift", "rs": return NeoLinkTheme.syntaxOrange
-        case "sh", "bash", "zsh", "js", "jsx": return NeoLinkTheme.syntaxYellow
-        case "py", "ts", "tsx", "md", "pdf": return NeoLinkTheme.syntaxBlue
-        case "css", "scss", "json": return NeoLinkTheme.syntaxPink
-        default: return NeoLinkTheme.textSecondary
-        }
-    }
-
-    private func fileIcon(for item: LocalFileItem) -> String {
-        switch item.url.pathExtension.lowercased() {
-        case "swift", "js", "ts", "tsx", "jsx", "py", "html", "css", "json", "sh", "rs", "go": return "chevron.left.forwardslash.chevron.right"
-        case "png", "jpg", "jpeg", "gif", "svg", "heic": return "photo"
-        case "zip", "gz", "tar": return "doc.zipper"
-        case "pdf": return "doc.richtext"
-        default: return "doc.text"
-        }
+    private func copyPath(_ path: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(path, forType: .string) }
+    private func revealActiveFile() {
+        guard let url = activeFileURL else { return }
+        if ExplorerGitSnapshot.relativePath(url, in: viewModel.currentURL) == nil { viewModel.navigate(to: url.deletingLastPathComponent()) }
+        tree.reveal(url)
     }
 
     private func open(_ item: LocalFileItem) {

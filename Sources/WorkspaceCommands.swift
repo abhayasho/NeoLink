@@ -19,6 +19,7 @@ extension Notification.Name {
     static let neoLinkToggleAgentPanel = Notification.Name("NeoLink.toggleAgentPanel")
     static let neoLinkShowGit = Notification.Name("NeoLink.showGit")
     static let neoLinkOpenREPL = Notification.Name("NeoLink.openREPL")
+    static let neoLinkFileSaved = Notification.Name("NeoLink.fileSaved")
 }
 
 /// Native menus also provide standard text editing and terminal keyboard shortcuts.

@@ -9,6 +9,8 @@ struct NeovimBufferSnapshot: Decodable {
     let filetype: String
     let servers: String
     let diagnostics: Int
+    var errors: Int? = nil
+    var warnings: Int? = nil
 }
 
 struct NeovimSnapshot: Decodable {
@@ -116,7 +118,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         // Foundation and libuv spell macOS /private/var aliases differently.
         let normalize: (String) -> String = { $0.isEmpty ? "" : URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path }
         let state = NeovimSnapshot(revision: raw.revision, buffers: raw.buffers.map {
-            NeovimBufferSnapshot(path: normalize($0.path), modified: $0.modified, filetype: $0.filetype, servers: $0.servers, diagnostics: $0.diagnostics)
+            NeovimBufferSnapshot(path: normalize($0.path), modified: $0.modified, filetype: $0.filetype, servers: $0.servers, diagnostics: $0.diagnostics, errors: $0.errors, warnings: $0.warnings)
         }, active: normalize(raw.active), mode: raw.mode, unnamedModified: raw.unnamedModified)
         if requestedPath == state.active { requestedPath = nil }
         snapshot = state

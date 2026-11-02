@@ -67,6 +67,7 @@ final class TabsController: ObservableObject {
     }
     @Published private(set) var isConfirmingClose = false
     @Published private(set) var fileRefreshRevision = 0
+    @Published private(set) var explorerDiagnostics: [String: ExplorerDiagnostics] = [:]
     @Published var showAgentPanel = true
     @Published var agentPanelTabID: UUID?
     @Published private(set) var dockedAgentIDs: Set<UUID> = []
@@ -110,6 +111,12 @@ final class TabsController: ObservableObject {
 
     func openLocalTab() {
         openTab(title: "Local", configuration: TerminalConfiguration(backend: .localShell))
+    }
+
+    func openTerminal(in directory: URL) {
+        guard !isConfirmingClose else { return }
+        let tab = TerminalTab(title: directory.lastPathComponent, configuration: TerminalConfiguration(backend: .localShell), currentDirectory: directory.path)
+        tabs.append(.terminal(tab)); selectedTabID = tab.id
     }
 
     func openREPL(_ executable: String, in directory: URL) {
@@ -220,9 +227,14 @@ final class TabsController: ObservableObject {
     }
 
     private func syncEditor(_ snapshot: NeovimSnapshot) {
+        let counts = Dictionary(snapshot.buffers.filter { !codeSession.closedPaths.contains($0.path) }.map {
+            ($0.path, ExplorerDiagnostics(errors: $0.errors ?? 0, warnings: $0.warnings ?? 0))
+        }, uniquingKeysWith: { _, latest in latest })
+        if explorerDiagnostics != counts { explorerDiagnostics = counts }
         for buffer in snapshot.buffers where !codeSession.closedPaths.contains(buffer.path) {
             let url = URL(fileURLWithPath: buffer.path).standardizedFileURL.resolvingSymlinksInPath()
             if let document = tabs.compactMap(\.document).first(where: { $0.source == .local(url) }) {
+                if document.isModified && !buffer.modified { fileRefreshRevision &+= 1 }
                 document.update(from: buffer)
             } else {
                 let document = WorkspaceDocument(url: url, browserTabID: browserTab?.id, neovim: codeSession)

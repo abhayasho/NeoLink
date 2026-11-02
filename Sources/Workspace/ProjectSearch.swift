@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ProjectMatch: Identifiable {
+struct ProjectMatch: Identifiable, Sendable {
     let path: String
     let line: Int?
     let preview: String
@@ -20,9 +20,45 @@ enum ProjectSearch {
             .map { String(decoding: $0, as: UTF8.self).replacingOccurrences(of: "^\\./", with: "", options: .regularExpression) }.sorted()
     }
     static func filter(_ files: [String], query: String) -> [ProjectMatch] {
-        let terms = query.lowercased().split(whereSeparator: \.isWhitespace)
-        return files.lazy.filter { path in terms.allSatisfy { path.lowercased().contains($0) } }.prefix(100)
-            .map { ProjectMatch(path: $0, line: nil, preview: "") }
+        let terms = query.prefix(256).lowercased().split(whereSeparator: \.isWhitespace).prefix(16).map(String.init)
+        guard !terms.isEmpty else { return files.prefix(100).map { ProjectMatch(path: $0, line: nil, preview: "") } }
+        return files.compactMap { path -> (String, Int)? in
+            guard !Task.isCancelled else { return nil }
+            let value = path.lowercased()
+            var total = 0
+            for term in terms {
+                guard let score = fuzzyScore(term, in: value) else { return nil }
+                total += score
+            }
+            return (path, total)
+        }.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 > $1.1 }.prefix(100)
+            .map { ProjectMatch(path: $0.0, line: nil, preview: "") }
+    }
+    static func filteredFiles(_ files: [String], query: String) async throws -> [ProjectMatch] {
+        let worker = Task.detached(priority: .userInitiated) { filter(files, query: query) }
+        return try await withTaskCancellationHandler {
+            let result = await worker.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { worker.cancel() }
+    }
+    /// Subsequence matching rewards contiguous runs, filename starts, and path boundaries.
+    static func fuzzyScore(_ query: String, in path: String) -> Int? {
+        let needle = Array(query), haystack = Array(path)
+        guard !needle.isEmpty else { return 0 }
+        var position = 0, previous = -2, score = 0
+        for character in needle {
+            guard let next = haystack[position...].firstIndex(of: character) else { return nil }
+            score += next == previous + 1 ? 18 : 1
+            if next == 0 || "/._- ".contains(haystack[next - 1]) { score += 12 }
+            score -= next - position
+            previous = next; position = next + 1
+        }
+        let name = (path as NSString).lastPathComponent
+        if name == query { score += 200 }
+        else if name.hasPrefix(query) { score += 100 }
+        else if name.contains(query) { score += 50 }
+        return score - min(100, haystack.count - needle.count)
     }
     static func matches(in root: URL, query: String) async throws -> [ProjectMatch] {
         guard !query.isEmpty else { return [] }
@@ -102,12 +138,23 @@ struct ProjectSearchSheet: View {
             if !searchContents {
                 loading = true
                 defer { loading = false }
-                do { files = try await ProjectSearch.files(in: root); matches = ProjectSearch.filter(files, query: query) }
+                do {
+                    files = try await ProjectSearch.files(in: root)
+                    let source = files, search = query
+                    let result = try await ProjectSearch.filteredFiles(source, query: search)
+                    try Task.checkCancellation()
+                    if query == search { matches = result }
+                }
                 catch is CancellationError {} catch { self.error = error.localizedDescription }
             }
         }
         .task(id: query) {
-            if !searchContents { matches = ProjectSearch.filter(files, query: query); return }
+            if !searchContents {
+                let source = files, search = query
+                do { matches = try await ProjectSearch.filteredFiles(source, query: search) }
+                catch is CancellationError {} catch { self.error = error.localizedDescription }
+                return
+            }
             loading = true; error = nil
             do {
                 try await Task.sleep(nanoseconds: 180_000_000)
