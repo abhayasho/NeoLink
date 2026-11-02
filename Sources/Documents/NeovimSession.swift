@@ -31,6 +31,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     private(set) var closedPaths: Set<String> = []
     var onSnapshot: ((NeovimSnapshot) -> Void)?
     var selectedPath: (() -> String?)?
+    var onEditorFocus: (() -> Void)?
     private(set) var terminal: CodeTerminalView?
     private var directory: URL?
     private var watcher: DispatchSourceFileSystemObject?
@@ -69,9 +70,10 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
             }
             let terminal = CodeTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
             terminal.session = self
+            terminal.onActivate = { [weak self] in self?.onEditorFocus?() }
             terminal.processDelegate = self
             TerminalAppearance.apply(to: terminal)
-            terminal.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+            terminal.observeTextSize()
             self.terminal = terminal
             var environment = ProcessInfo.processInfo.environment
             environment["TERM"] = "xterm-256color"
@@ -191,7 +193,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     }
 }
 
-final class CodeTerminalView: LocalProcessTerminalView {
+final class CodeTerminalView: InteractiveTerminalView {
     weak var session: NeovimSession?
     @objc func undo(_ sender: Any?) { session?.action("undo") }
     @objc func redo(_ sender: Any?) { session?.action("redo") }

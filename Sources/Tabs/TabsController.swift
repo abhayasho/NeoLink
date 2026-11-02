@@ -67,6 +67,9 @@ final class TabsController: ObservableObject {
     }
     @Published private(set) var isConfirmingClose = false
     @Published private(set) var fileRefreshRevision = 0
+    @Published var showAgentPanel = true
+    @Published var agentPanelTabID: UUID?
+    @Published private(set) var dockedAgentIDs: Set<UUID> = []
     let codeSession: NeovimSession
 
     init(useNeovim: Bool = true) {
@@ -79,6 +82,10 @@ final class TabsController: ObservableObject {
         tabs = [.terminal(initial)]
         selectedTabID = initial.id
         codeSession.onSnapshot = { [weak self] snapshot in self?.syncEditor(snapshot) }
+        codeSession.onEditorFocus = { [weak self] in
+            guard let self, !self.agentPanelTabs.isEmpty else { return }
+            self.refreshAgentEdits()
+        }
         codeSession.selectedPath = { [weak self] in
             guard let document = self?.selectedTab?.document, document.usesNeovim, case .local(let url) = document.source else { return nil }
             return url.path
@@ -102,7 +109,16 @@ final class TabsController: ObservableObject {
         openTab(title: "Local", configuration: TerminalConfiguration(backend: .localShell))
     }
 
-    func openAgent(_ agent: CodingAgent, in directory: URL) throws {
+    func openREPL(_ executable: String, in directory: URL) {
+        guard !isConfirmingClose, ["python3", "node", "swift", "irb", "lua"].contains(executable) else { return }
+        let command = CodingAgent(name: "\(executable) REPL", executable: executable,
+                                  arguments: executable == "swift" ? ["repl"] : [])
+        let tab = TerminalTab(title: "\(executable) REPL", configuration: TerminalConfiguration(backend: .localShell,
+                              startupCommand: command.launchCommand(in: directory)), currentDirectory: directory.path)
+        tabs.append(.terminal(tab)); selectedTabID = tab.id
+    }
+
+    func openAgent(_ agent: CodingAgent, in directory: URL, docked: Bool = true) throws {
         guard !isConfirmingClose else { return }
         guard agent.isValid else { throw AgentLaunchError.invalidCommand }
         let directory = directory.standardizedFileURL.resolvingSymlinksInPath()
@@ -113,7 +129,19 @@ final class TabsController: ObservableObject {
         let tab = TerminalTab(title: agent.name, configuration: configuration,
                               currentDirectory: directory.path, agentName: agent.name)
         tabs.append(.terminal(tab))
-        selectedTabID = tab.id
+        if docked {
+            dockedAgentIDs.insert(tab.id)
+            agentPanelTabID = tab.id
+            showAgentPanel = true
+        } else { selectedTabID = tab.id }
+    }
+
+    func refreshAgentEdits() {
+        fileRefreshRevision += 1
+        guard let document = selectedTab?.document else { return }
+        if document.usesNeovim, case .local(let url) = document.source {
+            Task { await codeSession.request(["method":"open", "path":url.path]) }
+        } else { Task { await document.refreshFromDiskIfUnmodified() } }
     }
 
     enum AgentLaunchError: LocalizedError {
@@ -244,11 +272,13 @@ final class TabsController: ObservableObject {
         tabs[index].terminal?.state.close()
         tabs[index].document?.close()
         tabs.remove(at: index)
-        if tabs.isEmpty {
+        dockedAgentIDs.remove(tabID)
+        if agentPanelTabID == tabID { agentPanelTabID = agentPanelTabs.last?.id }
+        if workspaceTabs.isEmpty {
             openLocalTab()
         } else if selectedTabID == tabID {
             // Keep the user's place in the strip instead of jumping to its first tab.
-            selectedTabID = tabs[min(index, tabs.count - 1)].id
+            selectedTabID = workspaceTabs[min(index, workspaceTabs.count - 1)].id
         }
         if wasAgent { fileRefreshRevision += 1 }
     }
@@ -257,6 +287,7 @@ final class TabsController: ObservableObject {
     func selectPreviousTab() { selectTab(offset: -1) }
 
     private func selectTab(offset: Int) {
+        let tabs = workspaceTabs
         guard !isConfirmingClose, !tabs.isEmpty else { return }
         let index = tabs.firstIndex(where: { $0.id == selectedTabID }) ?? 0
         selectedTabID = tabs[(index + offset + tabs.count) % tabs.count].id
@@ -267,6 +298,9 @@ final class TabsController: ObservableObject {
     }
 
     var terminalTabs: [TerminalTab] { tabs.compactMap(\.terminal) }
+    var workspaceTabs: [WorkspaceTab] { tabs.filter { !dockedAgentIDs.contains($0.id) } }
+    var workspaceTerminalTabs: [TerminalTab] { workspaceTabs.compactMap(\.terminal) }
+    var agentPanelTabs: [TerminalTab] { terminalTabs.filter { dockedAgentIDs.contains($0.id) } }
     var selectedTerminalTab: TerminalTab? { selectedTab?.terminal }
 
     // Keep the originating browser visible while a file is open beside its terminal.

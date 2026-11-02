@@ -6,11 +6,14 @@ struct ContentView: View {
     @ObservedObject private var access = WorkspaceAccess.shared
     @StateObject private var sftpConnectionPool = SftpConnectionPool()
     @StateObject private var fileBrowsers = WorkspaceFileBrowsers()
-    @AppStorage("showConnectionsSidebar") private var showConnectionsSidebar = true
+    @AppStorage("showConnectionsSidebar") private var showConnectionsSidebar = false
     @AppStorage("showFileBrowser") private var showFileBrowser = true
+    @AppStorage("showAgentPanel") private var savedAgentPanel = true
     @State private var search: SearchPresentation?
     @State private var sessionToEdit: Session?
     @State private var showAgentLauncher = false
+    @State private var gitReview: GitPresentation?
+    private struct GitPresentation: Identifiable { let id = UUID(); let root: URL }
     private struct SearchPresentation: Identifiable {
         let id = UUID()
         let root: URL
@@ -18,36 +21,35 @@ struct ContentView: View {
     }
 
     private var workspaceLayout: some View {
-        HSplitView {
-            if showConnectionsSidebar {
-                SessionSidebar(
-                    onClose: { showConnectionsSidebar = false },
-                    onNewConnection: newSSHSession,
-                    onEditConnection: { sessionToEdit = $0 }
-                )
-                    .frame(minWidth: 200, idealWidth: 230, maxWidth: 300)
-            }
-            VStack(spacing: 0) {
-                workspaceHeader
-                NeoLinkTheme.horizontalSeparator()
-                HSplitView {
-                    if showFileBrowser, let tab = tabsController.browserTab {
+        VStack(spacing: 0) {
+            workspaceHeader
+            NeoLinkTheme.horizontalSeparator()
+            HSplitView {
+                    if showConnectionsSidebar {
+                        SessionSidebar(onClose: { showConnectionsSidebar = false }, onNewConnection: newSSHSession,
+                                       onEditConnection: { sessionToEdit = $0 })
+                            .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
+                    } else if showFileBrowser, let tab = tabsController.browserTab {
                         FileBrowserPane(
                             backend: tab.configuration.backend,
                             terminalState: tab.state,
                             localVM: fileBrowsers.browser(for: tab),
                             onClose: { showFileBrowser = false }
                         )
-                            .frame(minWidth: 235, idealWidth: 280, maxWidth: 400)
+                            .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
                     }
                     TabbedTerminalView(controller: tabsController)
-                        .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity)
-                }
-                NeoLinkTheme.horizontalSeparator()
-                workspaceFooter
+                        .frame(minWidth: 380, idealWidth: 760, maxWidth: .infinity, maxHeight: .infinity)
+                        .layoutPriority(1)
+                    if tabsController.showAgentPanel {
+                        AgentPanelView(controller: tabsController, launch: { showAgentLauncher = true })
+                            .frame(minWidth: 240, idealWidth: 300, maxWidth: 480)
+                    }
             }
-            .background(NeoLinkTheme.background)
+            NeoLinkTheme.horizontalSeparator()
+            workspaceFooter
         }
+        .background(NeoLinkTheme.background)
     }
 
     private var presentedWorkspace: some View {
@@ -87,6 +89,7 @@ struct ContentView: View {
         .sheet(isPresented: $showAgentLauncher) {
             AgentLauncherView(controller: tabsController, directory: access.projectURL)
         }
+        .sheet(item: $gitReview) { value in GitChangesView(directory: value.root, open: tabsController.openFile) }
         .alert("Project access", isPresented: Binding(get: { access.error != nil }, set: { if !$0 { access.error = nil } })) {
             Button("OK") { access.error = nil }
         } message: { Text(access.error ?? "") }
@@ -94,7 +97,24 @@ struct ContentView: View {
 
     private var workspaceWithTabCommands: some View {
         presentedWorkspace
+        .onChange(of: tabsController.showAgentPanel) { savedAgentPanel = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: .neoLinkToggleAgentPanel)) { _ in tabsController.showAgentPanel.toggle() }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkOpenAgent)) { _ in showAgentLauncher = true }
+        .onReceive(NotificationCenter.default.publisher(for: .neoLinkShowGit)) { _ in showGit() }
+        .onReceive(NotificationCenter.default.publisher(for: .neoLinkOpenREPL)) { notification in
+            if let executable = notification.object as? String {
+                tabsController.openREPL(executable, in: access.projectURL ?? FileManager.default.homeDirectoryForCurrentUser)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .neoLinkTextSize)) { notification in
+            let delta = notification.object as? Int ?? 0
+            if let pdf = tabsController.selectedTab?.document?.pdfView, !(NSApp.keyWindow?.firstResponder is InteractiveTerminalView) {
+                if delta == 0 { pdf.autoScales = true }
+                else if delta > 0 { pdf.zoomIn(nil) }
+                else { pdf.zoomOut(nil) }
+            } else if delta == 0 { TextSizePreferences.shared.reset() }
+            else { TextSizePreferences.shared.adjust(by: CGFloat(delta)) }
+        }
         .onChange(of: tabsController.fileRefreshRevision) { _ in
             if let tab = tabsController.browserTab, tab.configuration.backend == .localShell {
                 fileBrowsers.browser(for: tab).load()
@@ -108,7 +128,8 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkNewSSHSession)) { _ in newSSHSession() }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkCloseTab)) { _ in
-            if let id = tabsController.selectedTabID { tabsController.requestCloseTab(id) }
+            let focusedAgent = tabsController.agentPanelTabs.first { $0.state.containsResponder(NSApp.keyWindow?.firstResponder) }
+            if let id = focusedAgent?.id ?? tabsController.selectedTabID { tabsController.requestCloseTab(id) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkSaveFile)) { _ in
             if let document = tabsController.selectedTab?.document { Task { await document.save() } }
@@ -129,6 +150,7 @@ struct ContentView: View {
             if let url, let tab = tabsController.browserTab { fileBrowsers.browser(for: tab).navigate(to: url) }
         }
         .onAppear {
+            tabsController.showAgentPanel = savedAgentPanel
             if let url = access.projectURL, let tab = tabsController.browserTab { fileBrowsers.browser(for: tab).navigate(to: url) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkOpenFile)) { _ in
@@ -143,7 +165,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkNextTab)) { _ in selectTab(offset: 1) }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkPreviousTab)) { _ in selectTab(offset: -1) }
-        .onReceive(NotificationCenter.default.publisher(for: .neoLinkToggleFiles)) { _ in showFileBrowser.toggle() }
+        .onReceive(NotificationCenter.default.publisher(for: .neoLinkToggleFiles)) { _ in toggleFiles() }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkToggleSidebar)) { _ in
             showConnectionsSidebar.toggle()
         }
@@ -159,12 +181,8 @@ struct ContentView: View {
             } label: { Image(systemName: "folder.badge.gearshape").foregroundStyle(NeoLinkTheme.accent) }
             .menuStyle(.borderlessButton).fixedSize().help("Open project and remember folder access")
             Text(access.projectURL?.lastPathComponent ?? "Workspace")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(NeoLinkTheme.textPrimary)
-            Text("/  \(tabsController.selectedTab?.title ?? "Terminal")")
-                .font(.system(size: 12))
-                .foregroundStyle(NeoLinkTheme.textSecondary)
-                .lineLimit(1)
             Spacer()
             Button { showAgentLauncher = true } label: {
                 Label("Agent", systemImage: "sparkles")
@@ -176,6 +194,8 @@ struct ContentView: View {
                 .buttonStyle(WorkspaceIconButtonStyle()).help("Quick Open (⌘P)").accessibilityLabel("Quick Open")
             Button { showSearch(contents: true) } label: { Image(systemName: "magnifyingglass") }
                 .buttonStyle(WorkspaceIconButtonStyle()).help("Find in Files (⇧⌘F)").accessibilityLabel("Find in Files")
+            Button(action: showGit) { Image(systemName: "arrow.triangle.branch") }
+                .buttonStyle(WorkspaceIconButtonStyle()).help("Source Control (⇧⌘G)").accessibilityLabel("Source Control")
             Button { showConnectionsSidebar.toggle() } label: {
                 Image(systemName: "sidebar.left")
                     .foregroundStyle(showConnectionsSidebar ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
@@ -183,35 +203,27 @@ struct ContentView: View {
             .buttonStyle(WorkspaceIconButtonStyle())
             .help("Toggle connections sidebar (⌃⌘S)")
             .accessibilityLabel(showConnectionsSidebar ? "Hide connections sidebar" : "Show connections sidebar")
-            Button { showFileBrowser.toggle() } label: {
+            Button { toggleFiles() } label: {
                 Image(systemName: "folder")
                     .foregroundStyle(showFileBrowser ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
             }
             .buttonStyle(WorkspaceIconButtonStyle())
             .help("Toggle file browser (⇧⌘E)")
             .accessibilityLabel(showFileBrowser ? "Hide file browser" : "Show file browser")
-            Button { tabsController.openLocalTab() } label: {
-                Label("New terminal", systemImage: "plus")
-                    .font(.system(size: 11, weight: .medium))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(NeoLinkTheme.elevated)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-            }
-            .buttonStyle(.plain)
-            .help("New local terminal (⌘T)")
+            Button { tabsController.showAgentPanel.toggle() } label: { Image(systemName: "sidebar.right") }
+                .buttonStyle(WorkspaceIconButtonStyle()).help("Toggle agent panel (⌃⌘B)")
+                .accessibilityLabel("Toggle agent panel")
         }
-        .padding(.horizontal, 16)
-        .frame(height: 48)
+        .padding(.horizontal, 10)
+        .frame(height: 34)
         .background(WindowDragArea())
         .background(NeoLinkTheme.sidebarBackground)
     }
 
     private var workspaceFooter: some View {
         HStack(spacing: 7) {
-            Image(systemName: "command")
-                .foregroundStyle(NeoLinkTheme.accent)
-            Text(tabsController.selectedTab?.document == nil ? "Ready for your next command" : "Files, right in your workspace")
+            Image(systemName: tabsController.selectedTab?.document == nil ? "terminal" : "doc.text")
+            Text(tabsController.selectedTab?.document?.title ?? "NeoLink")
             Spacer()
             Text("\(tabsController.tabs.count) \(tabsController.tabs.count == 1 ? "tab" : "tabs")")
             Rectangle().fill(NeoLinkTheme.separator).frame(width: 1, height: 10)
@@ -220,13 +232,23 @@ struct ContentView: View {
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(NeoLinkTheme.textSecondary)
         .padding(.horizontal, 14)
-        .frame(height: 28)
+        .frame(height: 22)
         .background(NeoLinkTheme.sidebarBackground)
     }
 
     private func selectTab(offset: Int) {
         if offset > 0 { tabsController.selectNextTab() }
         else { tabsController.selectPreviousTab() }
+    }
+
+    private func toggleFiles() {
+        if showConnectionsSidebar { showConnectionsSidebar = false; showFileBrowser = true }
+        else { showFileBrowser.toggle() }
+    }
+
+    private func showGit() {
+        if let root = access.projectURL { gitReview = GitPresentation(root: root) }
+        else { access.chooseFolder { root in gitReview = GitPresentation(root: root) } }
     }
 
     private func newSSHSession() {

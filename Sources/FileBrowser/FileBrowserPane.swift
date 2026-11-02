@@ -21,10 +21,8 @@ struct FileBrowserPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: remoteEndpoint == nil ? "folder" : "externaldrive.connected.to.line.below")
-                    .foregroundColor(NeoLinkTheme.accent)
-                Text("Files")
-                    .font(.system(size: 13, weight: .semibold))
+                Text(remoteEndpoint == nil ? "EXPLORER" : "REMOTE FILES")
+                    .font(.system(size: 10, weight: .medium)).tracking(0.8)
                     .foregroundColor(NeoLinkTheme.textPrimary)
                 Spacer(minLength: 8)
                 Text(remoteEndpoint == nil ? "LOCAL" : "SFTP")
@@ -40,7 +38,7 @@ struct FileBrowserPane: View {
                     .accessibilityLabel("Close file browser")
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .frame(height: 34)
 
             NeoLinkTheme.horizontalSeparator()
 
@@ -58,11 +56,9 @@ struct FileBrowserPane: View {
                         }
                 }
             }
-            .padding(8)
+            .padding(.horizontal, 8).padding(.vertical, 4)
         }
-        .background(NeoLinkTheme.panelBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(NeoLinkTheme.panelBorder, lineWidth: 1))
+        .background(NeoLinkTheme.sidebarBackground)
     }
 
     private func syncLocalToTerminalDirectory() {

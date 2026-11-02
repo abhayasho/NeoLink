@@ -34,7 +34,7 @@ final class CodingAgentTests: XCTestCase {
         let root = try directory()
         let controller = TabsController(useNeovim: false)
         let local = try XCTUnwrap(controller.selectedTerminalTab)
-        try controller.openAgent(.claude(continueSession: true), in: root)
+        try controller.openAgent(.claude(continueSession: true), in: root, docked: false)
         let agent = try XCTUnwrap(controller.selectedTerminalTab)
         XCTAssertNotEqual(agent.id, local.id)
         XCTAssertEqual(agent.agentName, "Claude Code")

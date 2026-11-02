@@ -12,8 +12,8 @@ enum TerminalAppearance {
 
         // Keep ANSI meanings recognizable without bright primary colors.
         let palette: [UInt32] = [
-            0x242424, 0xC48D8D, 0xA4B29B, 0xC6B28E,
-            0x93A9BC, 0xB5A0B8, 0x96B3AF, 0xC8C8C8,
+            0x242424, 0xC48D8D, 0xA4B29B, 0xD6D6A4,
+            0xA8CCDF, 0xD6B3D2, 0x96B3AF, 0xC8C8C8,
             0x777777, 0xD5A3A3, 0xB6C2AD, 0xD7C4A2,
             0xA9BDCE, 0xC7B4CA, 0xABC6C2, 0xE5E5E5
         ]

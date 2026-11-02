@@ -362,7 +362,7 @@ struct LocalFileBrowserView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 5) {
             navigationBar
             searchBar
 
@@ -403,12 +403,6 @@ struct LocalFileBrowserView: View {
 
     private var navigationBar: some View {
         HStack(spacing: 8) {
-            Button { viewModel.goUp() } label: {
-                Image(systemName: "arrow.up").frame(width: 22, height: 24)
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.currentURL.path == "/")
-            .help("Open parent folder")
             Menu {
                 Button("New File…") { beginCreate(in: viewModel.currentURL, isDirectory: false) }
                 Button("New Folder…") { beginCreate(in: viewModel.currentURL, isDirectory: true) }
@@ -417,6 +411,8 @@ struct LocalFileBrowserView: View {
             .help("Create file or folder")
             .disabled(viewModel.isWorking)
             Menu {
+                Button("Parent Folder", systemImage: "arrow.up") { viewModel.goUp() }
+                    .disabled(viewModel.currentURL.path == "/")
                 Button("Home", systemImage: "house") {
                     viewModel.navigate(to: FileManager.default.homeDirectoryForCurrentUser)
                 }
@@ -428,7 +424,6 @@ struct LocalFileBrowserView: View {
                 Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: viewModel.currentURL.path) }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "folder.fill").foregroundColor(NeoLinkTheme.accent)
                     Text(viewModel.currentURL.path == "/" ? "Macintosh HD" : viewModel.currentURL.lastPathComponent)
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
@@ -437,7 +432,7 @@ struct LocalFileBrowserView: View {
             }
             .menuStyle(.borderlessButton)
             .help(viewModel.currentURL.path)
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Button { viewModel.load() } label: {
                 Image(systemName: "arrow.clockwise").frame(width: 22, height: 24)
             }
@@ -474,15 +469,22 @@ struct LocalFileBrowserView: View {
             }
         }
         .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .background(NeoLinkTheme.editorBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(NeoLinkTheme.panelBorder, lineWidth: 1))
+        .padding(.vertical, 5)
+        .background(NeoLinkTheme.editorBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(NeoLinkTheme.panelBorder, lineWidth: 1))
     }
 
     private var fileList: some View {
-        ScrollView {
+        // Resolve only the matching filename, not every entry in a large directory.
+        let selectedURL: URL? = {
+            guard case .local(let url) = tabsController.selectedTab?.document?.source else { return nil }
+            return viewModel.items.first {
+                $0.url.lastPathComponent == url.lastPathComponent && $0.url.resolvingSymlinksInPath() == url
+            }?.id
+        }()
+        return ScrollView {
             LazyVStack(spacing: 2) {
-                ForEach(viewModel.items) { item in row(for: item) }
+                ForEach(viewModel.items) { item in row(for: item, selected: item.id == selectedURL) }
             }
             .padding(.vertical, 2)
         }
@@ -557,12 +559,12 @@ struct LocalFileBrowserView: View {
         return urls
     }
 
-    private func row(for item: LocalFileItem) -> some View {
+    private func row(for item: LocalFileItem, selected: Bool) -> some View {
         Button { open(item) } label: {
             HStack(spacing: 9) {
                 Image(systemName: item.isDirectory ? "folder.fill" : fileIcon(for: item))
-                    .foregroundColor(item.isDirectory ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
-                    .font(.system(size: 14))
+                    .foregroundColor(fileColor(for: item))
+                    .font(.system(size: 12))
                     .frame(width: 18)
                 Text(item.url.lastPathComponent)
                     .font(.system(size: 12))
@@ -574,16 +576,12 @@ struct LocalFileBrowserView: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundColor(NeoLinkTheme.textSecondary.opacity(0.7))
-                } else if let size = item.fileSize {
-                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(NeoLinkTheme.textSecondary)
                 }
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 4)
             .padding(.horizontal, 8)
             .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: 7).fill(hoveredID == item.id ? NeoLinkTheme.rowHoverWhite : .clear))
+            .background(selected ? NeoLinkTheme.selection : (hoveredID == item.id ? NeoLinkTheme.rowHoverWhite : .clear))
         }
         .buttonStyle(.plain)
         .help(item.url.path)
@@ -611,6 +609,17 @@ struct LocalFileBrowserView: View {
                 .disabled(viewModel.isWorking)
         }
         .draggable(item.url)
+    }
+
+    private func fileColor(for item: LocalFileItem) -> Color {
+        guard !item.isDirectory else { return NeoLinkTheme.textSecondary }
+        switch item.url.pathExtension.lowercased() {
+        case "html", "htm", "swift", "rs": return NeoLinkTheme.syntaxOrange
+        case "sh", "bash", "zsh", "js", "jsx": return NeoLinkTheme.syntaxYellow
+        case "py", "ts", "tsx", "md", "pdf": return NeoLinkTheme.syntaxBlue
+        case "css", "scss", "json": return NeoLinkTheme.syntaxPink
+        default: return NeoLinkTheme.textSecondary
+        }
     }
 
     private func fileIcon(for item: LocalFileItem) -> String {

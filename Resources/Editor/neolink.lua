@@ -5,10 +5,16 @@ vim.o.termguicolors = true
 vim.o.background = 'dark'
 vim.o.number = true
 vim.o.mouse = 'a'
+vim.o.mousescroll = 'ver:1,hor:1'
 vim.o.hidden = true
 vim.o.showmode = false
 vim.o.showtabline = 0
-vim.o.laststatus = 2
+vim.o.laststatus = 0
+vim.o.cmdheight = 0
+vim.o.fillchars = 'eob: '
+vim.o.foldcolumn = '1'
+vim.o.foldlevel = 99
+vim.o.foldmethod = 'indent'
 vim.o.signcolumn = 'yes:1'
 vim.o.updatetime = 300
 vim.o.timeoutlen = 400
@@ -38,22 +44,23 @@ vim.g.loaded_node_provider = 0
 vim.cmd('filetype plugin indent on')
 vim.cmd('syntax enable')
 for group, colors in pairs({
-  Normal={fg='#d8d8d8',bg='#171717'}, NormalNC={fg='#d8d8d8',bg='#171717'},
-  NormalFloat={fg='#d8d8d8',bg='#202020'}, FloatBorder={fg='#484848',bg='#202020'},
-  LineNr={fg='#787878',bg='#171717'}, CursorLineNr={fg='#c4c4c4',bold=true},
-  CursorLine={bg='#1e1e1e'}, Cursor={fg='#171717',bg='#d8d8d8'},
-  SignColumn={bg='#171717'}, EndOfBuffer={fg='#383838',bg='#171717'},
+  Normal={fg='#d8d8d8',bg='#181818'}, NormalNC={fg='#d8d8d8',bg='#181818'},
+  NormalFloat={fg='#d8d8d8',bg='#1f1f1f'}, FloatBorder={fg='#484848',bg='#202020'},
+  LineNr={fg='#787878',bg='#181818'}, CursorLineNr={fg='#c4c4c4',bold=true},
+  CursorLine={bg='#1e1e1e'}, Cursor={fg='#181818',bg='#d8d8d8'},
+  FoldColumn={fg='#686868',bg='#181818'}, Folded={fg='#969696',bg='#232323'},
+  SignColumn={bg='#181818'}, EndOfBuffer={fg='#383838',bg='#181818'},
   StatusLine={fg='#a0a0a0',bg='#1c1c1c'}, StatusLineNC={fg='#787878',bg='#1c1c1c'},
-  WinSeparator={fg='#303030',bg='#171717'}, VertSplit={fg='#303030',bg='#171717'},
-  Visual={bg='#343434'}, Comment={fg='#858585',italic=true}, String={fg='#b6bfa7'},
-  Statement={fg='#b1bfc4'}, Type={fg='#c4b49c'}, Function={fg='#d2d2d2'},
-  Constant={fg='#c4ad96'}, Identifier={fg='#d8d8d8'}, Special={fg='#bbaabc'},
-  PreProc={fg='#b1bfc4'}, Delimiter={fg='#b0b0b0'}, Operator={fg='#c4c4c4'},
+  WinSeparator={fg='#303030',bg='#181818'}, VertSplit={fg='#303030',bg='#181818'},
+  Visual={bg='#343434'}, Comment={fg='#858585',italic=true}, String={fg='#d6b3d2'},
+  Statement={fg='#a8ccdf'}, Type={fg='#a8ccdf'}, Function={fg='#d6d6a4'},
+  Constant={fg='#d6d6a4'}, Identifier={fg='#d8d8d8'}, Special={fg='#d6b3d2'},
+  PreProc={fg='#a8ccdf'}, Delimiter={fg='#b0b0b0'}, Operator={fg='#c4c4c4'},
   NonText={fg='#646464'}, Whitespace={fg='#383838'}, SpecialKey={fg='#787878'},
   Pmenu={fg='#d8d8d8',bg='#242424'}, PmenuSel={fg='#eeeeee',bg='#3b3b3b'},
   PmenuSbar={bg='#242424'}, PmenuThumb={bg='#535353'},
-  Search={fg='#e2dac6',bg='#494332'}, IncSearch={fg='#171717',bg='#c6b28e'},
-  CurSearch={fg='#171717',bg='#c6b28e'}, MatchParen={bg='#3b3b3b',bold=true},
+  Search={fg='#e2dac6',bg='#494332'}, IncSearch={fg='#181818',bg='#c6b28e'},
+  CurSearch={fg='#181818',bg='#c6b28e'}, MatchParen={bg='#3b3b3b',bold=true},
   DiagnosticError={fg='#cc9595'}, DiagnosticWarn={fg='#c6b28e'},
   DiagnosticInfo={fg='#a4b8c5'}, DiagnosticHint={fg='#a0a0a0'},
   DiagnosticUnderlineError={sp='#cc9595',undercurl=true},
@@ -65,6 +72,16 @@ for group, colors in pairs({
   Directory={fg='#c4c4c4'}, MoreMsg={fg='#a4b29b'}, Question={fg='#c4c4c4'},
   DiffAdd={bg='#283128'}, DiffDelete={fg='#cc9595',bg='#382626'},
   DiffChange={bg='#2d3033'}, DiffText={bg='#41454a'},
+  htmlTag={fg='#a8ccdf'}, htmlEndTag={fg='#a8ccdf'}, htmlTagName={fg='#a8ccdf'},
+  htmlArg={fg='#c7b7d7'}, htmlString={fg='#d6b3d2'},
+  cssTagName={fg='#a8d5c2'}, cssProp={fg='#a8ccdf'},
+  ['@tag']={fg='#a8ccdf'}, ['@tag.builtin']={fg='#a8ccdf'},
+  ['@tag.delimiter']={fg='#a8ccdf'}, ['@tag.attribute']={fg='#c7b7d7'},
+  ['@string']={fg='#d6b3d2'}, ['@string.special.url']={fg='#d6b3d2',underline=true},
+  ['@keyword']={fg='#a8ccdf'}, ['@type']={fg='#a8ccdf'},
+  ['@function']={fg='#d6d6a4'}, ['@function.builtin']={fg='#d6d6a4'},
+  ['@variable']={fg='#d8d8d8'}, ['@variable.parameter']={fg='#d8d8d8'},
+  ['@comment']={fg='#858585',italic=true},
 }) do vim.api.nvim_set_hl(0,group,colors) end
 
 local api, uv = vim.api, vim.uv
@@ -164,6 +181,10 @@ function M.action(action)
     rename=vim.lsp.buf.rename,codeAction=vim.lsp.buf.code_action,
     format=function() vim.lsp.buf.format({async=true,timeout_ms=2000}) end,
     diagnostics=function() vim.diagnostic.setloclist({open=true}) end,
+    fold=function() vim.cmd('normal! za') end,
+    foldAll=function() vim.cmd('normal! zM') end,
+    unfoldAll=function() vim.cmd('normal! zR') end,
+    inlayHints=function() vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({bufnr=0}), {bufnr=0}) end,
     undo=function() vim.cmd('undo'); vim.cmd('startinsert') end,
     redo=function() vim.cmd('redo'); vim.cmd('startinsert') end,
     selectAll=function() vim.cmd('stopinsert'); vim.cmd('normal! ggVG') end,
@@ -195,14 +216,24 @@ end
 api.nvim_create_autocmd({'BufEnter','BufModifiedSet','BufWritePost','ModeChanged','LspAttach','LspDetach','DiagnosticChanged'}, {callback=M.publish})
 api.nvim_create_autocmd('BufReadPost',{callback=function(ev) M.baseline[ev.buf]=signature(api.nvim_buf_get_name(ev.buf)) end})
 api.nvim_create_autocmd('BufWritePost',{callback=function(ev) M.baseline[ev.buf]=signature(api.nvim_buf_get_name(ev.buf)) end})
+local function apply_folding(buf)
+  -- Folding options belong to the window, so restore them on every buffer switch.
+  vim.wo.foldmethod=vim.b[buf].neolink_treesitter and 'expr' or 'indent'
+  vim.wo.foldexpr=vim.b[buf].neolink_treesitter and 'v:lua.vim.treesitter.foldexpr()' or '0'
+end
+api.nvim_create_autocmd('BufEnter',{callback=function(ev) apply_folding(ev.buf) end})
 api.nvim_create_autocmd('FileType',{callback=function(ev)
+  vim.b[ev.buf].neolink_treesitter=false
   local path=api.nvim_buf_get_name(ev.buf)
   local size=(uv.fs_stat(path) or {}).size or 0
   if size > 2*1024*1024 then
     vim.bo[ev.buf].syntax='OFF'; vim.bo[ev.buf].undolevels=100; return
   end
   local lang=vim.treesitter.language.get_lang(vim.bo[ev.buf].filetype)
-  if lang then pcall(vim.treesitter.start,ev.buf,lang) end
+  if lang and pcall(vim.treesitter.start,ev.buf,lang) then
+    vim.b[ev.buf].neolink_treesitter=true
+  end
+  if ev.buf==api.nvim_get_current_buf() then apply_folding(ev.buf) end
 end})
 vim.diagnostic.config({virtual_text=false,signs=true,underline=true,update_in_insert=false,severity_sort=true})
 api.nvim_create_autocmd('LspAttach',{callback=function(ev)

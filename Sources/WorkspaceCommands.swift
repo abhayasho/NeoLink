@@ -15,6 +15,10 @@ extension Notification.Name {
     static let neoLinkToggleSidebar = Notification.Name("NeoLink.toggleSidebar")
     static let neoLinkNewSSHSession = Notification.Name("NeoLink.newSSHSession")
     static let neoLinkOpenAgent = Notification.Name("NeoLink.openAgent")
+    static let neoLinkTextSize = Notification.Name("NeoLink.textSize")
+    static let neoLinkToggleAgentPanel = Notification.Name("NeoLink.toggleAgentPanel")
+    static let neoLinkShowGit = Notification.Name("NeoLink.showGit")
+    static let neoLinkOpenREPL = Notification.Name("NeoLink.openREPL")
 }
 
 /// Native menus also provide standard text editing and terminal keyboard shortcuts.
@@ -61,17 +65,38 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         attach(edit, to: main)
 
         let code = NSMenu(title: "Code")
-        for (title, action) in [("Go to Definition", "definition"), ("Find References", "references"), ("Show Documentation", "hover"), ("Rename Symbol…", "rename"), ("Code Actions…", "codeAction"), ("Format Document", "format"), ("Show Diagnostics", "diagnostics")] {
+        for (title, action) in [("Go to Definition", "definition"), ("Find References", "references"), ("Show Documentation", "hover"), ("Rename Symbol…", "rename"), ("Code Actions…", "codeAction"), ("Format Document", "format"), ("Show Diagnostics", "diagnostics"), ("Toggle Fold", "fold"), ("Fold All", "foldAll"), ("Unfold All", "unfoldAll"), ("Toggle Inlay Hints", "inlayHints")] {
             let item = NSMenuItem(title: title, action: #selector(codeAction(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = action
             code.addItem(item)
         }
+        code.addItem(.separator())
+        let repl = NSMenu(title: "Open REPL")
+        for (title, executable) in [("Python", "python3"), ("JavaScript", "node"), ("Swift", "swift"), ("Ruby", "irb"), ("Lua", "lua")] {
+            let item = NSMenuItem(title: title, action: #selector(openREPL(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = executable
+            repl.addItem(item)
+        }
+        attach(repl, to: code)
         attach(code, to: main)
 
         let view = NSMenu(title: "View")
+        for (title, key, delta) in [("Increase Text Size", "+", 1), ("Decrease Text Size", "-", -1), ("Reset Text Size", "0", 0)] {
+            let item = NSMenuItem(title: title, action: #selector(changeTextSize(_:)), keyEquivalent: key)
+            item.target = self
+            item.representedObject = delta
+            view.addItem(item)
+        }
+        let equalZoom = NSMenuItem(title: "Increase Text Size", action: #selector(changeTextSize(_:)), keyEquivalent: "=")
+        equalZoom.target = self; equalZoom.representedObject = 1
+        equalZoom.isHidden = true; equalZoom.allowsKeyEquivalentWhenHidden = true
+        view.addItem(equalZoom)
+        view.addItem(.separator())
         command("Toggle Connections Sidebar", name: .neoLinkToggleSidebar, key: "s", modifiers: [.command, .control], to: view)
         command("Toggle File Browser", name: .neoLinkToggleFiles, key: "e", modifiers: [.command, .shift], to: view)
+        command("Toggle Agent Panel", name: .neoLinkToggleAgentPanel, key: "b", modifiers: [.command, .control], to: view)
+        command("Source Control…", name: .neoLinkShowGit, key: "g", modifiers: [.command, .shift], to: view)
         view.addItem(.separator())
         command("Next Tab", name: .neoLinkNextTab, key: "]", modifiers: [.command, .shift], to: view)
         command("Previous Tab", name: .neoLinkPreviousTab, key: "[", modifiers: [.command, .shift], to: view)
@@ -118,6 +143,13 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
 
     @objc private func codeAction(_ sender: NSMenuItem) {
         NotificationCenter.default.post(name: .neoLinkCodeAction, object: sender.representedObject)
+    }
+
+    @objc private func changeTextSize(_ sender: NSMenuItem) {
+        NotificationCenter.default.post(name: .neoLinkTextSize, object: sender.representedObject)
+    }
+    @objc private func openREPL(_ sender: NSMenuItem) {
+        NotificationCenter.default.post(name: .neoLinkOpenREPL, object: sender.representedObject)
     }
 
     @objc private func selectAll(_ sender: NSMenuItem) {

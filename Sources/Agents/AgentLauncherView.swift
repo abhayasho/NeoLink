@@ -6,6 +6,7 @@ struct AgentLauncherView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var custom = false
     @State private var continueSession = false
+    @State private var docked = true
     @AppStorage("customAgentName") private var customName = "My agent"
     @AppStorage("customAgentExecutable") private var customExecutable = ""
     @State private var arguments = ""
@@ -44,6 +45,7 @@ struct AgentLauncherView: View {
                 Link("Claude Code setup guide", destination: URL(string: "https://code.claude.com/docs/en/quickstart")!)
             }
             NeoLinkTheme.horizontalSeparator()
+            Toggle("Open alongside the editor", isOn: $docked)
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Project folder").font(.caption).foregroundStyle(NeoLinkTheme.textSecondary)
@@ -61,10 +63,10 @@ struct AgentLauncherView: View {
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Launch in Tab") {
+                Button(docked ? "Launch in Panel" : "Launch in Tab") {
                     guard let directory else { return }
                     do {
-                        try controller.openAgent(agent, in: directory)
+                        try controller.openAgent(agent, in: directory, docked: docked)
                         dismiss()
                     } catch { self.error = error.localizedDescription }
                 }

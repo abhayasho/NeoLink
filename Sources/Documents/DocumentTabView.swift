@@ -17,6 +17,7 @@ struct DocumentTabView: View {
                 if document.loaded?.isPDF == true {
                     pdfControls
                 } else if document.loaded != nil {
+                    TextSizeControl()
                     if !document.isReadOnly {
                         Button(document.isSaving ? "Saving…" : "Save") { Task { await document.save() } }
                             .disabled(!document.isModified || document.isSaving)
@@ -28,7 +29,7 @@ struct DocumentTabView: View {
             .buttonStyle(.borderless)
             .font(.system(size: 11))
             .padding(.horizontal, 14)
-            .frame(height: 38)
+            .frame(height: 30)
             .background(NeoLinkTheme.panelBackground)
             NeoLinkTheme.horizontalSeparator()
 
@@ -113,6 +114,7 @@ struct DocumentTabView: View {
 
 private struct DocumentNativeView: NSViewRepresentable {
     @ObservedObject var document: WorkspaceDocument
+    @ObservedObject private var textSize = TextSizePreferences.shared
     @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> DocumentHostView {
@@ -122,6 +124,13 @@ private struct DocumentNativeView: NSViewRepresentable {
     func updateNSView(_ nsView: DocumentHostView, context: Context) {
         if let editor = (nsView.content as? NSScrollView)?.documentView as? NSTextView {
             editor.isEditable = isEnabled && !document.isReadOnly && !document.isSaving
+            if editor.font?.pointSize != textSize.pointSize {
+                editor.font = .monospacedSystemFont(ofSize: textSize.pointSize, weight: .regular)
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.tabStops = []
+                paragraph.defaultTabInterval = ("    " as NSString).size(withAttributes: [.font: editor.font!]).width
+                editor.defaultParagraphStyle = paragraph
+            }
         }
     }
 }

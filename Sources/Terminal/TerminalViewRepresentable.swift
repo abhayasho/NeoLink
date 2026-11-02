@@ -36,6 +36,11 @@ final class TerminalState: NSObject, ObservableObject, LocalProcessTerminalViewD
     private(set) var isClosed = false
     var hasStarted: Bool { terminalView != nil }
 
+    func containsResponder(_ responder: NSResponder?) -> Bool {
+        guard let terminalView, let view = responder as? NSView else { return false }
+        return view === terminalView || view.isDescendant(of: terminalView)
+    }
+
     init(currentDirectory: String? = nil) {
         self.currentDirectory = currentDirectory
         super.init()
@@ -44,10 +49,10 @@ final class TerminalState: NSObject, ObservableObject, LocalProcessTerminalViewD
     func view(for configuration: TerminalConfiguration, initialSize: NSSize) -> LocalProcessTerminalView {
         if let terminalView { return terminalView }
 
-        let view = LocalProcessTerminalView(frame: NSRect(origin: .zero, size: initialSize))
+        let view = InteractiveTerminalView(frame: NSRect(origin: .zero, size: initialSize))
         view.processDelegate = self
         TerminalAppearance.apply(to: view)
-        view.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        view.observeTextSize()
         terminalView = view
 
         guard !isClosed else { return view }

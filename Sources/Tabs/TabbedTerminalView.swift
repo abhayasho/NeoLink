@@ -16,7 +16,7 @@ struct TabbedTerminalView: View {
 
             ZStack {
                 VStack(spacing: 0) {
-                    TerminalViewRepresentable(tabs: controller.terminalTabs, selectedTabID: controller.selectedTerminalTab?.id)
+                    TerminalViewRepresentable(tabs: controller.workspaceTerminalTabs, selectedTabID: controller.selectedTerminalTab?.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.leading, 8)
                         .padding(.top, 8)
@@ -46,8 +46,8 @@ struct TabbedTerminalView: View {
         HStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(controller.tabs) { tab in
+                    HStack(spacing: 0) {
+                        ForEach(controller.workspaceTabs) { tab in
                             Group {
                                 if let document = tab.document {
                                     DocumentTabButton(document: document, controller: controller)
@@ -65,8 +65,6 @@ struct TabbedTerminalView: View {
                             }.id(tab.id)
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.top, 6)
                 }
                 .onChange(of: controller.selectedTabID) { id in
                     guard let id else { return }
@@ -86,7 +84,7 @@ struct TabbedTerminalView: View {
             .accessibilityLabel("New local terminal")
             .padding(.horizontal, 5)
         }
-        .frame(height: 42)
+        .frame(height: 34)
         .background(NeoLinkTheme.panelBackground)
     }
 }
@@ -148,10 +146,10 @@ private struct WorkspaceTabButton: View {
             .accessibilityLabel("Close \(title) tab")
             .padding(.trailing, 3)
         }
-        .font(.system(size: 12, weight: .medium))
-        .frame(width: 170, height: 36)
+        .font(.system(size: 12))
+        .frame(width: 156, height: 34)
         .background(isSelected ? NeoLinkTheme.editorBackground : (isHovered ? NeoLinkTheme.rowHover : Color.clear))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay(alignment: .trailing) { NeoLinkTheme.verticalSeparator() }
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(isSelected ? NeoLinkTheme.accent : Color.clear)

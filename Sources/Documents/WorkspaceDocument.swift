@@ -271,7 +271,7 @@ final class WorkspaceDocument: NSObject, ObservableObject, Identifiable, NSTextV
         view.isContinuousSpellCheckingEnabled = false
         view.isGrammarCheckingEnabled = false
         view.isAutomaticLinkDetectionEnabled = false
-        view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        view.font = .monospacedSystemFont(ofSize: TextSizePreferences.shared.pointSize, weight: .regular)
         view.textColor = NSColor(NeoLinkTheme.textPrimary)
         view.backgroundColor = NSColor(NeoLinkTheme.editorBackground)
         view.insertionPointColor = NSColor(NeoLinkTheme.accent)

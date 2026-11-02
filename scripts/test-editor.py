@@ -67,6 +67,15 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
             assert not dispatch(method='save', path=str(agent_file))['ok'], 'Dirty editor overwrote agent edits'
             assert 'conflicting agent edit' in agent_file.read_text()
             print('PASS: clean buffers reload agent edits; unsaved buffers and external edits are preserved')
+            scroll_file = root / 'scrolling.py'
+            scroll_file.write_text(''.join(f'print({i})\n' for i in range(1, 401)))
+            assert dispatch(method='open', path=str(scroll_file))['ok']
+            assert lua('vim.o.mousescroll') == 'ver:1,hor:1'
+            before_scroll = int(lua('vim.fn.line("w0")'))
+            for _ in range(8): lua('vim.api.nvim_input_mouse("wheel","down","",0,8,12)')
+            assert int(lua('vim.fn.line("w0")')) > before_scroll, 'Wheel input did not scroll the code buffer'
+            assert lua('vim.bo.modified') == 'false', 'Scrolling modified the document'
+            print('PASS: mouse wheel scrolls code without editing it')
             large = root / 'large.py'
             large.write_text('# large file\n' * 180000)
             assert dispatch(method='open', path=str(large))['ok']

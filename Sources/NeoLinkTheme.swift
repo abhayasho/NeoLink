@@ -2,12 +2,12 @@ import SwiftUI
 
 /// Shared surfaces, typography and interaction colors for the workspace.
 enum NeoLinkTheme {
-    static let editorBackground = Color(hex: 0x171717)
-    static let sidebarBackground = Color(hex: 0x181818)
-    static let panelBackground = Color(hex: 0x1C1C1C)
-    static let elevated = Color(hex: 0x262626)
+    static let editorBackground = Color(hex: 0x181818)
+    static let sidebarBackground = Color(hex: 0x141414)
+    static let panelBackground = Color(hex: 0x181818)
+    static let elevated = Color(hex: 0x1F1F1F)
     static let surface = panelBackground
-    static let selection = Color(hex: 0x343434)
+    static let selection = Color(hex: 0x232323)
     static let listHover = Color.white.opacity(0.055)
     static let rowFill = Color.clear
     static let separator = Color.white.opacity(0.075)
@@ -16,6 +16,10 @@ enum NeoLinkTheme {
     static let textPrimary = Color(hex: 0xD8D8D8)
     static let textSecondary = Color(hex: 0x969696)
     static let accent = Color(hex: 0xC4C4C4)
+    static let syntaxBlue = Color(hex: 0xA8CCDF)
+    static let syntaxPink = Color(hex: 0xD6B3D2)
+    static let syntaxYellow = Color(hex: 0xD6D6A4)
+    static let syntaxOrange = Color(hex: 0xCDA18A)
     static let success = Color(hex: 0xA4B29B)
     static let warning = Color(hex: 0xC6B28E)
     static let error = Color(hex: 0xCC9595)

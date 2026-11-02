@@ -25,7 +25,7 @@ struct CodeWorkspaceView: View {
                 Text("Neovim · \(session.mode)")
                 Spacer()
                 Text("Esc  Normal mode   ·   i  Insert   ·   ⌘S  Save")
-            }.font(.system(size: 10)).foregroundColor(NeoLinkTheme.textSecondary).padding(.horizontal, 12).frame(height: 28)
+            }.font(.system(size: 10)).foregroundColor(NeoLinkTheme.textSecondary).padding(.horizontal, 12).frame(height: 22)
         }.background(NeoLinkTheme.editorBackground)
     }
 }
@@ -46,8 +46,9 @@ private struct CodeToolbar: View {
     @ObservedObject var controller: TabsController
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(document.title).lineLimit(1).truncationMode(.middle).help(document.source.displayPath)
+        HStack(spacing: 8) {
+            Text(document.language.isEmpty ? "Text" : document.language.capitalized)
+                .lineLimit(1).help(document.source.displayPath)
             if document.isLoading { ProgressView().controlSize(.mini) }
             Spacer(minLength: 0)
             if !document.languageServers.isEmpty {
@@ -64,21 +65,28 @@ private struct CodeToolbar: View {
                 Button("Code Actions…") { session.action("codeAction") }
                 Button("Format Document") { session.action("format") }
                 Divider()
+                Button("Toggle Fold") { session.action("fold") }
+                Button("Fold All") { session.action("foldAll") }
+                Button("Unfold All") { session.action("unfoldAll") }
+                Button("Toggle Inlay Hints") { session.action("inlayHints") }
+                Divider()
                 Text(document.languageServers.isEmpty ? "No language server for this file" : "Language server: \(document.languageServers)")
             } label: { Label("Code", systemImage: "curlybraces") }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            TextSizeControl()
             Button { controller.runSelectedFile() } label: { Image(systemName: "play.fill") }
                 .help("Save and run file in a terminal")
                 .disabled(controller.selectedRunner == nil)
-            Button("Save") { Task { await document.save() } }
+            Button { Task { await document.save() } } label: { Image(systemName: "square.and.arrow.down") }
+                .accessibilityLabel("Save")
                 .disabled(!document.isModified || document.isSaving)
                 .help("Save file (⌘S)")
         }
         .buttonStyle(.borderless)
         .font(.system(size: 11, weight: .medium))
         .foregroundColor(NeoLinkTheme.textSecondary)
-        .padding(.horizontal, 12).frame(height: 38)
-        .background(NeoLinkTheme.panelBackground)
+        .padding(.horizontal, 12).frame(height: 30)
+        .background(NeoLinkTheme.editorBackground)
     }
 }
