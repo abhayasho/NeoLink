@@ -146,6 +146,32 @@ final class WorkspaceDocument: NSObject, ObservableObject, Identifiable, NSTextV
         updateText(view.string)
     }
 
+    func refreshFromDiskIfUnmodified() async {
+        guard case .local = source, !usesNeovim, !isClosed, !isLoading, !isSaving, !isModified,
+              loaded?.text != nil else { return }
+        let baseline = originalData
+        do {
+            let result = try await loader()
+            guard !isClosed, !isLoading, !isSaving, !isModified, originalData == baseline,
+                  result.data != baseline, let text = result.text else { return }
+            self.text = text
+            savedText = text
+            originalData = result.data
+            loaded = result
+            error = nil
+            if let view = editor?.documentView as? NSTextView {
+                let selection = view.selectedRange()
+                view.string = text
+                let length = (text as NSString).length
+                let location = min(selection.location, length)
+                view.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+            }
+            textUndoManager.removeAllActions()
+        } catch {
+            if !isClosed { self.error = error.localizedDescription }
+        }
+    }
+
     func undoManager(for view: NSTextView) -> UndoManager? { textUndoManager }
 
     func update(from snapshot: NeovimBufferSnapshot) {

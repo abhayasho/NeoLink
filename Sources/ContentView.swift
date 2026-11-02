@@ -10,6 +10,7 @@ struct ContentView: View {
     @AppStorage("showFileBrowser") private var showFileBrowser = true
     @State private var search: SearchPresentation?
     @State private var sessionToEdit: Session?
+    @State private var showAgentLauncher = false
     private struct SearchPresentation: Identifiable {
         let id = UUID()
         let root: URL
@@ -83,13 +84,22 @@ struct ContentView: View {
                 onCancel: { sessionToEdit = nil }
             )
         }
+        .sheet(isPresented: $showAgentLauncher) {
+            AgentLauncherView(controller: tabsController, directory: access.projectURL)
+        }
         .alert("Project access", isPresented: Binding(get: { access.error != nil }, set: { if !$0 { access.error = nil } })) {
             Button("OK") { access.error = nil }
         } message: { Text(access.error ?? "") }
     }
 
-    var body: some View {
+    private var workspaceWithTabCommands: some View {
         presentedWorkspace
+        .onReceive(NotificationCenter.default.publisher(for: .neoLinkOpenAgent)) { _ in showAgentLauncher = true }
+        .onChange(of: tabsController.fileRefreshRevision) { _ in
+            if let tab = tabsController.browserTab, tab.configuration.backend == .localShell {
+                fileBrowsers.browser(for: tab).load()
+            }
+        }
         .onChange(of: tabsController.tabs.map(\.id)) { ids in
             fileBrowsers.retainTabs(Set(tabsController.terminalTabs.map(\.id)))
         }
@@ -103,6 +113,10 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkSaveFile)) { _ in
             if let document = tabsController.selectedTab?.document { Task { await document.save() } }
         }
+    }
+
+    var body: some View {
+        workspaceWithTabCommands
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkOpenProject)) { _ in access.chooseFolder() }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkQuickOpen)) { _ in showSearch(contents: false) }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkFindInFiles)) { _ in showSearch(contents: true) }
@@ -152,6 +166,12 @@ struct ContentView: View {
                 .foregroundStyle(NeoLinkTheme.textSecondary)
                 .lineLimit(1)
             Spacer()
+            Button { showAgentLauncher = true } label: {
+                Label("Agent", systemImage: "sparkles")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.borderless).foregroundStyle(NeoLinkTheme.textPrimary)
+            .help("Launch a coding agent (⌃⌘A)").accessibilityLabel("Launch coding agent")
             Button { showSearch(contents: false) } label: { Image(systemName: "doc.text.magnifyingglass") }
                 .buttonStyle(WorkspaceIconButtonStyle()).help("Quick Open (⌘P)").accessibilityLabel("Quick Open")
             Button { showSearch(contents: true) } label: { Image(systemName: "magnifyingglass") }

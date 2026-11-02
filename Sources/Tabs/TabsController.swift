@@ -5,12 +5,14 @@ struct TerminalTab: Identifiable, Equatable {
     var title: String
     let configuration: TerminalConfiguration
     let state: TerminalState
+    let agentName: String?
 
-    init(id: UUID = UUID(), title: String, configuration: TerminalConfiguration, currentDirectory: String? = nil) {
+    init(id: UUID = UUID(), title: String, configuration: TerminalConfiguration, currentDirectory: String? = nil, agentName: String? = nil) {
         self.id = id
         self.title = title
         self.configuration = configuration
         self.state = TerminalState(currentDirectory: currentDirectory)
+        self.agentName = agentName
     }
 
     static func == (lhs: TerminalTab, rhs: TerminalTab) -> Bool {
@@ -52,13 +54,19 @@ final class TabsController: ObservableObject {
     @Published var tabs: [WorkspaceTab]
     @Published var selectedTabID: UUID? {
         didSet {
-            guard selectedTabID != oldValue, let document = selectedTab?.document, document.usesNeovim,
-                  case .local(let url) = document.source else { return }
+            guard selectedTabID != oldValue else { return }
+            if tabs.first(where: { $0.id == oldValue })?.terminal?.agentName != nil { fileRefreshRevision += 1 }
+            guard let document = selectedTab?.document, case .local(let url) = document.source else { return }
+            if !document.usesNeovim {
+                Task { await document.refreshFromDiskIfUnmodified() }
+                return
+            }
             codeSession.prepareSelection(url.path)
             if !document.isLoading { Task { await codeSession.request(["method":"open", "path":url.path]) } }
         }
     }
     @Published private(set) var isConfirmingClose = false
+    @Published private(set) var fileRefreshRevision = 0
     let codeSession: NeovimSession
 
     init(useNeovim: Bool = true) {
@@ -92,6 +100,30 @@ final class TabsController: ObservableObject {
 
     func openLocalTab() {
         openTab(title: "Local", configuration: TerminalConfiguration(backend: .localShell))
+    }
+
+    func openAgent(_ agent: CodingAgent, in directory: URL) throws {
+        guard !isConfirmingClose else { return }
+        guard agent.isValid else { throw AgentLaunchError.invalidCommand }
+        let directory = directory.standardizedFileURL.resolvingSymlinksInPath()
+        guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else {
+            throw AgentLaunchError.missingDirectory
+        }
+        let configuration = TerminalConfiguration(backend: .localShell, startupCommand: agent.launchCommand(in: directory))
+        let tab = TerminalTab(title: agent.name, configuration: configuration,
+                              currentDirectory: directory.path, agentName: agent.name)
+        tabs.append(.terminal(tab))
+        selectedTabID = tab.id
+    }
+
+    enum AgentLaunchError: LocalizedError {
+        case invalidCommand, missingDirectory
+        var errorDescription: String? {
+            switch self {
+            case .invalidCommand: return "Enter an agent name and a valid executable."
+            case .missingDirectory: return "This project folder is unavailable. Choose another folder."
+            }
+        }
     }
 
     var selectedRunner: String? {
@@ -208,6 +240,7 @@ final class TabsController: ObservableObject {
     func closeTab(_ tabID: UUID, discardingChanges: Bool = false) {
         guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         guard discardingChanges || tabs[index].document?.isModified != true else { return }
+        let wasAgent = tabs[index].terminal?.agentName != nil
         tabs[index].terminal?.state.close()
         tabs[index].document?.close()
         tabs.remove(at: index)
@@ -217,6 +250,7 @@ final class TabsController: ObservableObject {
             // Keep the user's place in the strip instead of jumping to its first tab.
             selectedTabID = tabs[min(index, tabs.count - 1)].id
         }
+        if wasAgent { fileRefreshRevision += 1 }
     }
 
     func selectNextTab() { selectTab(offset: 1) }

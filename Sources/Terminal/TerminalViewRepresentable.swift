@@ -9,6 +9,7 @@ enum TerminalBackend: Equatable {
 
 struct TerminalConfiguration: Equatable {
     let backend: TerminalBackend
+    var startupCommand: String? = nil
 }
 
 enum TerminalProcessStatus: Equatable {
@@ -57,7 +58,7 @@ final class TerminalState: NSObject, ObservableObject, LocalProcessTerminalViewD
             shellIntegration = integration
             view.startProcess(
                 executable: "/bin/zsh",
-                args: ["-l"],
+                args: configuration.startupCommand.map { ["-l", "-i", "-c", $0] } ?? ["-l"],
                 environment: integration?.environment(base: environment) ?? environment,
                 currentDirectory: currentDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
             )

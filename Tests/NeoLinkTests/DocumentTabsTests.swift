@@ -112,6 +112,29 @@ final class DocumentTabsTests: XCTestCase {
     }
 
     @MainActor
+    func testAgentEditsRefreshCleanNativeBuffersAndPreserveDirtyBuffers() async throws {
+        let url = try temporaryFile("agent.txt", data: Data("before\n".utf8))
+        let document = WorkspaceDocument(url: url, browserTabID: nil)
+        defer { document.close() }
+        document.load()
+        try await finishLoading(document)
+        let view = try XCTUnwrap(document.makeEditor().documentView as? NSTextView)
+        try Data("from agent\n".utf8).write(to: url)
+        await document.refreshFromDiskIfUnmodified()
+        XCTAssertEqual(document.text, "from agent\n")
+        XCTAssertEqual(view.string, "from agent\n")
+        XCTAssertFalse(document.isModified)
+        document.updateText("my unsaved edit\n")
+        try Data("new agent edit\n".utf8).write(to: url)
+        await document.refreshFromDiskIfUnmodified()
+        XCTAssertEqual(document.text, "my unsaved edit\n")
+        XCTAssertTrue(document.isModified)
+        let saved = await document.save()
+        XCTAssertFalse(saved)
+        XCTAssertEqual(try String(contentsOf: url), "new agent edit\n")
+    }
+
+    @MainActor
     func testNativeEditorKeepsSelectionAndUndoWhenReused() async throws {
         let url = try temporaryFile("file.txt", data: Data("hello\n".utf8))
         let document = WorkspaceDocument(url: url, browserTabID: nil)

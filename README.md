@@ -20,6 +20,7 @@
 - **Persistent terminal tabs.** Switch between local and SSH sessions without restarting shells or losing scrollback, powered by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
 - **Code and PDFs in tabs.** One shared, on-demand Neovim engine provides a dark code editor inside NeoLink. PDFs use a native viewer. Reopening a file selects its existing tab and preserves editing state. A native text editor is available when Neovim is not installed.
 - **Code intelligence.** Syntax highlighting, completion, diagnostics, definition, references, hover, rename and code actions use installed language servers. Run supported files in a terminal directly from the code toolbar.
+- **Coding agents in tabs.** Launch Claude Code, continue its last project conversation, or run another installed agent CLI with the **Agent** button. Each agent gets a terminal in the chosen project folder. Clean text buffers refresh from disk when you return; unsaved edits keep their save-conflict protection.
 - **Project tools.** Open a project once and restore its saved folder access on launch. Use **⌘P** to find files and **⇧⌘F** to search their contents. Searches skip dependency/build folders and run only on demand.
 - **Safe editing.** Unsaved changes prompt before closing or quitting. Saves preserve encoding and check for external edits. Remote files remain read-only previews. See the [coding workspace guide](docs/CODING_WORKSPACE.md) for limits and recovery behavior.
 - **Connection sidebar.** Search saved hosts, create a validated SSH connection, or open a local shell in one click.
@@ -70,7 +71,17 @@ brew install pyright typescript-language-server
 
 Neovim 0.11+ is required for the coding engine (tested with 0.12.6). Swift and C/C++ language services use `sourcekit-lsp` and `clangd` from the installed toolchain. Servers start only when needed. Without Neovim, text files still open in native tabs; without ripgrep, project search explains how to install it.
 
-For remembered access, choose **File → Open Project** once. macOS can still ask for newly protected folders or after an ad-hoc rebuild. Release builds can use `NEOLINK_SIGNING_IDENTITY` with a valid code-signing certificate. [Architecture, benchmarks, permissions and limits](docs/CODING_WORKSPACE.md).
+For remembered folder access, choose **File → Open Project** once. NeoLink restores the selected folder, retains bookmarks when a drive is temporarily unavailable, and activates other recent folders only when selected. Use the same installed copy in `/Applications` for everyday work.
+
+macOS controls Documents/Desktop/Downloads and local-network permissions separately from NeoLink's project picker. It normally remembers your decision for the same app identity. **Local ad-hoc builds can prompt again after an update** because their signing identity changes; a saved folder bookmark cannot prevent this. For releases, set `NEOLINK_SIGNING_IDENTITY` to a valid Apple-issued signing certificate and keep using the same certificate type, developer team, and bundle identifier. New protected locations or revoked grants may still need approval. [Architecture, benchmarks, permissions and limits](docs/CODING_WORKSPACE.md).
+
+## Coding agents
+
+Open a project, click **Agent** (or **⌃⌘A**), and choose **Claude Code**. Enable **Continue the last conversation** to launch `claude --continue`. Sign in and respond to the CLI's project-trust and tool-approval prompts directly in its NeoLink tab. Install Claude Code separately using its [official setup guide](https://code.claude.com/docs/en/quickstart); NeoLink detects native `~/.local/bin` and Homebrew installations, and also checks the login shell's PATH at launch.
+
+For another terminal-based agent, choose **Custom CLI**, supply its executable name or full path, and enter optional arguments one per line. Arguments are passed literally; shell pipelines and expansion are not evaluated. The custom name and executable are remembered; arguments are not saved.
+
+Agents work with saved project files. Save your editor changes before requesting edits. Returning from an agent tab refreshes the local file list; selecting a clean code/text tab reloads changes from disk. Unsaved buffers are preserved and conflicting saves are refused. This is terminal integration, not an extension-protocol connection: editor selections are not sent automatically. Local agent launches use a local project folder; remote agents can be run manually inside an SSH tab. NeoLink leaves authentication, permissions, and model choice to each CLI.
 
 ## Using NeoLink
 
@@ -87,6 +98,7 @@ For remembered access, choose **File → Open Project** once. macOS can still as
 | Create a file or folder | **+** in the file pane, or right-click a local folder |
 | Find a file / search project text | **⌘P** / **⇧⌘F** |
 | Code completion | **Control-Space**, or server-provided automatic triggers |
+| Launch a coding agent | **Agent** in the header or **⌃⌘A**; choose a project and CLI |
 | Definition, rename, references | Use the **Code** menu or editor toolbar |
 | Neovim editing modes | Starts in Insert; **Esc** for Normal; **i** to insert |
 | Find text in the editor | **⌘F** |
@@ -104,7 +116,7 @@ swift test
 python3 scripts/test-editor.py
 ```
 
-The regression suite covers isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials. Authenticated SFTP transfers and remote previews still need an integration check against a server.
+The regression suite covers isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials. Authenticated SFTP transfers and remote previews still need an integration check against a server.
 
 ## Project layout
 
@@ -114,6 +126,7 @@ Sources/
 ├── Tabs/           tab controller and tabbed terminal view
 ├── Documents/      Neovim bridge, native text fallback, PDF viewer, file IO
 ├── Workspace/      remembered project access and bounded project search
+├── Agents/         Claude Code and custom CLI launcher
 ├── Tools/          cancellable subprocess runner
 ├── Sessions/       saved sessions, sidebar, persistence
 ├── FileBrowser/    local file browser pane

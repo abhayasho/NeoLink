@@ -1,5 +1,25 @@
 import AppKit
 
+struct FolderBookmarkOperations {
+    var resolve: (Data) throws -> (url: URL, stale: Bool)
+    var create: (URL) throws -> Data
+    var startAccess: (URL) -> Bool
+    var stopAccess: (URL) -> Void
+
+    static let system = FolderBookmarkOperations(
+        resolve: { data in
+            var stale = false
+            let url = try URL(resolvingBookmarkData: data,
+                              options: [.withSecurityScope, .withoutUI, .withoutMounting],
+                              bookmarkDataIsStale: &stale)
+            return (url, stale)
+        },
+        create: { try $0.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) },
+        startAccess: { $0.startAccessingSecurityScopedResource() },
+        stopAccess: { $0.stopAccessingSecurityScopedResource() }
+    )
+}
+
 /// Keep user-selected folders available across launches without repeatedly opening a picker.
 @MainActor
 final class WorkspaceAccess: ObservableObject {
@@ -9,30 +29,44 @@ final class WorkspaceAccess: ObservableObject {
     @Published var error: String?
     private var scopedURLs: [URL] = []
     private let defaults: UserDefaults
+    private let operations: FolderBookmarkOperations
     private let key = "workspaceFolderBookmarks"
+    private struct SavedFolder {
+        var data: Data
+        var url: URL?
+    }
+    private var savedFolders: [SavedFolder] = []
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, operations: FolderBookmarkOperations = .system) {
         self.defaults = defaults
-        var refreshed: [Data] = []
+        self.operations = operations
         for data in defaults.array(forKey: key) as? [Data] ?? [] {
+            var folder = SavedFolder(data: data)
             do {
-                var stale = false
-                let scoped = try URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI], bookmarkDataIsStale: &stale)
-                if scoped.startAccessingSecurityScopedResource() { scopedURLs.append(scoped) }
-                let url = scoped.standardizedFileURL.resolvingSymlinksInPath()
-                recentFolders.append(url)
-                refreshed.append(stale ? try bookmark(scoped) : data)
-            } catch { self.error = "A saved folder is no longer available. Choose it again with Open Project." }
+                let resolved = try operations.resolve(data)
+                folder.url = resolved.url
+                if resolved.stale, let refreshed = try? operations.create(resolved.url) { folder.data = refreshed }
+            } catch {
+                // A disconnected drive or temporary resolution failure must not erase a grant.
+                // Keep its bookmark so the next launch can restore it without another picker.
+            }
+            savedFolders.append(folder)
         }
-        defaults.set(refreshed, forKey: key)
+        persistFolders()
         if let path = defaults.string(forKey: "activeProjectPath") {
-            let canonical = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
-            projectURL = recentFolders.first { $0.path == canonical }
+            let canonical = URL(fileURLWithPath: path).standardizedFileURL.path
+            if let url = recentFolders.first(where: { $0.path == canonical }) { select(url) }
         }
     }
 
-    private func bookmark(_ url: URL) throws -> Data {
-        try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+    private func persistFolders() {
+        defaults.set(savedFolders.map(\.data), forKey: key)
+        var seen = Set<URL>()
+        recentFolders = savedFolders.compactMap(\.url).map(\.standardizedFileURL).filter { seen.insert($0).inserted }
+    }
+
+    private func startAccess(to url: URL) {
+        if !scopedURLs.contains(url), operations.startAccess(url) { scopedURLs.append(url) }
     }
 
     func chooseFolder(completion: ((URL) -> Void)? = nil) {
@@ -53,26 +87,22 @@ final class WorkspaceAccess: ObservableObject {
     }
 
     func remember(_ url: URL) throws {
-        let bookmarkData = try bookmark(url)
-        if !scopedURLs.contains(url), url.startAccessingSecurityScopedResource() { scopedURLs.append(url) }
-        let url = url.standardizedFileURL.resolvingSymlinksInPath()
-        var bookmarks = defaults.array(forKey: key) as? [Data] ?? []
-        if let index = recentFolders.firstIndex(of: url) {
-            recentFolders.remove(at: index)
-            if index < bookmarks.count { bookmarks.remove(at: index) }
-        }
-        recentFolders.insert(url, at: 0)
-        bookmarks.insert(bookmarkData, at: 0)
-        defaults.set(bookmarks, forKey: key)
+        let bookmarkData = try operations.create(url)
+        savedFolders.removeAll { $0.url?.standardizedFileURL == url.standardizedFileURL }
+        savedFolders.insert(SavedFolder(data: bookmarkData, url: url), at: 0)
+        persistFolders()
         select(url)
     }
 
     func select(_ url: URL) {
-        let url = url.standardizedFileURL.resolvingSymlinksInPath()
+        let url = url.standardizedFileURL
+        // Only activate folders that are in use, rather than every recent location on launch.
+        let scoped = savedFolders.first { $0.url?.standardizedFileURL == url }?.url ?? url
+        startAccess(to: scoped)
         projectURL = url
         defaults.set(url.path, forKey: "activeProjectPath")
         error = nil
     }
 
-    deinit { scopedURLs.forEach { $0.stopAccessingSecurityScopedResource() } }
+    deinit { scopedURLs.forEach(operations.stopAccess) }
 }

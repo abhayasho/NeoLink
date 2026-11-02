@@ -26,9 +26,17 @@ enum CommandRunner {
     }
 
     static func executable(_ name: String) -> String? {
-        let paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+        let name = (name as NSString).expandingTildeInPath
+        let isExecutable: (String) -> Bool = { path in
+            var directory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &directory) && !directory.boolValue && FileManager.default.isExecutableFile(atPath: path)
+        }
+        if name.hasPrefix("/") { return isExecutable(name) ? name : nil }
+        guard !name.contains("/") else { return nil }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let paths = [home + "/.local/bin", home + "/.npm-global/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
             + (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        return paths.map { $0 + "/" + name }.first { FileManager.default.isExecutableFile(atPath: $0) }
+        return paths.filter { $0.hasPrefix("/") }.map { $0 + "/" + name }.first(where: isExecutable)
     }
 
     static func run(_ executable: String, _ arguments: [String], directory: URL? = nil, timeout: Double = 15, maximumBytes: Int = 8 * 1024 * 1024) async throws -> Result {

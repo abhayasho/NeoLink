@@ -54,6 +54,19 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
             lua('vim.api.nvim_buf_set_lines(0,0,1,false,{"after"})')
             assert dispatch(method='save', path=str(encoded))['ok']
             assert encoded.read_bytes() == b'\xff\xfe' + 'after\r\n'.encode('utf-16-le')
+            agent_file = root / 'agent-edits.lua'
+            agent_file.write_text('return "before"\n')
+            assert dispatch(method='open', path=str(agent_file))['ok']
+            agent_file.write_text('return "updated by agent"\n')
+            assert dispatch(method='open', path=str(agent_file))['ok']
+            assert 'updated by agent' in lua('vim.api.nvim_get_current_line()')
+            lua('vim.api.nvim_buf_set_lines(0,0,1,false,{"return 123"})')
+            agent_file.write_text('return "conflicting agent edit"\n')
+            assert dispatch(method='open', path=str(agent_file))['ok']
+            assert lua('vim.api.nvim_get_current_line()') == 'return 123'
+            assert not dispatch(method='save', path=str(agent_file))['ok'], 'Dirty editor overwrote agent edits'
+            assert 'conflicting agent edit' in agent_file.read_text()
+            print('PASS: clean buffers reload agent edits; unsaved buffers and external edits are preserved')
             large = root / 'large.py'
             large.write_text('# large file\n' * 180000)
             assert dispatch(method='open', path=str(large))['ok']

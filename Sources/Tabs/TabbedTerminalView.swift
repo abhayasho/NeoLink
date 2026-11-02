@@ -54,7 +54,7 @@ struct TabbedTerminalView: View {
                                 } else {
                                     WorkspaceTabButton(
                                         title: tab.title,
-                                        icon: tab.terminal?.configuration.backend == .localShell ? "terminal" : "network",
+                                        icon: tab.terminal?.agentName != nil ? "sparkles" : (tab.terminal?.configuration.backend == .localShell ? "terminal" : "network"),
                                         detail: "\(tab.title) terminal",
                                         isSelected: controller.selectedTabID == tab.id,
                                         isModified: false,
@@ -178,6 +178,7 @@ private struct TerminalStatusBar: View {
         switch state.processStatus {
         case .idle: return "Starting…"
         case .running:
+            if let name = tab.agentName { return "\(name) terminal" }
             if case .localShell = tab.configuration.backend { return "Local shell" }
             return "SSH session"
         case .exited:

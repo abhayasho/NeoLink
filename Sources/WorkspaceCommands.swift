@@ -14,6 +14,7 @@ extension Notification.Name {
     static let neoLinkToggleFiles = Notification.Name("NeoLink.toggleFiles")
     static let neoLinkToggleSidebar = Notification.Name("NeoLink.toggleSidebar")
     static let neoLinkNewSSHSession = Notification.Name("NeoLink.newSSHSession")
+    static let neoLinkOpenAgent = Notification.Name("NeoLink.openAgent")
 }
 
 /// Native menus also provide standard text editing and terminal keyboard shortcuts.
@@ -33,6 +34,7 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         let file = NSMenu(title: "File")
         command("New Local Tab", name: .neoLinkNewTab, key: "t", to: file)
         command("New SSH Connection…", name: .neoLinkNewSSHSession, key: "n", modifiers: [.command, .shift], to: file)
+        command("Launch Coding Agent…", name: .neoLinkOpenAgent, key: "a", modifiers: [.command, .control], to: file)
         file.addItem(.separator())
         command("Open File…", name: .neoLinkOpenFile, key: "o", to: file)
         command("Open Project…", name: .neoLinkOpenProject, key: "o", modifiers: [.command, .shift], to: file)

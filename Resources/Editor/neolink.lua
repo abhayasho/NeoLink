@@ -120,6 +120,20 @@ function M.open(path, line, activate)
   vim.bo[b].buflisted=true
   if not M.baseline[b] then M.baseline[b]=signature(path) end
   if activate~=false then
+    -- Agents edit files on disk. Refresh only clean buffers when returning to a tab.
+    -- A dirty buffer keeps its original baseline, so Save still detects a conflict.
+    local current=signature(path)
+    if current~='missing' and current~=M.baseline[b] and not vim.bo[b].modified then
+      if ((uv.fs_stat(path) or {}).size or 0)>128*1024*1024 then
+        error('The changed file exceeds the 128 MB editor limit.')
+      end
+      api.nvim_buf_call(b,function()
+        local view=vim.fn.winsaveview()
+        vim.cmd('silent edit')
+        vim.fn.winrestview(view)
+      end)
+      M.baseline[b]=signature(path)
+    end
     api.nvim_set_current_buf(b)
     if line and line>0 then api.nvim_win_set_cursor(0,{math.min(line,api.nvim_buf_line_count(b)),0}) end
     vim.cmd('startinsert')
