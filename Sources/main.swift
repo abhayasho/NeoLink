@@ -54,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         true
     }
 
-    func applicationWillTerminate(_ notification: Notification) { tabsController.codeSession.shutdown() }
+    func applicationWillTerminate(_ notification: Notification) { tabsController.shutdownAgents(); tabsController.codeSession.shutdown() }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if approvedWindowClose { return true }

@@ -20,9 +20,10 @@
 - **Persistent terminal tabs.** Switch between local and SSH sessions without restarting shells or losing scrollback, powered by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
 - **Code and PDFs in tabs.** One shared, on-demand Neovim engine provides a dark code editor inside NeoLink. PDFs use a native viewer. Reopening a file selects its existing tab and preserves editing state. A native text editor is available when Neovim is not installed.
 - **Code intelligence.** Syntax highlighting, completion, diagnostics, definition, references, hover, rename and code actions use installed language servers. Run supported files in a terminal directly from the code toolbar.
-- **Agents alongside code.** Launch Claude Code, continue its last project conversation, or run another installed agent CLI with the **Agent** button. Sessions can share the right-hand agent panel or open as workspace tabs. Hiding the panel keeps its sessions alive; its session picker switches between parallel agents. Clean code buffers refresh when focus returns from the panel; use its refresh button to reload saved changes explicitly.
+- **Native agent conversations.** Connect an installed ACP adapter from **Agent → Native conversation (ACP)**. Stream replies, inspect tool input and file-change previews, approve or reject requested actions, change advertised modes, and stop a turn in the right panel. Multiple sessions can run alongside code; hiding the panel keeps them alive. Optional stdio MCP server configurations are passed to the adapter. [Setup and limits](docs/AGENT_GUIDE.md).
+- **Agent terminals.** Run Claude Code, continue its last project conversation, or launch another installed CLI in a panel or workspace tab. Authentication and terminal-based approvals stay in that CLI. Clean code buffers refresh after agent turns or when editor focus returns; unsaved buffers remain protected.
 - **Scrolling and text zoom.** Mouse wheels and trackpads scroll the active Neovim buffer or mouse-aware terminal application. Precise trackpad deltas accumulate instead of jumping on each tiny event. **⌘+**, **⌘−**, **⌘0**, the **View** menu, and the editor's text-size menu adjust code and terminal text. The chosen size is saved across launches; these shortcuts zoom the active PDF instead when it has focus.
-- **Native Git review.** **⇧⌘G** shows the current branch, changed files, and color-coded diffs. Review staged and unstaged changes separately, then open the source file. This first version is read-only; staging, committing and branch switching remain terminal operations.
+- **Native source control.** **⇧⌘G** opens staged/unstaged diffs, file staging and unstaging, commits from the index, local branch creation/switching, and read-only stash previews. Commits use your configured Git identity and hooks. Save editor changes before Git operations; branch switching preserves Git’s normal conflict checks. Push, pull, merge, stash creation/apply, and generated commit messages remain terminal operations.
 - **Folding and REPLs.** Use the **Code** menu to fold/unfold code, toggle server-provided inlay hints, or open an installed Python, JavaScript, Swift, Ruby or Lua REPL in the current project.
 - **Project tools.** Open a project once and restore its saved folder access on launch. Use **⌘P** to find files and **⇧⌘F** to search their contents. Searches skip dependency/build folders and run only on demand.
 - **Safe editing.** Unsaved changes prompt before closing or quitting. Saves preserve encoding and check for external edits. Remote files remain read-only previews. See the [coding workspace guide](docs/CODING_WORKSPACE.md) for limits and recovery behavior.
@@ -80,11 +81,14 @@ macOS controls Documents/Desktop/Downloads and local-network permissions separat
 
 ## Coding agents
 
-Open a project, click **Agent** (or **⌃⌘A**), and choose **Claude Code**. Enable **Continue the last conversation** to launch `claude --continue`. **Open alongside the editor** places it in the right panel; turn this off for a workspace tab. Sign in and respond to the CLI's project-trust and tool-approval prompts in that terminal. Install Claude Code separately using its [official setup guide](https://code.claude.com/docs/en/quickstart); NeoLink detects native `~/.local/bin` and Homebrew installations, and also checks the login shell's PATH at launch.
+Open a project and click **Agent** (or **⌃⌘A**). Choose an interface:
 
-For another terminal-based agent, choose **Custom CLI**, supply its executable name or full path, and enter optional arguments one per line. Arguments are passed literally; shell pipelines and expansion are not evaluated. The custom name and executable are remembered; arguments are not saved.
+- **Terminal** runs `claude`, `claude --continue`, or a custom CLI in a PTY. Sign in and answer its prompts there. Choose a panel or workspace tab.
+- **Native conversation (ACP)** runs an ACP-compatible adapter in the right panel. For Claude, install [`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp) separately, then select **Claude Code**. For another adapter, select **Custom CLI** and its executable. A regular `claude` binary is a terminal application, not an ACP adapter.
 
-Agents work with saved project files. Save your editor changes before requesting edits. Returning from an agent tab refreshes the local file list; selecting a clean code/text tab reloads changes from disk. Unsaved buffers are preserved and conflicting saves are refused. This is terminal integration, not an extension-protocol connection: editor selections are not sent automatically. Local agent launches use a local project folder; remote agents can be run manually inside an SSH tab. NeoLink leaves authentication, permissions, and model choice to each CLI.
+Custom arguments are passed literally, one per line. The custom name/executable are remembered; arguments and optional MCP configuration are not saved. NeoLink does not automatically install or start agents. Provider authentication and model configuration belong to the selected CLI/adapter; NeoLink has no API-key store or direct model client.
+
+Agents operate on saved files. Save your editor changes first. Native conversations can explicitly include the active file's path; they do not automatically send editor selections or unsaved text. Tool permission requests require your choice. Closing a native session stops its adapter; hiding the panel keeps it running. Conversations currently last for the app session. See the [agent guide](docs/AGENT_GUIDE.md) for setup, MCP configuration, protocol support, and validation limits.
 
 ## Using NeoLink
 
@@ -101,10 +105,10 @@ Agents work with saved project files. Save your editor changes before requesting
 | Create a file or folder | **+** in the file pane, or right-click a local folder |
 | Find a file / search project text | **⌘P** / **⇧⌘F** |
 | Code completion | **Control-Space**, or server-provided automatic triggers |
-| Launch a coding agent | **Agent** in the header or **⌃⌘A**; choose a project and CLI |
+| Launch a coding agent | **Agent** in the header or **⌃⌘A**; choose a project and interface |
 | Hide / reopen agent panel | **⌃⌘B**, or the right-sidebar button; sessions keep running |
 | Change text size | **⌘+** / **⌘−** / **⌘0**, **View**, or the editor's **pt** menu |
-| Review Git changes | **⇧⌘G**, or the branch icon in the header |
+| Review / stage / commit Git changes | **⇧⌘G**, or the branch icon in the header |
 | Fold code / toggle inlay hints | **Code** menu or editor toolbar's **Code** menu |
 | Start an interactive interpreter | **Code → Open REPL** |
 | Definition, rename, references | Use the **Code** menu or editor toolbar |
@@ -124,7 +128,7 @@ swift test
 python3 scripts/test-editor.py
 ```
 
-The regression suite covers wheel-delta accumulation, persisted text sizing, docked-agent lifecycle, staged/unstaged Git diffs and literal filenames, isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials. Authenticated SFTP transfers and remote previews still need an integration check against a server.
+The regression suite covers wheel-delta accumulation, persisted text sizing, docked-agent lifecycle, Git staging/unstaging and commits (including an unborn repository), local branch conflicts, stash previews, literal filenames, ACP streaming/permissions/cancellation/timeouts and parallel session isolation, isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials. Authenticated SFTP transfers and remote previews still need an integration check against a server.
 
 ## Project layout
 
@@ -134,7 +138,7 @@ Sources/
 ├── Tabs/           tab controller and tabbed terminal view
 ├── Documents/      Neovim bridge, native text fallback, PDF viewer, file IO
 ├── Workspace/      remembered project access and bounded project search
-├── Agents/         Claude Code and custom CLI launcher
+├── Agents/         ACP transport/conversations and terminal agent launcher
 ├── Tools/          cancellable subprocess runner
 ├── Sessions/       saved sessions, sidebar, persistence
 ├── FileBrowser/    local file browser pane
@@ -145,7 +149,7 @@ Sources/
 
 ## Roadmap
 
-The [feature plan](docs/FEATURE_PLAN.md) distinguishes shipped native tools from larger planned features, including ACP, debugging, editable multi-file excerpts, and an extension system. NeoLink does not claim feature parity or a measured speed advantage over established IDEs.
+The [feature plan](docs/FEATURE_PLAN.md) distinguishes shipped native tools from larger planned features, including debugging, editable multi-file excerpts, edit prediction, and an extension system. NeoLink does not claim feature parity or a measured speed advantage over established IDEs.
 
 - A two-pane layout showing local and remote files together
 - Server-side copy and move for remote items

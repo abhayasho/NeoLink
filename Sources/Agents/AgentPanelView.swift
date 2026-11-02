@@ -4,6 +4,11 @@ struct AgentPanelView: View {
     @ObservedObject var controller: TabsController
     let launch: () -> Void
 
+    private var selectedFileURL: URL? {
+        if case .local(let url) = controller.selectedTab?.document?.source { return url }
+        return nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -18,31 +23,41 @@ struct AgentPanelView: View {
             .buttonStyle(WorkspaceIconButtonStyle())
             .padding(.horizontal, 10).frame(height: 34)
             NeoLinkTheme.horizontalSeparator()
-            if !controller.agentPanelTabs.isEmpty {
+            if !controller.agentPanelTabs.isEmpty || !controller.acpSessions.isEmpty {
                 HStack {
-                    Picker("Session", selection: $controller.agentPanelTabID) {
-                        ForEach(controller.agentPanelTabs) { tab in Text(tab.title).tag(Optional(tab.id)) }
+                    Picker("Session", selection: Binding(get: { controller.agentSelection }, set: { controller.agentSelection = $0 })) {
+                        ForEach(controller.acpSessions) { session in Text(session.agent.name + " · ACP").tag("acp:" + session.id.uuidString) }
+                        ForEach(controller.agentPanelTabs) { tab in Text(tab.title).tag("terminal:" + tab.id.uuidString) }
                     }.labelsHidden()
                     Button { controller.refreshAgentEdits() } label: { Image(systemName: "arrow.clockwise") }
                         .help("Refresh saved agent edits").accessibilityLabel("Refresh agent edits")
                     Button {
-                        if let id = controller.agentPanelTabID { controller.requestCloseTab(id) }
+                        if let id = controller.selectedACPID { controller.closeACP(id) }
+                        else if let id = controller.agentPanelTabID { controller.requestCloseTab(id) }
                     } label: { Image(systemName: "xmark") }
                         .help("Close agent session").accessibilityLabel("Close agent session")
                 }.buttonStyle(.borderless).padding(.horizontal, 10).frame(height: 32)
-                TerminalViewRepresentable(tabs: controller.agentPanelTabs, selectedTabID: controller.agentPanelTabID)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let session = controller.selectedACP {
+                    ACPConversationView(session: session, contextURL: selectedFileURL, focusChanged: { focused in
+                        if focused { controller.focusedACPID = session.id }
+                        else if controller.focusedACPID == session.id { controller.focusedACPID = nil }
+                    }).id(session.id)
+                } else {
+                    TerminalViewRepresentable(tabs: controller.agentPanelTabs, selectedTabID: controller.agentPanelTabID)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
                 HStack {
-                    Text("Project terminal")
+                    Text(controller.selectedACP == nil ? "Project terminal" : "Agent conversation")
                     Spacer()
-                    Text("\(controller.agentPanelTabs.count) \(controller.agentPanelTabs.count == 1 ? "session" : "sessions")")
+                    let count = controller.agentPanelTabs.count + controller.acpSessions.count
+                    Text("\(count) \(count == 1 ? "session" : "sessions")")
                 }.font(.system(size: 10)).foregroundStyle(NeoLinkTheme.textSecondary)
                     .padding(.horizontal, 10).frame(height: 22)
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Work alongside your code")
                         .font(.system(size: 13, weight: .medium))
-                    Text("Start Claude Code or another installed agent in your project. Keep the editor open while it works.")
+                    Text("Start a native ACP conversation or an agent terminal in your project. Keep the editor open while it works.")
                         .font(.system(size: 12)).foregroundStyle(NeoLinkTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Button(action: launch) {

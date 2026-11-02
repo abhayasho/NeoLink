@@ -70,6 +70,9 @@ final class TabsController: ObservableObject {
     @Published var showAgentPanel = true
     @Published var agentPanelTabID: UUID?
     @Published private(set) var dockedAgentIDs: Set<UUID> = []
+    @Published private(set) var acpSessions: [ACPSession] = []
+    @Published var selectedACPID: UUID?
+    var focusedACPID: UUID?
     let codeSession: NeovimSession
 
     init(useNeovim: Bool = true) {
@@ -83,7 +86,7 @@ final class TabsController: ObservableObject {
         selectedTabID = initial.id
         codeSession.onSnapshot = { [weak self] snapshot in self?.syncEditor(snapshot) }
         codeSession.onEditorFocus = { [weak self] in
-            guard let self, !self.agentPanelTabs.isEmpty else { return }
+            guard let self, (!self.agentPanelTabs.isEmpty || !self.acpSessions.isEmpty) else { return }
             self.refreshAgentEdits()
         }
         codeSession.selectedPath = { [weak self] in
@@ -130,11 +133,39 @@ final class TabsController: ObservableObject {
                               currentDirectory: directory.path, agentName: agent.name)
         tabs.append(.terminal(tab))
         if docked {
+            selectedACPID = nil
             dockedAgentIDs.insert(tab.id)
             agentPanelTabID = tab.id
             showAgentPanel = true
         } else { selectedTabID = tab.id }
     }
+
+    func openACP(_ agent: CodingAgent, in directory: URL, mcpServers: [[String: Any]] = []) throws {
+        guard !isConfirmingClose else { return }
+        guard agent.isValid else { throw AgentLaunchError.invalidCommand }
+        let root = directory.standardizedFileURL.resolvingSymlinksInPath()
+        guard (try? root.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { throw AgentLaunchError.missingDirectory }
+        let session = ACPSession(agent: agent, directory: root, mcpServers: mcpServers)
+        session.onTurnFinished = { [weak self] in self?.refreshAgentEdits() }
+        acpSessions.append(session); selectedACPID = session.id; showAgentPanel = true
+        session.connect()
+    }
+
+    var selectedACP: ACPSession? { acpSessions.first { $0.id == selectedACPID } }
+    var agentSelection: String {
+        get { selectedACPID.map { "acp:" + $0.uuidString } ?? agentPanelTabID.map { "terminal:" + $0.uuidString } ?? "" }
+        set {
+            if newValue.hasPrefix("acp:") { selectedACPID = UUID(uuidString: String(newValue.dropFirst(4))) }
+            else { selectedACPID = nil; agentPanelTabID = UUID(uuidString: String(newValue.dropFirst(9))) }
+        }
+    }
+    func closeACP(_ id: UUID) {
+        acpSessions.first(where: { $0.id == id })?.close()
+        acpSessions.removeAll { $0.id == id }
+        if selectedACPID == id { selectedACPID = acpSessions.last?.id }
+        refreshAgentEdits()
+    }
+    func shutdownAgents() { acpSessions.forEach { $0.close() }; acpSessions = [] }
 
     func refreshAgentEdits() {
         fileRefreshRevision += 1

@@ -41,4 +41,75 @@ final class GitChangesTests: XCTestCase {
         XCTAssertTrue(preview.contains("+new content"))
         XCTAssertEqual(try String(contentsOf: url), "working tree\n")
     }
+    func testGitActionsPreserveWorkingFilesAndOnlyCommitStagedContent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLinkGitActions-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) async throws -> String {
+            let result = try await CommandRunner.run("/usr/bin/git", ["-C", root.path] + args)
+            guard result.status == 0 else { throw GitChanges.Failure.command(String(decoding: result.output, as: UTF8.self)) }
+            return String(decoding: result.output, as: UTF8.self)
+        }
+        _ = try await git(["init", "-q"])
+        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.invalid"), ("commit.gpgsign", "false"), ("core.hooksPath", "/dev/null")] {
+            _ = try await git(["config", key, value])
+        }
+        let path = "file [literal]\nname.txt", url = root.appendingPathComponent("file [literal]\nname.txt")
+        try Data("original\n".utf8).write(to: url)
+        var change = GitChange(path: path, originalPath: nil, index: "?", worktree: "?")
+        try await GitChanges.stage(change, at: root)
+        let currentSnapshot = try await GitChanges.snapshot(at: root)
+        change = try XCTUnwrap(currentSnapshot.changes.first)
+        try await GitChanges.unstage(change, at: root)
+        XCTAssertEqual(try String(contentsOf: url), "original\n")
+        let unstagedSnapshot = try await GitChanges.snapshot(at: root)
+        XCTAssertTrue(unstagedSnapshot.changes.first?.untracked == true)
+        try await GitChanges.stage(change, at: root)
+        try await GitChanges.commit("First commit\n\nLiteral `text` and $(nothing)", at: root)
+        let originalBranch = try await GitChanges.snapshot(at: root).branch
+        try Data("staged\n".utf8).write(to: url)
+        let changedSnapshot = try await GitChanges.snapshot(at: root)
+        change = try XCTUnwrap(changedSnapshot.changes.first)
+        try await GitChanges.stage(change, at: root)
+        try Data("unstaged\n".utf8).write(to: url)
+        try await GitChanges.commit("Only staged changes", at: root)
+        let committed = try await git(["show", "HEAD:" + path])
+        XCTAssertEqual(committed, "staged\n")
+        XCTAssertEqual(try String(contentsOf: url), "unstaged\n")
+        try await GitChanges.switchBranch("feature/test", create: true, at: root)
+        let branchSnapshot = try await GitChanges.snapshot(at: root)
+        XCTAssertEqual(branchSnapshot.branch, "feature/test")
+        XCTAssertEqual(try String(contentsOf: url), "unstaged\n")
+        _ = try await git(["stash", "push", "-m", "Preview stash"])
+        let stashedSnapshot = try await GitChanges.snapshot(at: root)
+        let stash = try XCTUnwrap(stashedSnapshot.stashes.first)
+        let patch = try await GitChanges.stashDiff(stash, at: root)
+        XCTAssertTrue(patch.contains("+unstaged"))
+        try await GitChanges.switchBranch(originalBranch, at: root)
+        do { try await GitChanges.switchBranch("--discard-changes", at: root); XCTFail("Accepted option as branch") } catch {}
+        XCTAssertEqual(try String(contentsOf: url), "staged\n")
+    }
+
+    func testBranchSwitchRefusesConflictingWorkingChanges() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLinkBranches-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) async throws {
+            let result = try await CommandRunner.run("/usr/bin/git", ["-C", root.path] + args)
+            XCTAssertEqual(result.status, 0, String(decoding: result.output, as: UTF8.self))
+        }
+        try await git(["init", "-q", "-b", "main"])
+        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.invalid"), ("commit.gpgsign", "false"), ("core.hooksPath", "/dev/null")] { try await git(["config", key, value]) }
+        let file = root.appendingPathComponent("file.txt")
+        try Data("base\n".utf8).write(to: file)
+        try await git(["add", "."]); try await git(["commit", "-qm", "Base"])
+        try await GitChanges.switchBranch("other", create: true, at: root)
+        try Data("other branch\n".utf8).write(to: file)
+        try await git(["add", "."]); try await git(["commit", "-qm", "Other"])
+        try await GitChanges.switchBranch("main", at: root)
+        try Data("unsaved working file\n".utf8).write(to: file)
+        do { try await GitChanges.switchBranch("other", at: root); XCTFail("Overwrote working changes") } catch {}
+        XCTAssertEqual(try String(contentsOf: file), "unsaved working file\n")
+    }
+
 }

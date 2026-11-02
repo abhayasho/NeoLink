@@ -163,9 +163,15 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
     @objc private func zoomWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.zoom(sender) }
     @objc private func toggleFullScreen(_ sender: NSMenuItem) { NSApp.keyWindow?.toggleFullScreen(sender) }
 
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { !isEditingSheet }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        // Native dialog text fields still need Select All. Workspace shortcuts,
+        // including Shift-Command-G, must defer to the file picker's commands.
+        if menuItem.action == #selector(selectAll(_:)) { return true }
+        return !isEditingSheet
+    }
 
     private var isEditingSheet: Bool {
-        NSApp.mainWindow?.attachedSheet != nil || NSApp.keyWindow?.sheetParent != nil
+        NSApp.modalWindow != nil || NSApp.mainWindow?.attachedSheet != nil || NSApp.keyWindow?.sheetParent != nil
+            || NSApp.windows.contains { $0 is NSSavePanel && $0.isVisible }
     }
 }

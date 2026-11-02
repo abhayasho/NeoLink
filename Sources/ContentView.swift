@@ -89,7 +89,12 @@ struct ContentView: View {
         .sheet(isPresented: $showAgentLauncher) {
             AgentLauncherView(controller: tabsController, directory: access.projectURL)
         }
-        .sheet(item: $gitReview) { value in GitChangesView(directory: value.root, open: tabsController.openFile) }
+        .sheet(item: $gitReview) { value in
+            GitChangesView(directory: value.root, open: tabsController.openFile, prepareMutation: {
+                if tabsController.tabs.contains(where: { $0.document?.usesNeovim == true }), !(await tabsController.codeSession.refresh()) { return false }
+                return !tabsController.tabs.contains(where: { $0.document?.isModified == true || $0.document?.isSaving == true }) && tabsController.codeSession.snapshot?.unnamedModified != true
+            }, didMutate: tabsController.refreshAgentEdits)
+        }
         .alert("Project access", isPresented: Binding(get: { access.error != nil }, set: { if !$0 { access.error = nil } })) {
             Button("OK") { access.error = nil }
         } message: { Text(access.error ?? "") }
@@ -100,7 +105,10 @@ struct ContentView: View {
         .onChange(of: tabsController.showAgentPanel) { savedAgentPanel = $0 }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkToggleAgentPanel)) { _ in tabsController.showAgentPanel.toggle() }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkOpenAgent)) { _ in showAgentLauncher = true }
-        .onReceive(NotificationCenter.default.publisher(for: .neoLinkShowGit)) { _ in showGit() }
+        .onReceive(NotificationCenter.default.publisher(for: .neoLinkShowGit)) { notification in
+            if let root = notification.object as? URL { gitReview = GitPresentation(root: root) }
+            else { showGit() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkOpenREPL)) { notification in
             if let executable = notification.object as? String {
                 tabsController.openREPL(executable, in: access.projectURL ?? FileManager.default.homeDirectoryForCurrentUser)
@@ -128,6 +136,11 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkNewSSHSession)) { _ in newSSHSession() }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkCloseTab)) { _ in
+            if tabsController.showAgentPanel, let id = tabsController.focusedACPID,
+               id == tabsController.selectedACPID, NSApp.keyWindow?.firstResponder is NSTextView {
+                tabsController.closeACP(id)
+                return
+            }
             let focusedAgent = tabsController.agentPanelTabs.first { $0.state.containsResponder(NSApp.keyWindow?.firstResponder) }
             if let id = focusedAgent?.id ?? tabsController.selectedTabID { tabsController.requestCloseTab(id) }
         }

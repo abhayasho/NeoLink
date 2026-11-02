@@ -4,6 +4,8 @@ struct AgentLauncherView: View {
     @ObservedObject var controller: TabsController
     @State var directory: URL?
     @Environment(\.dismiss) private var dismiss
+    @State private var acp = false
+    @State private var mcpJSON = ""
     @State private var custom = false
     @State private var continueSession = false
     @State private var docked = true
@@ -13,7 +15,7 @@ struct AgentLauncherView: View {
     @State private var error: String?
 
     private var agent: CodingAgent {
-        if !custom { return .claude(continueSession: continueSession) }
+        if !custom { return acp ? CodingAgent(name: "Claude", executable: "claude-agent-acp") : .claude(continueSession: continueSession) }
         return CodingAgent(name: customName.trimmingCharacters(in: .whitespacesAndNewlines),
                            executable: customExecutable.trimmingCharacters(in: .whitespacesAndNewlines),
                            arguments: arguments.components(separatedBy: .newlines).filter { !$0.isEmpty })
@@ -22,7 +24,11 @@ struct AgentLauncherView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Label("Coding agent", systemImage: "sparkles").font(.system(size: 19, weight: .semibold))
-            Text("Run an agent in its own project terminal.").foregroundStyle(NeoLinkTheme.textSecondary)
+            Picker("Interface", selection: $acp) {
+                Text("Terminal").tag(false)
+                Text("Native conversation (ACP)").tag(true)
+            }.pickerStyle(.segmented)
+            Text(acp ? "Connect an installed ACP adapter. The agent manages models and authentication." : "Run an agent in its own project terminal.").font(.caption).foregroundStyle(NeoLinkTheme.textSecondary)
             Picker("Agent", selection: $custom) {
                 Text("Claude Code").tag(false)
                 Text("Custom CLI").tag(true)
@@ -37,15 +43,24 @@ struct AgentLauncherView: View {
                     Text("Each line is passed literally. Arguments are not saved.").font(.caption).foregroundStyle(NeoLinkTheme.textSecondary)
                 }
             } else {
-                Toggle("Continue the last conversation in this project", isOn: $continueSession)
-                if CommandRunner.executable("claude") == nil {
+                if !acp { Toggle("Continue the last conversation in this project", isOn: $continueSession) }
+                if acp {
+                    Text("Requires the claude-agent-acp adapter. A regular claude executable belongs in Terminal mode.").font(.caption).foregroundStyle(NeoLinkTheme.textSecondary)
+                    Link("ACP adapter setup", destination: URL(string: "https://github.com/agentclientprotocol/claude-agent-acp")!)
+                } else if CommandRunner.executable("claude") == nil {
                     Text("Claude Code was not found in common install locations. Your shell’s PATH is also checked when you launch.")
                         .font(.caption).foregroundStyle(NeoLinkTheme.warning)
                 }
                 Link("Claude Code setup guide", destination: URL(string: "https://code.claude.com/docs/en/quickstart")!)
             }
             NeoLinkTheme.horizontalSeparator()
-            Toggle("Open alongside the editor", isOn: $docked)
+            if !acp { Toggle("Open alongside the editor", isOn: $docked) }
+            if acp {
+                DisclosureGroup("MCP servers · optional") {
+                    Text("JSON array of stdio servers: name, absolute command, args, env. Sent to this agent when connecting; not saved.").font(.caption).foregroundStyle(NeoLinkTheme.textSecondary)
+                    TextEditor(text: $mcpJSON).font(.system(size: 10, design: .monospaced)).frame(height: 70).accessibilityLabel("MCP servers JSON")
+                }.font(.caption)
+            }
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Project folder").font(.caption).foregroundStyle(NeoLinkTheme.textSecondary)
@@ -57,16 +72,17 @@ struct AgentLauncherView: View {
                     WorkspaceAccess.shared.chooseFolder { directory = $0 }
                 }
             }
-            Text("Agents use files saved on disk. Save your edits before requesting changes. Sign in and approve actions in the agent’s terminal.")
+            Text(acp ? "The adapter runs with your account’s access. Save edits before requesting changes. Tool permissions appear in the conversation; authentication and provider settings belong to the adapter." : "Agents use files saved on disk. Save your edits before requesting changes. Sign in and approve actions in the agent’s terminal.")
                 .font(.caption).foregroundStyle(NeoLinkTheme.textSecondary).fixedSize(horizontal: false, vertical: true)
             if let error { Text(error).foregroundStyle(NeoLinkTheme.warning).font(.caption) }
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(docked ? "Launch in Panel" : "Launch in Tab") {
+                Button(acp ? "Connect Agent" : (docked ? "Launch in Panel" : "Launch in Tab")) {
                     guard let directory else { return }
                     do {
-                        try controller.openAgent(agent, in: directory, docked: docked)
+                        if acp { try controller.openACP(agent, in: directory, mcpServers: ACPSession.parseMCP(mcpJSON)) }
+                        else { try controller.openAgent(agent, in: directory, docked: docked) }
                         dismiss()
                     } catch { self.error = error.localizedDescription }
                 }
