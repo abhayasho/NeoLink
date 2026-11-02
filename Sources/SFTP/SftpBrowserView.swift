@@ -2,8 +2,10 @@ import SwiftUI
 import SSHClient
 
 struct SftpBrowserView: View {
+    @EnvironmentObject private var tabsController: TabsController
     @ObservedObject var viewModel: SftpBrowserViewModel
     let connection: SSHConnection
+    let endpoint: String
 
     @State private var nameEditor: NameEditor?
     @State private var nameText = ""
@@ -16,6 +18,7 @@ struct SftpBrowserView: View {
     private struct NameEditor: Identifiable {
         let id = UUID()
         let item: SftpItem?
+        var isDirectory = true
     }
 
     private var visibleItems: [SftpItem] {
@@ -44,10 +47,11 @@ struct SftpBrowserView: View {
                 .disabled(isBusy)
                 toolbarButton("Upload files or folders", icon: "arrow.up.doc") { upload() }
                     .disabled(isBusy)
-                toolbarButton("New remote folder", icon: "folder.badge.plus") {
-                    nameText = ""
-                    nameEditor = NameEditor(item: nil)
-                }
+                Menu {
+                    Button("New File…") { nameText = ""; nameEditor = NameEditor(item: nil, isDirectory: false) }
+                    Button("New Folder…") { nameText = ""; nameEditor = NameEditor(item: nil) }
+                } label: { Image(systemName: "plus") }
+                .menuStyle(.borderlessButton).fixedSize().help("Create remote file or folder")
                 .disabled(isBusy)
             }
             .padding(.horizontal, 3)
@@ -102,7 +106,7 @@ struct SftpBrowserView: View {
             if let error = viewModel.lastError {
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: "exclamationmark.circle")
-                        .foregroundColor(.orange)
+                        .foregroundColor(NeoLinkTheme.warning)
                     Text(error)
                         .foregroundColor(NeoLinkTheme.textPrimary)
                         .textSelection(.enabled)
@@ -115,7 +119,7 @@ struct SftpBrowserView: View {
                 }
                 .font(.system(size: 10))
                 .padding(8)
-                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                .background(NeoLinkTheme.warning.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
             }
 
             HStack(spacing: 6) {
@@ -189,6 +193,7 @@ struct SftpBrowserView: View {
     private func row(for item: SftpItem) -> some View {
         Button {
             if item.isDirectory { Task { await viewModel.navigateInto(item, using: connection) } }
+            else { open(item) }
         } label: {
             HStack(spacing: 9) {
                 Image(systemName: item.isDirectory ? "folder.fill" : "doc")
@@ -225,6 +230,7 @@ struct SftpBrowserView: View {
                 Button("Open") { Task { await viewModel.navigateInto(item, using: connection) } }
                 Button("Download folder…") { downloadFolder(item: item) }
             } else {
+                Button("Open in Tab") { open(item) }
                 Button("Download…") { download(item: item) }
             }
             Divider()
@@ -241,7 +247,7 @@ struct SftpBrowserView: View {
 
     private func nameSheet(_ editor: NameEditor) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label(editor.item == nil ? "New remote folder" : "Rename remote item", systemImage: editor.item == nil ? "folder.badge.plus" : "pencil")
+            Label(editor.item == nil ? (editor.isDirectory ? "New remote folder" : "New remote file") : "Rename remote item", systemImage: editor.item == nil ? "plus" : "pencil")
                 .font(.headline)
             TextField("Name", text: $nameText)
                 .textFieldStyle(.roundedBorder)
@@ -250,8 +256,9 @@ struct SftpBrowserView: View {
                 Spacer()
                 Button("Cancel") { nameEditor = nil }
                     .keyboardShortcut(.cancelAction)
-                Button(editor.item == nil ? "Create folder" : "Rename") { saveName(editor) }
+                Button(editor.item == nil ? "Create" : "Rename") { saveName(editor) }
                     .buttonStyle(.borderedProminent)
+                    .foregroundStyle(NeoLinkTheme.editorBackground)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!RemotePath.isValidName(nameText.trimmingCharacters(in: .whitespacesAndNewlines)))
             }
@@ -260,14 +267,20 @@ struct SftpBrowserView: View {
         .frame(width: 320)
     }
 
+    private func open(_ item: SftpItem) {
+        tabsController.openDocument(WorkspaceDocument(item: item, connection: connection, endpoint: endpoint, browserTabID: tabsController.browserTab?.id))
+    }
+
     private func saveName(_ editor: NameEditor) {
         let name = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard RemotePath.isValidName(name) else { return }
         Task {
             if let item = editor.item {
                 await viewModel.rename(item, to: name, using: connection)
-            } else {
+            } else if editor.isDirectory {
                 await viewModel.createDirectory(named: name, using: connection)
+            } else {
+                await viewModel.createFile(named: name, using: connection)
             }
         }
         nameEditor = nil

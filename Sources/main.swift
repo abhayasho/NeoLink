@@ -1,14 +1,17 @@
 import AppKit
 import SwiftUI
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow?
+    private let tabsController = TabsController()
+    private var approvedWindowClose = false
     private let commands = WorkspaceCommands()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         commands.install()
-        let contentView = ContentView()
+        let contentView = ContentView(tabsController: tabsController)
         let hosting = NSHostingController(rootView: contentView)
         if #available(macOS 13.3, *) {
             hosting.safeAreaRegions = []
@@ -38,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.minSize = NSSize(width: 900, height: 560)
         window.setFrameAutosaveName("NeoLinkMainWindow")
         window.contentViewController = hosting
+        window.delegate = self
         window.makeKeyAndOrderFront(nil)
 
         self.window = window
@@ -49,10 +53,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
+
+    func applicationWillTerminate(_ notification: Notification) { tabsController.codeSession.shutdown() }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if approvedWindowClose { return true }
+        tabsController.approveClosingAll { [weak self, weak sender] approved in
+            guard approved, let self, let sender else { return }
+            self.approvedWindowClose = true
+            sender.performClose(nil)
+        }
+        return false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if approvedWindowClose { return .terminateNow }
+        tabsController.approveClosingAll { sender.reply(toApplicationShouldTerminate: $0) }
+        return .terminateLater
+    }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.run()
+}
 

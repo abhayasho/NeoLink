@@ -3,7 +3,9 @@ import SwiftUI
 struct SessionSidebar: View {
     @EnvironmentObject private var sessionManager: SessionManager
     @EnvironmentObject private var tabsController: TabsController
-    @State private var sessionToEdit: Session?
+    let onClose: () -> Void
+    let onNewConnection: () -> Void
+    let onEditConnection: (Session) -> Void
     @State private var search = ""
 
     private var savedSessions: [Session] {
@@ -55,10 +57,14 @@ struct SessionSidebar: View {
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(1.2)
                 Spacer()
-                Button(action: newSSHSession) { Image(systemName: "plus") }
+                Button(action: onNewConnection) { Image(systemName: "plus") }
                     .buttonStyle(WorkspaceIconButtonStyle())
                     .help("New SSH connection (⇧⌘N)")
                     .accessibilityLabel("New SSH connection")
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .buttonStyle(WorkspaceIconButtonStyle())
+                    .help("Close connections sidebar (⌃⌘S)")
+                    .accessibilityLabel("Close connections sidebar")
             }
             .foregroundStyle(NeoLinkTheme.textSecondary)
             .padding(.leading, 18)
@@ -100,7 +106,7 @@ struct SessionSidebar: View {
                                 .font(.system(size: 11))
                                 .fixedSize(horizontal: false, vertical: true)
                             if search.isEmpty {
-                                Button("Add connection", action: newSSHSession)
+                                Button("Add connection", action: onNewConnection)
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundStyle(NeoLinkTheme.accent)
                                     .buttonStyle(.plain)
@@ -127,26 +133,10 @@ struct SessionSidebar: View {
         .foregroundStyle(NeoLinkTheme.textPrimary)
         .frame(maxHeight: .infinity)
         .background(NeoLinkTheme.sidebarBackground)
-        .onReceive(NotificationCenter.default.publisher(for: .neoLinkNewSSHSession)) { _ in newSSHSession() }
-        .sheet(item: $sessionToEdit) { session in
-            SessionEditSheet(
-                session: session,
-                isNew: !sessionManager.sessions.contains(where: { $0.id == session.id }),
-                onSave: { updated in
-                    if sessionManager.sessions.contains(where: { $0.id == updated.id }) {
-                        sessionManager.update(session: updated)
-                    } else {
-                        sessionManager.add(session: updated)
-                    }
-                    sessionToEdit = nil
-                },
-                onCancel: { sessionToEdit = nil }
-            )
-        }
     }
 
     private func sessionRow(_ session: Session) -> some View {
-        let isSelected = tabsController.selectedTab.map { tab in
+        let isSelected = tabsController.browserTab.map { tab in
             tab.configuration.backend == .ssh(host: session.host ?? "", username: session.username ?? NSUserName(), port: session.port ?? 22)
         } ?? false
         return Button { open(session: session) } label: {
@@ -169,7 +159,7 @@ struct SessionSidebar: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 11)
-            .background(isSelected ? NeoLinkTheme.selectionBlue : Color.clear)
+            .background(isSelected ? NeoLinkTheme.selection : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
@@ -178,15 +168,11 @@ struct SessionSidebar: View {
         .contextMenu {
             Button("Open in new tab") { open(session: session) }
             Button("Edit connection…") {
-                sessionToEdit = session
+                onEditConnection(session)
             }
             Divider()
             Button("Remove connection", role: .destructive) { sessionManager.remove(session: session) }
         }
-    }
-
-    private func newSSHSession() {
-        sessionToEdit = Session(id: UUID(), name: "", type: .ssh, host: "", port: 22, username: NSUserName())
     }
 
     private func open(session: Session) {

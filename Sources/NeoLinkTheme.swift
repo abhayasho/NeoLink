@@ -2,22 +2,23 @@ import SwiftUI
 
 /// Shared surfaces, typography and interaction colors for the workspace.
 enum NeoLinkTheme {
-    static let editorBackground = Color(hex: 0x11151D)
-    static let sidebarBackground = Color(hex: 0x171C26)
-    static let panelBackground = Color(hex: 0x1B222E)
-    static let elevated = Color(hex: 0x232D3B)
+    static let editorBackground = Color(hex: 0x171717)
+    static let sidebarBackground = Color(hex: 0x181818)
+    static let panelBackground = Color(hex: 0x1C1C1C)
+    static let elevated = Color(hex: 0x262626)
     static let surface = panelBackground
-    static let selectionBlue = Color(hex: 0x263F4A)
+    static let selection = Color(hex: 0x343434)
     static let listHover = Color.white.opacity(0.055)
     static let rowFill = Color.clear
     static let separator = Color.white.opacity(0.075)
     static let divider = separator
     static let panelBorder = Color.white.opacity(0.09)
-    static let textPrimary = Color(hex: 0xE7EDF5)
-    static let textSecondary = Color(hex: 0x939FB1)
-    static let accent = Color(hex: 0x72DCC5)
-    static let success = Color(hex: 0x80CFAC)
-    static let warning = Color(hex: 0xE9BD78)
+    static let textPrimary = Color(hex: 0xD8D8D8)
+    static let textSecondary = Color(hex: 0x969696)
+    static let accent = Color(hex: 0xC4C4C4)
+    static let success = Color(hex: 0xA4B29B)
+    static let warning = Color(hex: 0xC6B28E)
+    static let error = Color(hex: 0xCC9595)
     static let rowHover = listHover
     static let rowHoverWhite = listHover
     static let background = editorBackground
@@ -53,7 +54,7 @@ struct WorkspaceIconButtonStyle: ButtonStyle {
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(configuration.isPressed ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
             .frame(width: 28, height: 28)
-            .background(configuration.isPressed ? NeoLinkTheme.selectionBlue : Color.clear)
+            .background(configuration.isPressed ? NeoLinkTheme.selection : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
     }

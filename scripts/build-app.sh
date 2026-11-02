@@ -31,6 +31,7 @@ chmod +x "$APP/Contents/MacOS/$APP_NAME"
 
 # Copy Info.plist
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
+cp -R "$ROOT/Resources/Editor" "$APP/Contents/Resources/Editor"
 
 # The source is already framed on a square, transparent canvas. Preserve it as-is:
 # cropping or flattening it adds padding, clips artwork, or creates a second tile.
@@ -58,6 +59,8 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/$ICON_NAME.icns"
 echo "App icon created."
+
+bash "$ROOT/scripts/sign-app.sh" "$APP"
 
 echo "Done: $APP"
 echo "You can double-click NeoLink.app or drag it to Applications."

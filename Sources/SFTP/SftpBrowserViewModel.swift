@@ -88,6 +88,14 @@ final class SftpBrowserViewModel: ObservableObject {
         }
     }
 
+    func createFile(named name: String, using connection: SSHConnection) async {
+        guard validate(name: name) else { return }
+        let path = RemotePath.appending(name, to: currentPath)
+        await perform("Creating file…", using: connection, refresh: true) {
+            try await SftpManager.shared.createFile(connection: connection, path: path)
+        }
+    }
+
     func upload(localURLs: [URL], using connection: SSHConnection) async {
         guard !localURLs.isEmpty else { return }
         let destination = currentPath

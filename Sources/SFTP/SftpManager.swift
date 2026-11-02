@@ -66,6 +66,13 @@ final class SftpManager {
         try await client.createDirectory(at: SFTPFilePath(path))
     }
 
+    func createFile(connection: SSHConnection, path: String) async throws {
+        let client = try await client(for: connection)
+        // EXCL is essential: creating a file must never truncate an existing one.
+        let file = try await client.openFile(at: SFTPFilePath(path), flags: [.create, .write, .forceCreate])
+        try await file.close()
+    }
+
     func delete(item: SftpItem, connection: SSHConnection) async throws {
         let client = try await client(for: connection)
         if item.isDirectory {
@@ -139,7 +146,7 @@ final class SftpManager {
         }
     }
 
-    func downloadFile(connection: SSHConnection, item: SftpItem, to localURL: URL) async throws {
+    func downloadFile(connection: SSHConnection, item: SftpItem, to localURL: URL, maximumBytes: UInt64? = nil) async throws {
         let client = try await client(for: connection)
         try await transfer {
             // Write beside the destination, replacing it only after a successful transfer.
@@ -158,6 +165,9 @@ final class SftpManager {
                     try Task.checkCancellation()
                     let data = try await file.read(from: offset, length: 256 * 1024)
                     if data.isEmpty { break }
+                    if let maximumBytes, offset + UInt64(data.count) > maximumBytes {
+                        throw DocumentFileError.tooLarge
+                    }
                     try output.write(contentsOf: data)
                     offset += UInt64(data.count)
                 }

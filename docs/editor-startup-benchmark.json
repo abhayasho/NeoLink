@@ -1,0 +1,84 @@
+{
+  "neovim_clean": {
+    "median_ms": 16.73,
+    "median_peak_MB": 11.31,
+    "runs": [
+      {
+        "ms": 1146.07,
+        "peak_bytes": 11763712,
+        "exit": 0
+      },
+      {
+        "ms": 20.26,
+        "peak_bytes": 11878400,
+        "exit": 0
+      },
+      {
+        "ms": 18.03,
+        "peak_bytes": 11862016,
+        "exit": 0
+      },
+      {
+        "ms": 16.39,
+        "peak_bytes": 11960320,
+        "exit": 0
+      },
+      {
+        "ms": 16.0,
+        "peak_bytes": 11960320,
+        "exit": 0
+      },
+      {
+        "ms": 16.73,
+        "peak_bytes": 11780096,
+        "exit": 0
+      },
+      {
+        "ms": 15.82,
+        "peak_bytes": 11747328,
+        "exit": 0
+      }
+    ]
+  },
+  "emacs_clean": {
+    "median_ms": 68.23,
+    "median_peak_MB": 34.56,
+    "runs": [
+      {
+        "ms": 265.03,
+        "peak_bytes": 36356096,
+        "exit": 0
+      },
+      {
+        "ms": 70.92,
+        "peak_bytes": 36241408,
+        "exit": 0
+      },
+      {
+        "ms": 71.15,
+        "peak_bytes": 36126720,
+        "exit": 0
+      },
+      {
+        "ms": 68.23,
+        "peak_bytes": 36012032,
+        "exit": 0
+      },
+      {
+        "ms": 67.81,
+        "peak_bytes": 36077568,
+        "exit": 0
+      },
+      {
+        "ms": 67.52,
+        "peak_bytes": 36241408,
+        "exit": 0
+      },
+      {
+        "ms": 68.14,
+        "peak_bytes": 36290560,
+        "exit": 0
+      }
+    ]
+  }
+}

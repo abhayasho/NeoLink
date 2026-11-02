@@ -2,6 +2,12 @@ import AppKit
 
 extension Notification.Name {
     static let neoLinkNewTab = Notification.Name("NeoLink.newTab")
+    static let neoLinkOpenFile = Notification.Name("NeoLink.openFile")
+    static let neoLinkSaveFile = Notification.Name("NeoLink.saveFile")
+    static let neoLinkOpenProject = Notification.Name("NeoLink.openProject")
+    static let neoLinkCodeAction = Notification.Name("NeoLink.codeAction")
+    static let neoLinkQuickOpen = Notification.Name("NeoLink.quickOpen")
+    static let neoLinkFindInFiles = Notification.Name("NeoLink.findInFiles")
     static let neoLinkCloseTab = Notification.Name("NeoLink.closeTab")
     static let neoLinkNextTab = Notification.Name("NeoLink.nextTab")
     static let neoLinkPreviousTab = Notification.Name("NeoLink.previousTab")
@@ -28,6 +34,11 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         command("New Local Tab", name: .neoLinkNewTab, key: "t", to: file)
         command("New SSH Connection…", name: .neoLinkNewSSHSession, key: "n", modifiers: [.command, .shift], to: file)
         file.addItem(.separator())
+        command("Open File…", name: .neoLinkOpenFile, key: "o", to: file)
+        command("Open Project…", name: .neoLinkOpenProject, key: "o", modifiers: [.command, .shift], to: file)
+        command("Save File", name: .neoLinkSaveFile, key: "s", to: file)
+        command("Quick Open…", name: .neoLinkQuickOpen, key: "p", to: file)
+        file.addItem(.separator())
         command("Close Tab", name: .neoLinkCloseTab, key: "w", to: file)
         add("Close Window", action: #selector(closeWindow(_:)), key: "w", modifiers: [.command, .shift], target: self, to: file)
         attach(file, to: main)
@@ -39,8 +50,22 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         add("Cut", action: #selector(NSText.cut(_:)), key: "x", to: edit)
         add("Copy", action: #selector(NSText.copy(_:)), key: "c", to: edit)
         add("Paste", action: #selector(NSText.paste(_:)), key: "v", to: edit)
-        add("Select All", action: #selector(NSText.selectAll(_:)), key: "a", to: edit)
+        add("Select All", action: #selector(selectAll(_:)), key: "a", target: self, to: edit)
+        edit.addItem(.separator())
+        let find = NSMenuItem(title: "Find…", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "f")
+        find.tag = NSTextFinder.Action.showFindInterface.rawValue
+        edit.addItem(find)
+        command("Find in Files…", name: .neoLinkFindInFiles, key: "f", modifiers: [.command, .shift], to: edit)
         attach(edit, to: main)
+
+        let code = NSMenu(title: "Code")
+        for (title, action) in [("Go to Definition", "definition"), ("Find References", "references"), ("Show Documentation", "hover"), ("Rename Symbol…", "rename"), ("Code Actions…", "codeAction"), ("Format Document", "format"), ("Show Diagnostics", "diagnostics")] {
+            let item = NSMenuItem(title: title, action: #selector(codeAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = action
+            code.addItem(item)
+        }
+        attach(code, to: main)
 
         let view = NSMenu(title: "View")
         command("Toggle Connections Sidebar", name: .neoLinkToggleSidebar, key: "s", modifiers: [.command, .control], to: view)
@@ -89,8 +114,17 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         NotificationCenter.default.post(name: Notification.Name(name), object: nil)
     }
 
+    @objc private func codeAction(_ sender: NSMenuItem) {
+        NotificationCenter.default.post(name: .neoLinkCodeAction, object: sender.representedObject)
+    }
+
+    @objc private func selectAll(_ sender: NSMenuItem) {
+        if let editor = NSApp.keyWindow?.firstResponder as? CodeTerminalView { editor.selectCode(sender) }
+        else { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: sender) }
+    }
+
     // Keep menu and keyboard window actions available alongside the native buttons.
-    @objc private func closeWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.close() }
+    @objc private func closeWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.performClose(sender) }
     @objc private func minimizeWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.miniaturize(sender) }
     @objc private func zoomWindow(_ sender: NSMenuItem) { NSApp.keyWindow?.zoom(sender) }
     @objc private func toggleFullScreen(_ sender: NSMenuItem) { NSApp.keyWindow?.toggleFullScreen(sender) }

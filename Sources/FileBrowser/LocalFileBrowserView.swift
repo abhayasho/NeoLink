@@ -68,6 +68,20 @@ enum LocalFileError: LocalizedError {
 /// File mutations are serialized away from the UI. Copying always chooses a new destination;
 /// an existing file, including the source itself, is never removed to make room.
 actor LocalFileOperations {
+    static func validName(_ name: String) -> Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !name.contains("/") && !name.contains("\0") && name != "." && name != ".."
+    }
+
+    func create(named name: String, in folder: URL, isDirectory: Bool) throws -> URL {
+        guard Self.validName(name) else { throw LocalFileError.invalidName }
+        let url = folder.appendingPathComponent(name, isDirectory: isDirectory)
+        if isDirectory {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        } else {
+            try Data().write(to: url, options: .withoutOverwriting)
+        }
+        return url
+    }
     private static let resourceKeys: Set<URLResourceKey> = [
         .isDirectoryKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey
     ]
@@ -283,8 +297,19 @@ final class LocalFileBrowserViewModel: ObservableObject {
         }
     }
 
-    func open(item: LocalFileItem) {
-        if item.isDirectory { navigate(to: item) } else { NSWorkspace.shared.open(item.url) }
+    func create(named name: String, in folder: URL, isDirectory: Bool) async -> URL? {
+        guard !isWorking else { return nil }
+        isWorking = true
+        lastError = nil
+        defer { isWorking = false }
+        do {
+            let result = try await fileOperations.create(named: name, in: folder, isDirectory: isDirectory)
+            if currentURL == folder { load() }
+            return result
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
     }
 
     func copyToCurrentDirectory(from sourceURL: URL) {
@@ -320,12 +345,21 @@ final class LocalFileBrowserViewModel: ObservableObject {
 }
 
 struct LocalFileBrowserView: View {
+    @EnvironmentObject private var tabsController: TabsController
     @ObservedObject var viewModel: LocalFileBrowserViewModel
     @ObservedObject var terminalState: TerminalState
     @State private var renameItem: LocalFileItem?
     @State private var renameText = ""
     @State private var hoveredID: URL?
     @State private var isDropTargeted = false
+    @State private var creation: Creation?
+    @State private var newName = ""
+
+    private struct Creation: Identifiable {
+        let id = UUID()
+        let directory: URL
+        let isDirectory: Bool
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -342,15 +376,29 @@ struct LocalFileBrowserView: View {
                         .help("Dismiss error")
                 }
                 .font(.system(size: 11))
-                .foregroundColor(.orange)
+                .foregroundColor(NeoLinkTheme.warning)
                 .padding(8)
-                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                .background(NeoLinkTheme.warning.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
             }
 
             fileList
             footer
         }
         .sheet(item: $renameItem) { item in renameSheet(item: item) }
+        .sheet(item: $creation) { item in
+            VStack(alignment: .leading, spacing: 16) {
+                Label(item.isDirectory ? "New Folder" : "New File", systemImage: item.isDirectory ? "folder.badge.plus" : "doc.badge.plus").font(.headline)
+                Text(item.directory.path).font(.caption).foregroundColor(NeoLinkTheme.textSecondary).lineLimit(1).truncationMode(.middle)
+                TextField(item.isDirectory ? "Folder name" : "File name, e.g. main.py", text: $newName)
+                    .textFieldStyle(.roundedBorder).onSubmit { create(item) }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { creation = nil }.keyboardShortcut(.cancelAction)
+                    Button("Create") { create(item) }.keyboardShortcut(.defaultAction)
+                        .disabled(!LocalFileOperations.validName(newName))
+                }
+            }.padding(24).frame(width: 360)
+        }
     }
 
     private var navigationBar: some View {
@@ -361,6 +409,13 @@ struct LocalFileBrowserView: View {
             .buttonStyle(.plain)
             .disabled(viewModel.currentURL.path == "/")
             .help("Open parent folder")
+            Menu {
+                Button("New File…") { beginCreate(in: viewModel.currentURL, isDirectory: false) }
+                Button("New Folder…") { beginCreate(in: viewModel.currentURL, isDirectory: true) }
+            } label: { Image(systemName: "plus").frame(width: 22, height: 24) }
+            .menuStyle(.borderlessButton)
+            .help("Create file or folder")
+            .disabled(viewModel.isWorking)
             Menu {
                 Button("Home", systemImage: "house") {
                     viewModel.navigate(to: FileManager.default.homeDirectoryForCurrentUser)
@@ -503,7 +558,7 @@ struct LocalFileBrowserView: View {
     }
 
     private func row(for item: LocalFileItem) -> some View {
-        Button { viewModel.open(item: item) } label: {
+        Button { open(item) } label: {
             HStack(spacing: 9) {
                 Image(systemName: item.isDirectory ? "folder.fill" : fileIcon(for: item))
                     .foregroundColor(item.isDirectory ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
@@ -534,7 +589,14 @@ struct LocalFileBrowserView: View {
         .help(item.url.path)
         .onHover { hoveredID = $0 ? item.id : (hoveredID == item.id ? nil : hoveredID) }
         .contextMenu {
-            Button("Open") { viewModel.open(item: item) }
+            Button(item.isDirectory ? "Open" : "Open in Tab") { open(item) }
+            if item.isDirectory {
+                Button("New File Here…") { beginCreate(in: item.url, isDirectory: false) }
+                Button("New Folder Here…") { beginCreate(in: item.url, isDirectory: true) }
+            }
+            if !item.isDirectory {
+                Button("Open in Default App") { NSWorkspace.shared.open(item.url) }
+            }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
             Divider()
             Button("Copy") { viewModel.copy(item: item) }
@@ -558,6 +620,27 @@ struct LocalFileBrowserView: View {
         case "zip", "gz", "tar": return "doc.zipper"
         case "pdf": return "doc.richtext"
         default: return "doc.text"
+        }
+    }
+
+    private func open(_ item: LocalFileItem) {
+        if item.isDirectory { viewModel.navigate(to: item) }
+        else { tabsController.openFile(item.url) }
+    }
+
+    private func beginCreate(in directory: URL, isDirectory: Bool) {
+        newName = ""
+        creation = Creation(directory: directory, isDirectory: isDirectory)
+    }
+
+    private func create(_ item: Creation) {
+        guard LocalFileOperations.validName(newName) else { return }
+        let name = newName
+        creation = nil
+        Task {
+            if let url = await viewModel.create(named: name, in: item.directory, isDirectory: item.isDirectory), !item.isDirectory {
+                tabsController.openFile(url)
+            }
         }
     }
 

@@ -6,6 +6,7 @@ struct FileBrowserPane: View {
     @EnvironmentObject private var sftpConnectionPool: SftpConnectionPool
 
     @ObservedObject var localVM: LocalFileBrowserViewModel
+    let onClose: () -> Void
 
     private var remoteEndpoint: (username: String, host: String, port: Int)? {
         switch backend {
@@ -33,9 +34,13 @@ struct FileBrowserPane: View {
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(NeoLinkTheme.rowFill, in: Capsule())
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .buttonStyle(WorkspaceIconButtonStyle())
+                    .help("Close file browser (⇧⌘E)")
+                    .accessibilityLabel("Close file browser")
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            .padding(.vertical, 8)
 
             NeoLinkTheme.horizontalSeparator()
 
@@ -136,7 +141,7 @@ private struct SftpPaneContent: View {
             .padding(.top, 2)
 
             if let connection = holder.connection {
-                SftpBrowserView(viewModel: holder.browser, connection: connection)
+                SftpBrowserView(viewModel: holder.browser, connection: connection, endpoint: "\(holder.username)@\(holder.host):\(holder.port)")
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     Image(systemName: "folder.badge.person.crop")
@@ -158,7 +163,7 @@ private struct SftpPaneContent: View {
                     if let error = holder.lastError {
                         Text(error)
                             .font(.system(size: 11))
-                            .foregroundColor(.red.opacity(0.9))
+                            .foregroundColor(NeoLinkTheme.error)
                             .textSelection(.enabled)
                     }
                     HStack {
@@ -170,6 +175,7 @@ private struct SftpPaneContent: View {
                             .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
+                        .foregroundStyle(NeoLinkTheme.editorBackground)
                         .disabled(holder.isConnecting || password.isEmpty)
                         if holder.isConnecting {
                             Button("Cancel") { holder.disconnect() }

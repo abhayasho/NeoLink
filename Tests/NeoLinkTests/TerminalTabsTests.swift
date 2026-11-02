@@ -1,6 +1,7 @@
 import XCTest
 @testable import NeoLink
 
+@MainActor
 final class TerminalTabsTests: XCTestCase {
     func testOSCWorkingDirectoryURLsBecomeDecodedFilePaths() {
         XCTAssertEqual(TerminalState.directoryPath(from: "file://localhost/Users/test/My%20Project"), "/Users/test/My Project")
@@ -11,32 +12,32 @@ final class TerminalTabsTests: XCTestCase {
     }
 
     func testSwitchingTabsKeepsSeparateDirectoryTitleAndPendingCommands() throws {
-        let controller = TabsController()
-        let first = try XCTUnwrap(controller.selectedTab)
+        let controller = TabsController(useNeovim: false)
+        let first = try XCTUnwrap(controller.selectedTerminalTab)
         first.state.currentDirectory = "/tmp/first"
         first.state.terminalTitle = "First shell"
         first.state.pendingCommand = "echo first\n"
 
         controller.openTab(title: "Remote", configuration: TerminalConfiguration(backend: .ssh(host: "example.com", username: "test", port: 22)))
-        let second = try XCTUnwrap(controller.selectedTab)
+        let second = try XCTUnwrap(controller.selectedTerminalTab)
         second.state.currentDirectory = "/home/test"
         second.state.terminalTitle = "test@example.com"
         second.state.pendingCommand = "echo second\n"
         XCTAssertFalse(first.state === second.state)
 
         controller.selectedTabID = first.id
-        XCTAssertTrue(controller.selectedTab?.state === first.state)
-        XCTAssertEqual(controller.selectedTab?.state.currentDirectory, "/tmp/first")
-        XCTAssertEqual(controller.selectedTab?.state.terminalTitle, "First shell")
-        XCTAssertEqual(controller.selectedTab?.state.pendingCommand, "echo first\n")
+        XCTAssertTrue(controller.selectedTerminalTab?.state === first.state)
+        XCTAssertEqual(controller.selectedTerminalTab?.state.currentDirectory, "/tmp/first")
+        XCTAssertEqual(controller.selectedTerminalTab?.state.terminalTitle, "First shell")
+        XCTAssertEqual(controller.selectedTerminalTab?.state.pendingCommand, "echo first\n")
         XCTAssertEqual(second.state.pendingCommand, "echo second\n")
     }
 
     func testOpeningAndSwitchingTabsDoesNotStartTheirProcesses() throws {
-        let controller = TabsController()
-        let first = try XCTUnwrap(controller.selectedTab)
+        let controller = TabsController(useNeovim: false)
+        let first = try XCTUnwrap(controller.selectedTerminalTab)
         controller.openLocalTab()
-        let second = try XCTUnwrap(controller.selectedTab)
+        let second = try XCTUnwrap(controller.selectedTerminalTab)
         controller.selectedTabID = first.id
         XCTAssertFalse(first.state.hasStarted)
         XCTAssertFalse(second.state.hasStarted)
@@ -45,12 +46,12 @@ final class TerminalTabsTests: XCTestCase {
     }
 
     func testClosingSelectedTabChoosesNeighborAndDisposesState() throws {
-        let controller = TabsController()
-        let first = try XCTUnwrap(controller.selectedTab)
+        let controller = TabsController(useNeovim: false)
+        let first = try XCTUnwrap(controller.selectedTerminalTab)
         controller.openLocalTab()
-        let middle = try XCTUnwrap(controller.selectedTab)
+        let middle = try XCTUnwrap(controller.selectedTerminalTab)
         controller.openLocalTab()
-        let last = try XCTUnwrap(controller.selectedTab)
+        let last = try XCTUnwrap(controller.selectedTerminalTab)
         controller.selectedTabID = middle.id
         middle.state.pendingCommand = "echo pending\n"
 
@@ -64,10 +65,10 @@ final class TerminalTabsTests: XCTestCase {
     }
 
     func testClosingLastTabCreatesFreshLocalTab() throws {
-        let controller = TabsController()
-        let old = try XCTUnwrap(controller.selectedTab)
+        let controller = TabsController(useNeovim: false)
+        let old = try XCTUnwrap(controller.selectedTerminalTab)
         controller.closeTab(old.id)
-        let replacement = try XCTUnwrap(controller.selectedTab)
+        let replacement = try XCTUnwrap(controller.selectedTerminalTab)
         XCTAssertEqual(controller.tabs.count, 1)
         XCTAssertNotEqual(replacement.id, old.id)
         XCTAssertEqual(replacement.configuration.backend, .localShell)
@@ -76,20 +77,20 @@ final class TerminalTabsTests: XCTestCase {
     }
 
     func testClosingBackgroundTabDoesNotChangeSelection() throws {
-        let controller = TabsController()
-        let first = try XCTUnwrap(controller.selectedTab)
+        let controller = TabsController(useNeovim: false)
+        let first = try XCTUnwrap(controller.selectedTerminalTab)
         controller.openLocalTab()
-        let selected = try XCTUnwrap(controller.selectedTab)
+        let selected = try XCTUnwrap(controller.selectedTerminalTab)
         controller.closeTab(first.id)
         XCTAssertEqual(controller.selectedTabID, selected.id)
         XCTAssertFalse(selected.state.isClosed)
     }
 
     func testTabNavigationWrapsInBothDirections() throws {
-        let controller = TabsController()
-        let first = try XCTUnwrap(controller.selectedTab)
+        let controller = TabsController(useNeovim: false)
+        let first = try XCTUnwrap(controller.selectedTerminalTab)
         controller.openLocalTab()
-        let last = try XCTUnwrap(controller.selectedTab)
+        let last = try XCTUnwrap(controller.selectedTerminalTab)
         controller.selectNextTab()
         XCTAssertEqual(controller.selectedTabID, first.id)
         controller.selectPreviousTab()

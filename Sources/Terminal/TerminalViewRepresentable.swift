@@ -45,9 +45,7 @@ final class TerminalState: NSObject, ObservableObject, LocalProcessTerminalViewD
 
         let view = LocalProcessTerminalView(frame: NSRect(origin: .zero, size: initialSize))
         view.processDelegate = self
-        view.nativeBackgroundColor = NSColor(NeoLinkTheme.editorBackground)
-        view.nativeForegroundColor = NSColor(NeoLinkTheme.textPrimary)
-        view.caretColor = NSColor(NeoLinkTheme.accent)
+        TerminalAppearance.apply(to: view)
         view.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         terminalView = view
 
@@ -320,6 +318,7 @@ final class TerminalHostView: NSView {
             view.isHidden = id != selectedTabID
             if id == selectedTabID, view.frame != bounds { view.frame = bounds }
         }
+        if selectedTabID == nil { focusedTabID = nil }
         guard focusedTabID != selectedTabID, let id = selectedTabID, let view = mountedViews[id] else { return }
         focusedTabID = id
         DispatchQueue.main.async { [weak self, weak view] in

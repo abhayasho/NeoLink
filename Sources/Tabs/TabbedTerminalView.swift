@@ -2,20 +2,41 @@ import SwiftUI
 
 struct TabbedTerminalView: View {
     @ObservedObject var controller: TabsController
+    @ObservedObject private var codeSession: NeovimSession
+
+    init(controller: TabsController) {
+        self.controller = controller
+        self.codeSession = controller.codeSession
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             tabStrip
             NeoLinkTheme.horizontalSeparator()
 
-            TerminalViewRepresentable(tabs: controller.tabs, selectedTabID: controller.selectedTabID)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.leading, 8)
-                .padding(.top, 8)
+            ZStack {
+                VStack(spacing: 0) {
+                    TerminalViewRepresentable(tabs: controller.terminalTabs, selectedTabID: controller.selectedTerminalTab?.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.leading, 8)
+                        .padding(.top, 8)
+                    if let tab = controller.selectedTerminalTab {
+                        TerminalStatusBar(tab: tab).id(tab.id)
+                    }
+                }
+                .opacity(controller.selectedTab?.document == nil ? 1 : 0)
+                .allowsHitTesting(controller.selectedTab?.document == nil)
+                .accessibilityHidden(controller.selectedTab?.document != nil)
 
-            if let tab = controller.selectedTab {
-                TerminalStatusBar(tab: tab)
-                    .id(tab.id)
+                if codeSession.isStarted || controller.selectedTab?.document?.usesNeovim == true {
+                    CodeWorkspaceView(session: codeSession, controller: controller)
+                        .opacity(controller.selectedTab?.document?.usesNeovim == true ? 1 : 0)
+                        .allowsHitTesting(controller.selectedTab?.document?.usesNeovim == true)
+                        .accessibilityHidden(controller.selectedTab?.document?.usesNeovim != true)
+                }
+                if let document = controller.selectedTab?.document, !document.usesNeovim {
+                    DocumentTabView(document: document).id(document.id)
+                }
             }
         }
         .background(NeoLinkTheme.editorBackground)
@@ -27,13 +48,21 @@ struct TabbedTerminalView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 4) {
                         ForEach(controller.tabs) { tab in
-                            TerminalTabButton(
-                                tab: tab,
-                                isSelected: controller.selectedTabID == tab.id,
-                                select: { controller.selectedTabID = tab.id },
-                                close: { controller.closeTab(tab.id) }
-                            )
-                            .id(tab.id)
+                            Group {
+                                if let document = tab.document {
+                                    DocumentTabButton(document: document, controller: controller)
+                                } else {
+                                    WorkspaceTabButton(
+                                        title: tab.title,
+                                        icon: tab.terminal?.configuration.backend == .localShell ? "terminal" : "network",
+                                        detail: "\(tab.title) terminal",
+                                        isSelected: controller.selectedTabID == tab.id,
+                                        isModified: false,
+                                        select: { controller.selectedTabID = tab.id },
+                                        close: { controller.requestCloseTab(tab.id) }
+                                    )
+                                }
+                            }.id(tab.id)
                         }
                     }
                     .padding(.horizontal, 8)
@@ -62,19 +91,26 @@ struct TabbedTerminalView: View {
     }
 }
 
-private struct TerminalTabButton: View {
-    let tab: TerminalTab
+private struct DocumentTabButton: View {
+    @ObservedObject var document: WorkspaceDocument
+    @ObservedObject var controller: TabsController
+
+    var body: some View {
+        WorkspaceTabButton(title: document.title, icon: document.icon, detail: document.source.displayPath,
+                           isSelected: controller.selectedTabID == document.id, isModified: document.isModified,
+                           select: { controller.selectedTabID = document.id }, close: { controller.requestCloseTab(document.id) })
+    }
+}
+
+private struct WorkspaceTabButton: View {
+    let title: String
+    let icon: String
+    let detail: String
     let isSelected: Bool
+    let isModified: Bool
     let select: () -> Void
     let close: () -> Void
     @State private var isHovered = false
-
-    private var icon: String {
-        switch tab.configuration.backend {
-        case .localShell: return "terminal"
-        case .ssh: return "network"
-        }
-    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -82,18 +118,22 @@ private struct TerminalTabButton: View {
                 HStack(spacing: 8) {
                     Image(systemName: icon)
                         .foregroundColor(isSelected ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
-                    Text(tab.title)
+                    Text(title)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundColor(isSelected ? NeoLinkTheme.textPrimary : NeoLinkTheme.textSecondary)
                     Spacer(minLength: 0)
+                    if isModified {
+                        Circle().fill(NeoLinkTheme.accent).frame(width: 6, height: 6)
+                            .accessibilityLabel("Unsaved changes")
+                    }
                 }
                 .padding(.leading, 11)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(tab.title) terminal")
+            .accessibilityLabel(title)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
 
             Button(action: close) {
@@ -104,8 +144,8 @@ private struct TerminalTabButton: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Close terminal")
-            .accessibilityLabel("Close \(tab.title) terminal")
+            .help("Close tab")
+            .accessibilityLabel("Close \(title) tab")
             .padding(.trailing, 3)
         }
         .font(.system(size: 12, weight: .medium))
@@ -115,12 +155,12 @@ private struct TerminalTabButton: View {
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(isSelected ? NeoLinkTheme.accent : Color.clear)
-                .frame(height: 2)
+                .frame(height: 1)
         }
         .onHover { isHovered = $0 }
-        .help(tab.title)
+        .help(detail)
         .contextMenu {
-            Button("Close terminal", action: close)
+            Button("Close tab", action: close)
         }
     }
 }
