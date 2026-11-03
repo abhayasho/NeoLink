@@ -28,6 +28,7 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
                 if process.poll() is not None: raise AssertionError('Editor exited on startup')
                 time.sleep(.02)
             assert (root / 'status.json').exists(), 'Editor did not publish initial state'
+            lua('vim.lsp.log.set_level("debug")')
             assert dispatch(method='status')['state']['buffers'] == []
             first = root / "quoted ' $(no-shell).lua"
             first.write_text('local greeting = "hello"\nprint(greeting)\n')
@@ -101,8 +102,9 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
                 assert 'pyright' in current['servers'], current
                 if current['diagnostics'] == 0:
                     print('LSP diagnostic timeout:', current, 'mode:', lua('vim.fn.mode()'))
+                    print('LSP clients:', lua('vim.json.encode(vim.tbl_map(function(c) return {id=c.id,initialized=c.initialized,stopped=c:is_stopped(),root=c.config.root_dir,diagnosticProvider=c.server_capabilities.diagnosticProvider,requests=c.requests} end,vim.lsp.get_clients({bufnr=0})))'))
                     lsp_log = pathlib.Path(lua('vim.lsp.log.get_filename()'))
-                    if lsp_log.is_file(): print(lsp_log.read_text(errors='replace')[-6000:])
+                    if lsp_log.is_file(): print(lsp_log.read_text(errors='replace')[-16000:])
                 assert current['diagnostics'] > 0, 'No Python type diagnostic'
                 definition = lua('vim.json.encode(vim.lsp.buf_request_sync(0,"textDocument/definition",vim.lsp.util.make_position_params(0,"utf-16"),3000))')
                 assert 'example.py' in definition and '"line":0' in definition, definition
