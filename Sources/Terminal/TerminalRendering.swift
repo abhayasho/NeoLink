@@ -90,7 +90,9 @@ final class TerminalRendering {
                             if view.metalNextFrameTag != 0 { frames.mergeTag(view.metalNextFrameTag, into: tag) }
                             view.metalNextFrameTag = tag
                         }
-                        view.metalPresentsImmediately = frames.presentationMayBypassVsync
+                        // Encode input echoes promptly, but let the display present every
+                        // surface at a refresh boundary, including direct/full-screen mode.
+                        view.metalPresentsImmediately = false
                         present()
                         // The renderer consumed the tag only if it submitted the frame.
                         if tag != 0, view.metalNextFrameTag == 0 {

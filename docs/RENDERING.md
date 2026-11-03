@@ -8,7 +8,7 @@ NeoLink uses a vendored SwiftTerm 1.20.0 Metal renderer for terminal-backed surf
 - Row geometry is cached per `BufferLine` object, not per screen row. Scrolling moves line references, so a line that only moved is drawn translated by a vertex-shader offset instead of being shaped again. Only rows whose content changed are rebuilt.
 - Each window has one display-link clock (`WindowFrameScheduler`, capped at 120 Hz) that paces terminal state updates and Metal submission for every surface in it. The clock runs only while something changed and stops when idle. An occluded or minimized window drains work without a clock.
 - Unchanged surfaces are not presented again. Zed repeats the current frame for a second after input so ProMotion stays at 120 Hz; measured here, the repeats queued drawables ahead of the next real frame and added about 9 ms from key press to display.
-- Output answering a key press is drawn as soon as it is parsed (an "immediate frame"), not at the next display callback. When such a frame is at least 1.5 refreshes after the surface's previous frame and no animation is running, it is presented without waiting for vsync (`CAMetalLayer.displaySyncEnabled = false` for that frame). A composited window does not tear. Scrolling and other continuous updates keep vsync, so every refresh shows exactly one frame.
+- Output answering a key press is submitted as soon as it is parsed (an "immediate frame"), without waiting for the next display callback. All terminal-backed surfaces now keep `CAMetalLayer.displaySyncEnabled = true`, including sparse key echoes. Early submission still prepares the response promptly; presentation waits for a display refresh in composited and full-screen/direct windows alike. VSync prevents unsynchronized presentation; it does not guarantee that every refresh contains a new frame.
 - A surface with three frames waiting for the display defers its next frame instead of requesting a fourth drawable. Requesting one would block the main thread in `nextDrawable`, which stalls input; that happened during 10 ms key repeat when ProMotion lowered the refresh rate.
 - Covered surfaces do not draw. Terminals hidden behind a document tab are hidden NSViews rather than zero-opacity SwiftUI layers.
 - The shader library and pipelines are compiled once per process, on a background queue at launch, and shared by every terminal. Previously each new terminal, including the editor's, compiled them on the main thread.
@@ -22,13 +22,13 @@ NeoLink uses a vendored SwiftTerm 1.20.0 Metal renderer for terminal-backed surf
 A terminal grid moves by whole lines, so trackpad scrolling used to jump a line at a time (about 40 content changes per second at a moderate speed). With the Metal renderer, NeoLink now follows the trackpad pixel by pixel in both places text scrolls:
 
 - **Editor and other full-screen programs** (mouse reporting on, alternate screen): NeoLink asks the program to scroll whole lines slightly ahead of the fingers and draws its scroll region back by the remaining fraction. SwiftTerm reports the program's scroll operations (CSI L/M at the region top, CSI S/T) together with the lines that left the region; the renderer draws those lines in the edge the offset exposes and clips the region. Region scrolls restricted by left/right margins are not reported and keep line steps.
-- **Shell scrollback**: the viewport moves by whole lines and the renderer draws the buffer lines above or below it in the exposed edge.
+- **Shell scrollback**: the viewport moves by whole lines and the renderer draws the buffer lines above or below it in the exposed edge. Its input is applied directly, without predictive requests or a settling spring. The fractional position is preserved after momentum ends and between gestures. It stays still until new input, and does not keep an animation loop running. Keyboard/scroller navigation, resize and output that moves the viewport clear the parked fraction.
 
-When input stops, the remaining fraction eases out in the direction of travel within about 0.1 s. Offsets are whole device pixels, so glyphs stay on the pixel grid. Keyboard-driven scrolls (for example `j` at the bottom of the window) are shown as the program draws them. Classic mouse wheels and the CoreGraphics renderer keep line steps. Lines retained from a program are discarded before a new gesture, on a full-screen erase, and when the region, buffer or size changes, so they cannot show stale text.
+For a full-screen program, the remaining fraction still eases out to a whole line when input stops; that program controls its own grid. Shell scrollback stops at the position supplied by the OS instead. Offsets are whole device pixels, so glyphs stay on the pixel grid. Keyboard-driven scrolls (for example `j` at the bottom of the window) are shown as the program draws them. Classic mouse wheels and the CoreGraphics renderer keep line steps. Lines retained from a program are discarded before a new gesture, on a full-screen erase, and when the region, buffer or size changes, so they cannot show stale text.
 
 ## Measured result
 
-One machine: M2 Max, built-in 120 Hz ProMotion display, macOS 26.6, release build, app frontmost. The benchmark (below) posts synthetic key and trackpad events to NeoLink's own event queue and reads when each frame reached the display. Before is the pacing from the previous revision measured with the same harness; one run per row.
+Historical measurements from before build 19, not measurements of the current always-VSync policy. One machine: M2 Max, built-in 120 Hz ProMotion display, macOS 26.6, release build, app frontmost. The benchmark (below) posts synthetic key and trackpad events to NeoLink's own event queue and reads when each frame reached the display. Before is the pacing from the previous revision measured with the same harness; one run per row.
 
 | Scenario | Before | After |
 |---|---|---|
@@ -52,7 +52,7 @@ Causes of the "before" numbers:
 Limits of these numbers:
 
 - Latency starts at the event timestamp and ends at `presentedTime`. It excludes keyboard scanning and panel response, and synthetic events skip the hardware event path. Real end-to-end latency is higher; it is not zero, and no renderer can make it zero.
-- Frames presented without vsync rely on the window being composited. With 10 ms key repeat, frames come too close together for that, so they take the vsync path (about 28 ms).
+- The historical sparse-key results used VSync bypass in a composited window. Build 19 keeps VSync enabled; the additional presentation wait can increase sparse-key latency. The historical key numbers must not be attributed to this policy without remeasurement.
 - ProMotion lowers the refresh rate while the screen is not updating, so the display-callback rate during typing is often below 120 Hz. Continuous scrolling and output keep it at 120 Hz.
 - The remaining 41 ms stall on the first file open is SwiftUI building the editor's views and Neovim's terminal surface; later opens reuse them. SwiftUI and AppKit controls (sidebar, file tree, agent panel) are drawn by Core Animation and are not covered by these measurements.
 - The output-flood case (`yes | head`) shows new frames every 8.3 ms at the median but 33% of intervals are longer, because parsing still runs on the main thread.
@@ -66,6 +66,10 @@ NEOLINK_BENCHMARK_OUTPUT=/tmp/neolink-benchmark.json .build/release/NeoLink
 ```
 
 The app opens a scratch copy of `NEOLINK_BENCHMARK_FILE` (default `Sources/Documents/WorkspaceDocument.swift`), runs the scenarios, writes JSON, deletes the copy, and quits. Keep the window frontmost and the screen unlocked; an occluded window pauses its clock. `editor-capture` also renders frames mid-scroll and checks that they equal the previous frame shifted by the scroll distance, writing PNGs beside the JSON. The harness lives in `Sources/Rendering/InteractionBenchmark.swift` and does nothing unless `NEOLINK_BENCHMARK` is set.
+
+### Passive motion capture
+
+`NEOLINK_BENCHMARK=manual-motion NEOLINK_BENCHMARK_SECONDS=60` captures externally driven interaction for 60 seconds (5–180 allowed), then writes the report and exits. This scenario does not inject keys or wheel events, focus controls, or select a project. Use the trackpad or an external UI driver to fill and scroll a shell and expand/scroll the explorer. It includes terminal input/drawn positions at actual drawable presentation and explorer clip-view geometry. Geometry is not proof of pixel presentation. Gaps while changing targets or pausing are deliberate; aggregate frame percentiles from a manual session are not a sustained-scrolling FPS score. Compare moving segments and inspect reversals, stops and edge content visually.
 
 For Instruments, `SWIFTTERM_PROFILE=1` enables SwiftTerm's Metal signposts; NeoLink's frames are `Window.Frame` and `Window.ImmediateFrame` signposts (subsystem `com.neolink.app`, category `Frames`). `MTL_HUD_ENABLED=1` shows Apple's Metal HUD.
 

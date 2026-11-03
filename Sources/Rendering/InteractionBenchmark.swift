@@ -62,6 +62,22 @@ final class InteractionBenchmark {
         }
         for scenario in scenarios {
             switch scenario {
+            case "manual-motion":
+                // Passive capture: all input comes from the user or an external UI driver.
+                // Do not focus controls, send keys/wheel events, or alter the project here.
+                let seconds = min(180, max(5, Double(ProcessInfo.processInfo.environment["NEOLINK_BENCHMARK_SECONDS"] ?? "60") ?? 60))
+                let sampler = Self.explorerScrollView(in: window).map { ScrollPositionSampler(scrollView: $0, window: window) }
+                sampler?.start()
+                await measure(scenario, extra: {
+                    var report: [String: Any] = ["inputDriver": "external", "continuousScrollBenchmark": false,
+                                               "scope": "manual input; geometry is not pixel presentation"]
+                    report["terminalScrollFrames"] = self.window.frames.presentation.scrollSamples.map {
+                        ["presented": $0.presented, "inputLines": $0.input, "drawnLines": $0.drawn]
+                    }
+                    if let sampler { report["explorerGeometry"] = sampler.report() }
+                    return report
+                }) { await self.sleep(seconds) }
+                sampler?.stop()
             case "idle":
                 // Nothing changes on screen: the clock and the GPU should stay quiet.
                 await sleep(1.5)
@@ -1084,7 +1100,7 @@ struct ScrollGeometryMetrics {
             "scrollMeasurementScope": "clip-view geometry, not presented pixels or visual smoothness"
         ]
         if positions.count < 20 || changes.count < 20 || travel < 100 || range < 50 {
-            result["invalid"] = ["Insufficient explorer movement; synthetic input did not establish a scrolling workload."]
+            result["invalid"] = ["Insufficient explorer movement; input did not establish a scrolling workload."]
         }
         return result
     }

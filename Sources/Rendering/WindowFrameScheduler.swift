@@ -167,11 +167,6 @@ final class WindowFrameScheduler {
     /// Nonzero only while a content presentation closure runs. A surface copies it
     /// into the frame it submits, so the displayed time can be attributed later.
     private(set) var presentationTag: UInt64 = 0
-    /// True while presenting a frame that answers a key press, outside animation, at least
-    /// 1.5 refresh intervals after the surface's previous frame. Such a frame may skip the
-    /// vsync wait: it cannot replace another frame before the display shows it.
-    private(set) var presentationMayBypassVsync = false
-    private var lastContentPresentation: [ObjectIdentifier: Double] = [:]
     private static let log = OSLog(subsystem: "com.neolink.app", category: "Frames")
 
     init(window: NSWindow, clockFactory: ((NSWindow, Int, @escaping () -> Void) -> FrameClock?)? = nil,
@@ -264,7 +259,7 @@ final class WindowFrameScheduler {
         surfaces[id] = Surface(sample: sample)
     }
     func unregister(_ id: ObjectIdentifier) {
-        surfaces.removeValue(forKey: id); pendingPresentations.removeValue(forKey: id); lastContentPresentation.removeValue(forKey: id)
+        surfaces.removeValue(forKey: id); pendingPresentations.removeValue(forKey: id)
     }
 
     /// `surface` is the terminal whose output produced the update.
@@ -370,12 +365,8 @@ final class WindowFrameScheduler {
             let time = now()
             taggedFrames[tag] = TaggedFrame(surface: id, inputs: inputs, outputAt: item.outputAt, submittedAt: time)
             presentationTag = tag
-            presentationMayBypassVsync = !inputs.isEmpty && animations.isEmpty
-                && time - (lastContentPresentation[id] ?? -.infinity) >= 1.5 / Double(targetRate)
-            lastContentPresentation[id] = time
             item.present()
             presentationTag = 0
-            presentationMayBypassVsync = false
         }
         if taggedFrames.count > 512 {
             for key in taggedFrames.keys.sorted().prefix(taggedFrames.count - 256) { taggedFrames.removeValue(forKey: key) }

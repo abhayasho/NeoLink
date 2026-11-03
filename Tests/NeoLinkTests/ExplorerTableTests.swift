@@ -33,7 +33,7 @@ final class ExplorerTableTests: XCTestCase {
         table.dataSource = coordinator; table.delegate = coordinator
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 120))
         scroll.documentView = table
-        coordinator.table = table; coordinator.scroll = scroll
+        coordinator.table = table; coordinator.observeScrolling(in: scroll)
         return (coordinator, table, scroll)
     }
 
@@ -84,6 +84,62 @@ final class ExplorerTableTests: XCTestCase {
         coordinator.apply(rows: [row("src", folder: true, expanded: true), file], revision: 2, activeFileURL: file.item.url)
         XCTAssertEqual(table.selectedRow, 1)
         XCTAssertEqual(coordinator.rows[table.selectedRow].item.url, file.item.url)
+    }
+
+    @MainActor
+    func testLiveScrollCoalescesBackgroundSnapshotsAndPreservesTheFinalAnchor() {
+        let (coordinator, table, scroll) = setup()
+        let original = (0..<100).map { row(String(format: "%03d.swift", $0)) }
+        coordinator.apply(rows: original, revision: 1, activeFileURL: nil)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 30 * 24 + 7))
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        let reloads = table.reloads
+        for revision in 2...50 {
+            coordinator.apply(rows: [row("inserted-\(revision)")] + original, revision: revision, activeFileURL: nil)
+        }
+        XCTAssertEqual(coordinator.rows, original, "No membership or decoration changes during the gesture")
+        XCTAssertEqual(table.reloads, reloads)
+        // Momentum advances while the old snapshot remains visible. Anchor at its final
+        // position, not the position when the first deferred refresh arrived.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 40 * 24 + 11))
+        coordinator.finishScrolling()
+        XCTAssertEqual(coordinator.rows.first?.name, "inserted-50")
+        XCTAssertEqual(scroll.contentView.bounds.minY, 41 * 24 + 11, accuracy: 0.5)
+        XCTAssertEqual(table.reloads, reloads)
+    }
+
+    @MainActor
+    func testExplicitEditorSelectionBypassesDeferredUpdates() {
+        let (coordinator, table, scroll) = setup()
+        _ = scroll
+        let original = (0..<10).map { row("\($0).swift") }
+        coordinator.apply(rows: original, revision: 1, activeFileURL: nil)
+        coordinator.scrollBegan()
+        coordinator.apply(rows: [row("new.swift")] + original, revision: 2, activeFileURL: nil)
+        coordinator.apply(rows: [row("new.swift")] + original, revision: 2, activeFileURL: original[7].id)
+        XCTAssertFalse(coordinator.deferringUpdates)
+        XCTAssertEqual(coordinator.rows[table.selectedRow].id, original[7].id)
+        coordinator.finishScrolling()
+        XCTAssertEqual(coordinator.rows[table.selectedRow].id, original[7].id, "An old deferred snapshot cannot undo selection")
+    }
+
+    @MainActor
+    func testEndNotificationFlushesAndDismantlingCancelsPendingWork() async throws {
+        let (coordinator, table, scroll) = setup()
+        _ = table
+        coordinator.apply(rows: [row("a.swift")], revision: 1, activeFileURL: nil)
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        coordinator.apply(rows: [row("b.swift")], revision: 2, activeFileURL: nil)
+        NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        XCTAssertEqual(coordinator.rows.first?.name, "a.swift")
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(coordinator.rows.first?.name, "b.swift")
+        coordinator.scrollBegan()
+        coordinator.apply(rows: [row("c.swift")], revision: 3, activeFileURL: nil)
+        NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        coordinator.stopObservingScrolling()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(coordinator.rows.first?.name, "b.swift")
     }
 
     @MainActor

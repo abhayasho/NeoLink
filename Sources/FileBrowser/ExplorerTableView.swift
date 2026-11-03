@@ -58,7 +58,7 @@ struct ExplorerTableView: NSViewRepresentable {
         scroll.scrollerStyle = .overlay
         // Responsive (concurrent) scrolling is on by default for view-based tables; keep it.
         context.coordinator.table = table
-        context.coordinator.scroll = scroll
+        context.coordinator.observeScrolling(in: scroll)
         context.coordinator.apply(rows: tree.rows, revision: tree.rowsRevision, activeFileURL: activeFileURL)
         return scroll
     }
@@ -67,6 +67,10 @@ struct ExplorerTableView: NSViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.apply(rows: tree.rows, revision: tree.rowsRevision, activeFileURL: activeFileURL)
         context.coordinator.revealIfNeeded(revision: tree.revealRevision, file: tree.selectedURL)
+    }
+
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.stopObservingScrolling()
     }
 
     @MainActor
@@ -84,8 +88,77 @@ struct ExplorerTableView: NSViewRepresentable {
         private var selectedID: URL?
         private var pendingActiveSelection = false
         private var applying = false
+        private struct Snapshot {
+            let rows: [ExplorerRow]
+            let revision: Int
+            let activeFileURL: URL?
+        }
+        private var deferredSnapshot: Snapshot?
+        private var displayedRoot: URL?
+        private var trackingScroll = false
+        private(set) var deferringUpdates = false
+        private var scrollQuietWork: DispatchWorkItem?
 
         init(_ parent: ExplorerTableView) { self.parent = parent }
+
+        deinit { NotificationCenter.default.removeObserver(self); scrollQuietWork?.cancel() }
+
+        func observeScrolling(in scroll: NSScrollView) {
+            stopObservingScrolling()
+            self.scroll = scroll
+            let center = NotificationCenter.default
+            center.addObserver(self, selector: #selector(scrollBegan), name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+            center.addObserver(self, selector: #selector(scrollChanged), name: NSScrollView.didLiveScrollNotification, object: scroll)
+            center.addObserver(self, selector: #selector(scrollEnded), name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        }
+
+        func stopObservingScrolling() {
+            // NSTableView also registers its delegate for selection notifications. Remove
+            // only our scroll observations, leaving native selection delivery intact.
+            if let scroll {
+                for name in [NSScrollView.willStartLiveScrollNotification, NSScrollView.didLiveScrollNotification,
+                             NSScrollView.didEndLiveScrollNotification] {
+                    NotificationCenter.default.removeObserver(self, name: name, object: scroll)
+                }
+            }
+            scrollQuietWork?.cancel(); scrollQuietWork = nil
+            trackingScroll = false; deferringUpdates = false; deferredSnapshot = nil
+        }
+
+        @objc func scrollBegan() {
+            scrollQuietWork?.cancel(); scrollQuietWork = nil
+            trackingScroll = true; deferringUpdates = true
+            setHovered(nil)
+        }
+
+        @objc private func scrollChanged() {
+            deferringUpdates = true
+            // Legacy wheels have no begin/end pair. Also bridge the short gap between
+            // fingers lifting and AppKit's momentum events without applying a snapshot.
+            if !trackingScroll { scheduleQuietFlush() }
+        }
+
+        @objc private func scrollEnded() {
+            trackingScroll = false
+            scheduleQuietFlush()
+        }
+
+        private func scheduleQuietFlush() {
+            scrollQuietWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.finishScrolling() }
+            scrollQuietWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+        }
+
+        /// Explicit clicks/keys/reveal take precedence over deferred background work.
+        /// Otherwise apply only the newest snapshot, after the gesture and momentum stop.
+        func finishScrolling() {
+            scrollQuietWork?.cancel(); scrollQuietWork = nil
+            trackingScroll = false; deferringUpdates = false
+            guard let snapshot = deferredSnapshot else { return }
+            deferredSnapshot = nil
+            apply(rows: snapshot.rows, revision: snapshot.revision, activeFileURL: snapshot.activeFileURL)
+        }
 
         // MARK: Incremental model updates
 
@@ -94,6 +167,20 @@ struct ExplorerTableView: NSViewRepresentable {
         /// so selection, hover and scroll position survive. A full reload happens only when the
         /// list is first populated or changed too much to diff cheaply.
         func apply(rows newRows: [ExplorerRow], revision: Int, activeFileURL: URL?) {
+            let root = parent.tree.root
+            let urgent = activeFileURL != self.activeFileURL || root != displayedRoot
+            if deferringUpdates, !urgent {
+                if revision != lastRevision {
+                    deferredSnapshot = Snapshot(rows: newRows, revision: revision, activeFileURL: activeFileURL)
+                }
+                return
+            }
+            if urgent {
+                scrollQuietWork?.cancel(); scrollQuietWork = nil
+                trackingScroll = false; deferringUpdates = false
+            }
+            deferredSnapshot = nil
+            displayedRoot = root
             let activeChanged = activeFileURL != self.activeFileURL
             self.activeFileURL = activeFileURL
             if activeChanged { pendingActiveSelection = activeFileURL != nil }
@@ -186,7 +273,9 @@ struct ExplorerTableView: NSViewRepresentable {
         }
 
         func revealIfNeeded(revision: Int, file: URL?) {
-            guard revision != lastReveal, let table, let file, let row = rows.firstIndex(where: { $0.item.id == file }) else { return }
+            guard revision != lastReveal, let file else { return }
+            finishScrolling()
+            guard let table, let row = rows.firstIndex(where: { $0.item.id == file }) else { return }
             lastReveal = revision
             table.scrollRowToVisible(row)
             // Center it when there is room, matching the old anchor: .center.
@@ -342,11 +431,17 @@ final class ExplorerNSTableView: NSTableView {
     }
 
     override var acceptsFirstResponder: Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        coordinator?.finishScrolling()
+        super.mouseDown(with: event)
+    }
     override func menu(for event: NSEvent) -> NSMenu? {
-        coordinator?.menu(for: row(at: convert(event.locationInWindow, from: nil)))
+        coordinator?.finishScrolling()
+        return coordinator?.menu(for: row(at: convert(event.locationInWindow, from: nil)))
     }
 
     override func keyDown(with event: NSEvent) {
+        coordinator?.finishScrolling()
         guard let coordinator, event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { super.keyDown(with: event); return }
         switch event.keyCode {
         case 36, 76: // Return / Enter

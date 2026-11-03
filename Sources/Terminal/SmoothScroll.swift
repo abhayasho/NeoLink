@@ -1,6 +1,23 @@
 import AppKit
 import SwiftTerm
 
+/// Scrollback is local: its neighbouring lines are already available, so it needs neither
+/// predictive requests nor a spring to land on a line. Preserve the fractional position
+/// between gestures; the OS supplies trackpad momentum, including its final stop.
+struct ScrollbackMotion {
+    private(set) var offset = 0.0
+
+    mutating func input(_ lines: Double) -> Int {
+        guard lines.isFinite else { return 0 }
+        offset += lines
+        return Int(min(80, max(-80, offset)).rounded(.towardZero))
+    }
+
+    mutating func moved(_ lines: Int, range: ClosedRange<Double>) {
+        offset = min(range.upperBound, max(range.lowerBound, offset - Double(lines)))
+    }
+}
+
 /// Pixel-smooth trackpad scrolling over a grid that only moves by whole lines.
 ///
 /// Units are lines; positive input and moves go toward the top of the content. The grid is
@@ -243,6 +260,9 @@ struct SmoothScrollModel {
 final class SmoothScrollDriver {
     private unowned let view: InteractiveTerminalView
     private var model = SmoothScrollModel()
+    private var scrollback = ScrollbackMotion()
+    private var movingScrollback = false
+    private var scrollbackRow: Int?
     private var source: SmoothScrollSource?
     private var mover: ((Int) -> Int?)?
     private var lastStep: Double?
@@ -256,6 +276,9 @@ final class SmoothScrollDriver {
 
     init(view: InteractiveTerminalView) {
         self.view = view
+        view.viewportScrollWillChange = { [weak self] in
+            MainActor.assumeIsolated { self?.viewportWillChange() }
+        }
         // Terminal output is parsed on the main queue (LocalProcess's default).
         view.programScrolled = { [weak self] lines in
             MainActor.assumeIsolated { self?.programScrolled(lines, inSteps: false) }
@@ -294,13 +317,26 @@ final class SmoothScrollDriver {
         let now = CACurrentMediaTime()
         if self.source != source { reset(); self.source = source; view.smoothScrollSource = source }
         let phase = Self.phase(of: event)
-        if now - model.lastInput > 0.3, !model.isScrolling, event.scrollingDeltaY != 0 {
+        if source == .program, now - model.lastInput > 0.3, !model.isScrolling, event.scrollingDeltaY != 0 {
             model.beginGesture()
-            if source == .program { view.discardRetainedScrollLines() }
+            view.discardRetainedScrollLines()
         }
         mover = move
         let lines = Double(event.scrollingDeltaY * view.scrollSensitivity / max(1, cellHeight))
         traced = true; traceInput += lines
+        if source == .scrollback {
+            // Apply all input before the next display-paced frame. A parked fraction is a
+            // valid viewport, not an animation that should keep the display clock awake.
+            let request = scrollback.input(lines)
+            movingScrollback = true
+            let moved = request == 0 ? 0 : (move(request) ?? 0)
+            movingScrollback = false
+            scrollbackRow = view.getTerminal().buffer.yDisp
+            traceGrid += Double(moved)
+            scrollback.moved(moved, range: range)
+            apply()
+            return
+        }
         perform(model.input(lines, at: now, phase: phase, range: range), at: now)
         apply()
         startAnimating()
@@ -329,8 +365,21 @@ final class SmoothScrollDriver {
 
     func reset() {
         model.reset()
+        scrollback = ScrollbackMotion()
+        scrollbackRow = nil
         lastStep = nil
         if view.smoothScrollOffset != 0 { view.smoothScrollOffset = 0 }
+    }
+
+    /// Keyboard navigation, a scrollbar drag, or output following the live prompt owns
+    /// its new viewport. Do not carry a previous trackpad fraction into that position.
+    func viewportChanged(to row: Int) {
+        guard source == .scrollback, !movingScrollback else { return }
+        if let scrollbackRow, scrollbackRow != row { reset() }
+    }
+
+    func viewportWillChange() {
+        if source == .scrollback, !movingScrollback { reset() }
     }
 
     /// The program moved its content up `lines`: the grid moved toward the bottom.
@@ -350,7 +399,7 @@ final class SmoothScrollDriver {
     }
 
     private func apply() {
-        let offset = CGFloat(model.offset) * cellHeight
+        let offset = CGFloat(source == .scrollback ? scrollback.offset : model.offset) * cellHeight
         // Whole device pixels keep glyphs on the pixel grid.
         let scale = view.window?.backingScaleFactor ?? 2
         let snapped = (offset * scale).rounded() / scale
@@ -362,6 +411,7 @@ final class SmoothScrollDriver {
         animating = true
         frames.animate(ObjectIdentifier(self)) { [weak self] time in
             guard let self else { return false }
+            guard self.source == .program else { self.animating = false; return false }
             guard time.isFinite else { self.reset(); self.animating = false; return false }
             let interval = self.lastStep.map { min(0.05, time - $0) } ?? 1.0 / Double(frames.targetRate)
             self.lastStep = time

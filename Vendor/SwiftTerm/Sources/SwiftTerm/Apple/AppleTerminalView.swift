@@ -2682,6 +2682,10 @@ extension TerminalView {
     
     public func scrollTo (row: Int, notifyAccessibility: Bool = true)
     {
+#if os(macOS) && canImport(MetalKit)
+        // NeoLink: a host may clear a parked trackpad fraction before other navigation.
+        viewportScrollWillChange?()
+#endif
         let displayBuffer = terminal.displayBuffer
         let maxScrollback = max(0, displayBuffer.lines.count - displayBuffer.rows)
         let targetRow = max(0, min(row, maxScrollback))

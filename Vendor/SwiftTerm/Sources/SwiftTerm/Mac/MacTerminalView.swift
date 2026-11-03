@@ -245,6 +245,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     /// Where `smoothScrollOffset` takes the lines it exposes from.
     public var smoothScrollSource: SmoothScrollSource = .program
+    /// Called before explicit viewport navigation (keyboard/scroller/scrollTo), on the UI
+    /// thread. The host's own fractional scrolling also passes here and can identify itself.
+    public var viewportScrollWillChange: (() -> Void)?
     /// Called after the program moved a full-width scroll region by whole lines
     /// (positive: content up), on the thread that feeds the terminal.
     public var programScrolled: ((_ lines: Int) -> Void)?

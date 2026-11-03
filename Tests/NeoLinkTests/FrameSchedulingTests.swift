@@ -118,28 +118,27 @@ final class InputLatencySchedulingTests: XCTestCase {
                                           visibility: { true }, now: { time })
         defer { frames.invalidate() }
         let surface = NSObject(), id = ObjectIdentifier(surface)
-        var tag: UInt64 = 0, bypass = false, presentations = 0
+        var tag: UInt64 = 0, presentations = 0
         frames.noteInteraction()
         frames.noteKeyInput(timestamp: time, surface: id)
         time += 0.001
         frames.enqueue(from: id) {
             frames.requestPresentation(id, outputAt: time) {
-                presentations += 1; tag = frames.presentationTag; bypass = frames.presentationMayBypassVsync
+                presentations += 1; tag = frames.presentationTag
             }
         }
         try await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertEqual(presentations, 1, "The echo must not wait for the next display callback")
         XCTAssertNotEqual(tag, 0)
-        XCTAssertTrue(bypass, "A sparse frame answering a key press may skip the vsync wait")
         frames.framePresented(tag: tag, presentedTime: 100.012)
         XCTAssertEqual(frames.presentation.inputLatencies.count, 1)
         XCTAssertEqual(frames.presentation.inputLatencies.first ?? 0, 0.012, accuracy: 0.0001)
 
-        // A second frame within 1.5 refresh intervals keeps vsync, so neither is dropped.
-        frames.requestPresentation(id, outputAt: time) { bypass = frames.presentationMayBypassVsync }
+        // Prompt submission is independent of VSync; the renderer keeps display sync on.
+        frames.requestPresentation(id, outputAt: time) { presentations += 1 }
         frames.noteKeyInput(timestamp: time, surface: id)
         clock.fire()
-        XCTAssertFalse(bypass)
+        XCTAssertEqual(presentations, 2)
     }
 
     @MainActor

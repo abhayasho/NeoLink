@@ -72,6 +72,11 @@ class InteractiveTerminalView: LocalProcessTerminalView {
         super.dataReceived(slice: slice)
     }
 
+    override func scrolled(source terminal: Terminal, yDisp: Int) {
+        smoothScroll.viewportChanged(to: yDisp)
+        super.scrolled(source: terminal, yDisp: yDisp)
+    }
+
     func observeTextSize() {
         fontObservation = TextSizePreferences.shared.$pointSize.sink { [weak self] size in
             guard let self, self.font.pointSize != size else { return }

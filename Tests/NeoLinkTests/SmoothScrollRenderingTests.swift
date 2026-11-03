@@ -86,6 +86,36 @@ final class SmoothScrollRenderingTests: XCTestCase {
     }
 
     @MainActor
+    func testParkedScrollbackFractionDrawsTheSamePixelsAcrossGridBoundariesAndIdleFrames() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        defer { TerminalView.allowsMetalFrameCapture = false }
+        let (window, view) = makeMetalTerminal(), (otherWindow, other) = makeMetalTerminal()
+        defer { window.close(); otherWindow.close() }
+        try view.setUseMetal(true); try other.setUseMetal(true)
+        let content = (1...200).map { "\($0) scrollback \(String(repeating: "#", count: $0 % 30))" }.joined(separator: "\r\n") + "\u{1B}[?25l"
+        view.feed(text: content); other.feed(text: content)
+        XCTAssertEqual(view.scrollViewport(towardTop: 10), 10)
+        XCTAssertEqual(other.scrollViewport(towardTop: 11), 11)
+        _ = try capture(view); _ = try capture(other)
+        let cell = try XCTUnwrap(view.cellSizeInPixels(source: view.getTerminal())).height
+        let quarter = cell / 4, scale = window.backingScaleFactor
+        view.smoothScrollSource = .scrollback; other.smoothScrollSource = .scrollback
+        view.smoothScrollOffset = CGFloat(quarter) / scale
+        other.smoothScrollOffset = -CGFloat(cell - quarter) / scale
+        let parked = try capture(view), equivalent = try capture(other)
+        let region = 0..<(view.getTerminal().rows * cell - cell)
+        XCTAssertGreaterThan(rowsMatching(parked, equivalent, offset: 0, rows: region), 0.99,
+                             "Either grid anchor must draw identical text, including the exposed top edge")
+        for _ in 0..<3 {
+            let idle = try capture(view)
+            XCTAssertEqual(rowsMatching(idle, parked, offset: 0, rows: region), 1,
+                           "Unrelated frames do not move or re-rasterize the parked text")
+        }
+    }
+
+    @MainActor
     func testLinesThatEnteredAndLeftTheRegionBetweenFramesAreDrawnAtTheEdge() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
         _ = NSApplication.shared
