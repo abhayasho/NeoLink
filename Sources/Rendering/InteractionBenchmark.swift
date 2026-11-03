@@ -92,6 +92,9 @@ final class InteractionBenchmark {
                 await sleep(1)
                 guard let surface = Self.find(ExplorerMetalView.self, in: scroll, where: { _ in true }),
                       await wait(8, { surface.isCoveringNativeRows }) else { fail(scenario, "explorer Metal surface did not present"); continue }
+                // Same-binary A/B for the retained GPU compositor; this is a developer
+                // benchmark option, never a persisted user preference.
+                surface.usesCachedComposition = ProcessInfo.processInfo.environment["NEOLINK_EXPLORER_COMPOSITION"] != "0"
                 let range = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height)
                 guard range > 100 else { fail(scenario, "explorer needs more expanded rows"); continue }
                 shell.feed(text: "\u{1B}[2J\u{1B}[H" + (1...1000).map { "\($0) GPU motion abcdefghijklmnopqrstuvwxyz 0123456789" }.joined(separator: "\r\n"))
@@ -99,9 +102,13 @@ final class InteractionBenchmark {
                 shell.smoothScrollSource = .scrollback
                 await sleep(0.5)
                 var renderCPU: [Double] = [], renderGPU: [Double] = [], renderQueue: [Double] = []
+                var explorerCPU: [Double] = [], explorerGPU: [Double] = []
+                surface.frameProfile = { cpu, gpu in explorerCPU.append(cpu); explorerGPU.append(gpu) }
                 shell.metalFrameProfile = { cpu, gpu, queue in
                     renderCPU.append(cpu); renderGPU.append(gpu); renderQueue.append(queue)
                 }
+                surface.recordsMotionSamples = true
+                let oldBuilds = surface.compositionBuilds, oldReuses = surface.compositionReuses
                 let start = CACurrentMediaTime(), oldFallbacks = surface.nativeFallbacks
                 let oldDrawableCounters = shell.rendering.drawableCounters
                 await measure(scenario, extra: {
@@ -109,11 +116,16 @@ final class InteractionBenchmark {
                     let intervals = zip(samples, samples.dropFirst()).map { $1.time - $0.time }
                     func ms(_ value: Double) -> Double { (value * 10_000).rounded() / 10 }
                     return ["inputDriver": "procedural animation, no input injection",
+                            "explorerCompositionEnabled": surface.usesCachedComposition,
+                            "explorerRenderCPUms": ["p50": ms(PresentationTiming.percentile(explorerCPU, 0.5)), "p95": ms(PresentationTiming.percentile(explorerCPU, 0.95)), "total": ms(explorerCPU.reduce(0, +))],
+                            "explorerRenderGPUms": ["p50": ms(PresentationTiming.percentile(explorerGPU, 0.5)), "p95": ms(PresentationTiming.percentile(explorerGPU, 0.95)), "total": ms(explorerGPU.reduce(0, +))],
                             "terminalRenderCPUms": ["p50": ms(PresentationTiming.percentile(renderCPU, 0.5)), "p95": ms(PresentationTiming.percentile(renderCPU, 0.95)), "max": ms(renderCPU.max() ?? 0)],
                             "terminalRenderGPUms": ["p50": ms(PresentationTiming.percentile(renderGPU, 0.5)), "p95": ms(PresentationTiming.percentile(renderGPU, 0.95)), "max": ms(renderGPU.max() ?? 0)],
                             "terminalGPUQueueMs": ["p50": ms(PresentationTiming.percentile(renderQueue, 0.5)), "p95": ms(PresentationTiming.percentile(renderQueue, 0.95)), "max": ms(renderQueue.max() ?? 0)],
                             "terminalDrawableCounters": shell.rendering.drawableCounters.merging(oldDrawableCounters) { current, old in current - old },
                             "explorerChangedFrames": samples.count,
+                            "explorerCompositionBuilds": surface.compositionBuilds - oldBuilds,
+                            "explorerCompositionReuses": surface.compositionReuses - oldReuses,
                             "explorerPresentedIntervalMs": ["p50": ms(PresentationTiming.percentile(intervals, 0.5)),
                                 "p95": ms(PresentationTiming.percentile(intervals, 0.95)), "max": ms(intervals.max() ?? 0)],
                             "explorerNativeFallbacks": surface.nativeFallbacks - oldFallbacks,
@@ -132,6 +144,8 @@ final class InteractionBenchmark {
                         }
                     }
                 }
+                surface.recordsMotionSamples = false
+                surface.frameProfile = nil
                 shell.metalFrameProfile = nil
                 shell.smoothScrollOffset = 0
             case "manual-motion":

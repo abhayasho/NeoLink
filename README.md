@@ -18,7 +18,7 @@
 > [!NOTE]
 > NeoLink is an early prototype. Expect rough edges.
 
-Build 22 (1.10.2) removes hidden native explorer artwork work while Metal is drawing, routes precise trackpad movement directly to the GPU explorer viewport, and advances editor scroll settling at the terminal’s drawable deadline. Retina text quality, SSH/SFTP, editor tools and native fallback remain available. Full-size checks now separate CPU rendering, GPU execution and presentation timing. See [rendering details and validation](docs/RENDERING.md).
+Build 23 (1.10.3) expands the custom Metal compositor: the explorer retains native-resolution blocks of row artwork on the GPU, then scrolls them with a single textured draw instead of rebuilding per-row commands each frame. Resize recovery keeps Metal available after viewport changes. Unrelated terminal activity no longer redraws an unchanged explorer, and detailed motion traces are collected only during benchmarks. See [rendering details and validation](docs/RENDERING.md).
 
 ## Features
 

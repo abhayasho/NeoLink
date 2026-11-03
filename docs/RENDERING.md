@@ -1,5 +1,37 @@
 # Native GPU text rendering
 
+## Retained GPU composition (1.10.3, build 23)
+
+The custom Metal explorer compositor now retains a block of nearby, fully rendered rows in a private GPU texture. Ordinary scrolling encodes one textured quad rather than rebuilding row geometry, hashing row URLs and binding each row texture on every display callback. Metal performs both the initial row composition and subsequent viewport sampling. The texture stays at native backing-pixel resolution with nearest sampling and integer-pixel placement; it does not scale down text.
+
+A retained block is reused only when it covers the visible row range and matches the current scene revision, backing scale and pixel width. Selection, hover, Git/diagnostic decorations, content changes and resize invalidate it. It includes up to 24 nearby rows on either side and at most 16 MiB of extra GPU storage, independently of the existing bounded row cache. Oversized viewports or allocation failure retain the direct per-row GPU path. Missing row artwork still reveals the complete native table. Input, accessibility, menus, drag/drop, SSH/SFTP and document handling retain their existing paths. Rejected old-size drawables schedule up to three bounded recovery attempts, so a scrollbar/viewport size change cannot strand the surface on native rows while no further input arrives. The Performance Monitor names the fallback reason when the explorer is not covered by Metal.
+
+Unchanged explorer content is no longer invalidated by unrelated terminal activity. Detailed per-frame motion samples and CPU/GPU profiling are opt-in for the benchmark, so ordinary scrolling does not maintain its large trace array. CoreText still prepares new glyph and row artwork on the CPU; cached visual composition is GPU work. This is a retained Metal renderer component, not a replacement of every native panel with a new UI framework.
+
+### Same-binary full-screen comparison
+
+Four valid, unlocked/frontmost runs on the M2 Max's built-in 120 Hz display used the same packaged binary, 1728 x 1084 point native full-screen window, 2x backing and 13-point terminal font. The first pair ran direct then retained; the second pair reversed that order. Both animate the terminal and explorer for five seconds plus presentation drain.
+
+| Metric | Direct 1 | Retained 1 | Retained 2 | Direct 2 |
+|---|---:|---:|---:|---:|
+| Process CPU, percent of one core | 46.1% | 41.7% | 42.2% | 51.1% |
+| Explorer CPU prepare/encode total | 570.5 ms | 36.9 ms | 37.3 ms | 630 ms |
+| Explorer CPU prepare/encode p95 | 1.6 ms | 0.2 ms | 0.2 ms | 1.6 ms |
+| Explorer GPU execution total | 136.7 ms | 110.8 ms | 119.1 ms | 130.5 ms |
+| Explorer GPU execution p95 | 1 ms | 1 ms | 1 ms | 1 ms |
+| Retained block builds / reuses | 0 / 0 | 5 / 617 | 5 / 628 | 0 / 0 |
+| Terminal new-frame interval p95 | 8.3 ms | 8.3 ms | 8.3 ms | 8.3 ms |
+| Explorer changed-frame interval p95 | 8.3 ms | 8.3 ms | 8.3 ms | 8.3 ms |
+| Native explorer fallbacks | 0 | 0 | 0 | 0 |
+
+Explorer CPU rendering work decreased by about 94%; total process CPU was 9.5% and 17.4% lower in the two pairs. These are different scopes. GPU execution also became more efficient: retaining composition does not imply a higher GPU utilization percentage. This moves repeated scene work out of the CPU loop without adding artificial GPU load. System-wide GPU utilization and energy consumption were not measured.
+
+Three idle scenarios had zero window callbacks and no terminal frames, with 4.7–4.9% instrumented process CPU. The retained repeat's idle scenario had 119 callbacks and terminal content updates (13.1% CPU); the source of that activity was not isolated. The 2 ms responsiveness probe itself adds work, so those figures must not be quoted as normal idle CPU. Motion scenarios still had occasional 16.7–33.3 ms held-frame gaps; p95 at 8.3 ms does not establish uninterrupted 120 FPS or perceptual parity with Zed. No natural-input or authenticated remote performance claim follows from this procedural workload.
+
+[Raw reports and tested binary hashes](rendering-build23.json) retain all four comparison runs and the final-package check after adding resize recovery. The final package measured 42.8% process CPU, 29.4 ms total explorer CPU encoding, one composition build and 628 reuses, with 8.3 ms p95 on both surfaces and no native fallbacks. Its maximum terminal/explorer intervals were 33.3/16.7 ms; idle had zero clock callbacks and no terminal frames. The 129 native tests pass, including byte-for-byte comparison of retained GPU pixels against the independent per-row path during fractional scrolling and reversals, plus selection/hover invalidation, input pass-through, rejection of stale-size drawables, recovery without further input and native fallback. Neovim runtime and eight offline benchmark checks pass.
+
+Repeat the existing full-screen command below with `NEOLINK_EXPLORER_COMPOSITION=0` to compare the direct path. That variable is read only by the developer benchmark and never changes the persisted user preference. Normal rendering uses retained composition when available.
+
 ## Full-size explorer work and surface motion (1.10.2, build 22)
 
 The larger-window investigation separated CPU preparation, GPU execution and actual drawable presentation. In the maximized baseline, terminal encoding took 0.2 ms at p95 and GPU execution 1.8 ms, while the main-thread probe saw waits up to 29.9 ms. A main-thread sample also found native AppKit glyph rasterization underneath the Metal explorer: setting row layer opacity to zero had not stopped that work.

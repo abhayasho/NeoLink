@@ -13,19 +13,19 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.10.2</string>
+	<string>1.10.3</string>
 	<key>CFBundleVersion</key>
-	<string>22</string>
+	<string>23</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSDocumentsFolderUsageDescription</key>
-	<string>NeoLink opens and edits projects you choose in Documents, including their terminal and coding-agent sessions.</string>
 	<key>NSDesktopFolderUsageDescription</key>
 	<string>NeoLink opens and edits projects you choose on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>NeoLink opens and edits projects you choose in Documents, including their terminal and coding-agent sessions.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>NeoLink opens files you choose in Downloads and saves files you download from remote hosts.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>NeoLink connects to SSH and SFTP servers you choose on your local network.</string>
 	<key>NSPrincipalClass</key>

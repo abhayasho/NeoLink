@@ -44,7 +44,9 @@ final class ExplorerMetalTests: XCTestCase {
                 diagnostics: ExplorerDiagnostics(errors: 0, warnings: index == 1 ? 2 : 0))
         }
         let surface = try XCTUnwrap(ExplorerMetalView(scroll: scroll))
-        surface.scene = { .init(rows: rows, active: nil, selected: 1, hovered: nil) }
+        var selected = 1
+        var hovered: Int?
+        surface.scene = { .init(rows: rows, active: nil, selected: selected, hovered: hovered) }
         var covered: [Bool] = []
         surface.coverageChanged = { covered.append($0) }
         scroll.addSubview(surface, positioned: .above, relativeTo: scroll.contentView)
@@ -61,6 +63,33 @@ final class ExplorerMetalTests: XCTestCase {
         let scale = window.backingScaleFactor
         XCTAssertEqual(pixel(before, x: Int(300 * scale), y: Int(12 * scale)), [20,20,20])
         XCTAssertEqual(pixel(before, x: Int(300 * scale), y: Int(36 * scale)), [35,35,35], "Selection is composed on the GPU")
+        // Compare the retained GPU composition against independent per-row encoding,
+        // including fractional edges, reversals and decorations. The extra pass must
+        // not blur glyphs or change colors by even one byte.
+        for position: CGFloat in [5.5, 29, 7, 24 * 20 + 5] {
+            scroll.contentView.scroll(to: .init(x: 0, y: position))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            let composed = try capture(surface, contentChanged: false)
+            let builds = surface.compositionBuilds
+            _ = try capture(surface, contentChanged: false)
+            XCTAssertEqual(surface.compositionBuilds, builds, "Unchanged frames reuse GPU artwork")
+            surface.usesCachedComposition = false
+            let reference = try capture(surface, contentChanged: false)
+            XCTAssertEqual(composed.dataProvider!.data! as Data, reference.dataProvider!.data! as Data,
+                           "Retained composition must equal native-resolution row rendering at y=\(position)")
+            surface.usesCachedComposition = true
+        }
+        XCTAssertGreaterThan(surface.compositionReuses, 0)
+        XCTAssertTrue(surface.motionSamples.isEmpty, "Normal rendering must not retain benchmark traces")
+        selected = 21; hovered = 22
+        let decorated = try capture(surface)
+        XCTAssertEqual(pixel(decorated, x: Int(300 * scale), y: Int(31 * scale)), [35,35,35])
+        XCTAssertEqual(pixel(decorated, x: Int(300 * scale), y: Int(55 * scale)), [33,33,33])
+        surface.usesCachedComposition = false
+        let decoratedReference = try capture(surface, contentChanged: false)
+        XCTAssertEqual(decorated.dataProvider!.data! as Data, decoratedReference.dataProvider!.data! as Data,
+                       "Changed selection and hover must invalidate the retained scene")
+        surface.usesCachedComposition = true
         scroll.contentView.scroll(to: .init(x: 0, y: 24 * 20 + 5))
         scroll.reflectScrolledClipView(scroll.contentView)
         let after = try capture(surface)
@@ -69,16 +98,30 @@ final class ExplorerMetalTests: XCTestCase {
         XCTAssertEqual(after.width, before.width)
         XCTAssertTrue(surface.lastDrawnRange.count >= 10, "Partially exposed edge rows are included")
         XCTAssertLessThanOrEqual(surface.cachedRowCount, ExplorerMetalView.cacheLimit)
+        let buildsBeforeResize = surface.compositionBuilds
+        surface.drawOffscreenForTesting {
+            // Acquire an old drawable, then change backing dimensions as AppKit does
+            // when a scrollbar appears. It must be refused, never stretched.
+            scroll.setFrameSize(.init(width: 300, height: 240))
+            surface.invalidateScene()
+        }
+        XCTAssertEqual(surface.lastDrawState, "resizing")
+        XCTAssertFalse(surface.isCoveringNativeRows)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertFalse(surface.isHidden, "A stale drawable must retry without another user gesture")
+        let resized = try capture(surface, contentChanged: false)
+        XCTAssertEqual(resized.width, Int((surface.bounds.width * scale).rounded()))
+        XCTAssertGreaterThan(surface.compositionBuilds, buildsBeforeResize)
         surface.shutdown()
         XCTAssertFalse(surface.isCoveringNativeRows); XCTAssertEqual(covered.last, false)
     }
 
     @MainActor
-    private func capture(_ surface: ExplorerMetalView) throws -> CGImage {
+    private func capture(_ surface: ExplorerMetalView, contentChanged: Bool = true) throws -> CGImage {
         let captured = expectation(description: "Explorer GPU pixels")
         var image: CGImage?
         surface.captureNextFrame = { image = $0; captured.fulfill() }
-        surface.invalidateScene()
+        surface.invalidateScene(contentChanged: contentChanged)
         let deadline = Date(timeIntervalSinceNow: 5)
         while image == nil, Date() < deadline {
             surface.drawOffscreenForTesting()

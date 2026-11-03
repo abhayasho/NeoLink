@@ -21,6 +21,20 @@ final class ExplorerMetalView: NSView {
         let texture: MTLTexture
         var used: UInt64
     }
+    private struct Composition {
+        let rows: Range<Int>
+        let revision: UInt64
+        let scale: CGFloat
+        let texture: MTLTexture
+    }
+    private var composition: Composition?
+    // Tests compare the cached GPU pass with the original per-row pass pixel for pixel.
+    var usesCachedComposition = true
+    private(set) var compositionBuilds = 0
+    private(set) var compositionReuses = 0
+    var recordsMotionSamples = false
+    /// Opt-in benchmark timing; normal drawing installs no profiling completion.
+    var frameProfile: ((_ cpu: Double, _ gpu: Double) -> Void)?
     private struct JobKey: Hashable { let id: URL; let width: Int; let scale: CGFloat; let generation: UInt64 }
     private struct Raster {
         let width: Int, height: Int
@@ -60,6 +74,8 @@ final class ExplorerMetalView: NSView {
     private(set) var lastDrawnRange = 0..<0
     var cachedRowCount: Int { cache.count }
     private var artworkRefreshScheduled = false
+    private var resizeRetryScheduled = false
+    private var resizeRetries = 0
     static let cacheLimit = 512
     static var allowsFrameCapture = false
 
@@ -126,10 +142,13 @@ final class ExplorerMetalView: NSView {
         legacyClock?.invalidate(); legacyClock = nil
         frames?.unregister(ObjectIdentifier(self))
         frames = WindowFrameScheduler.forWindow(window)
-        frames?.register(ObjectIdentifier(self), interaction: { [weak self] in self?.invalidateScene(contentChanged: false) },
+        // Bounds, row metadata and hover already invalidate this surface. Typing in
+        // another panel must not redraw an unchanged explorer for another second.
+        frames?.register(ObjectIdentifier(self),
                          changedCount: { [weak self] in self?.changedFrames ?? 0 }) { [weak self] in
-            guard let self, self.isCoveringNativeRows, self.window?.isVisible == true else { return nil }
-            return ("Explorer", self.presentedFrames)
+            guard let self, self.window?.isVisible == true else { return nil }
+            let name = self.isCoveringNativeRows ? "Explorer" : "Explorer (native fallback: \(self.lastDrawState))"
+            return (name, self.presentedFrames)
         }
         guard let window, let layer = layer as? CAMetalLayer else { uncover(); return }
         for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification,
@@ -184,7 +203,7 @@ final class ExplorerMetalView: NSView {
             let scale = window?.backingScaleFactor ?? 2
             if layer.contentsScale != scale { layer.contentsScale = scale }
             let size = CGSize(width: max(1, ceil(bounds.width * scale)), height: max(1, ceil(bounds.height * scale)))
-            if layer.drawableSize != size { layer.drawableSize = size }
+            if layer.drawableSize != size { layer.drawableSize = size; resizeRetries = 0 }
         }
         CATransaction.commit()
         guard let scene = scene?() else {
@@ -208,6 +227,7 @@ final class ExplorerMetalView: NSView {
         let scale = window?.backingScaleFactor ?? 2, width = Int(ceil(bounds.width * scale))
         let y = scroll.contentView.bounds.minY
         let visibleRows = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
+        if reusableComposition(visible: visibleRows, width: width, scale: scale) != nil { return true }
         let first = visibleRows.lowerBound, end = visibleRows.upperBound
         let prefetchMargin = 48
         for index in first..<max(first, end) {
@@ -230,12 +250,13 @@ final class ExplorerMetalView: NSView {
     func shutdown() {
         generation &+= 1
         artworkRefreshScheduled = false
+        resizeRetryScheduled = false
         displayDriver?.invalidate(); displayDriver = nil
         legacyClock?.invalidate(); legacyClock = nil
         windowObservers.forEach(NotificationCenter.default.removeObserver); windowObservers.removeAll()
         frames?.unregister(ObjectIdentifier(self))
         uncover(); scene = nil; coverageChanged = nil
-        cache.removeAll(); jobs.removeAll()
+        cache.removeAll(); jobs.removeAll(); composition = nil
     }
 
     private func uncover() {
@@ -245,12 +266,15 @@ final class ExplorerMetalView: NSView {
 
     /// Offscreen pixel validation also works when the screen is locked. It deliberately
     /// says nothing about on-screen cadence; the release benchmark checks that separately.
-    func drawOffscreenForTesting() {
+    func drawOffscreenForTesting(beforeDraw: () -> Void = {}) {
         guard Self.allowsFrameCapture, frameSlot.isAvailable, let drawable = (layer as? CAMetalLayer)?.nextDrawable() else { return }
+        beforeDraw()
         draw(drawable: drawable, allowOffscreen: true)
     }
 
     private func draw(drawable: CAMetalDrawable, allowOffscreen: Bool = false) {
+        let profile = frameProfile
+        let started = profile == nil ? 0 : CACurrentMediaTime()
         drawCallbacks += 1
         lastDrawState = "callback"
         guard let window, (allowOffscreen || (window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible))),
@@ -260,45 +284,157 @@ final class ExplorerMetalView: NSView {
         guard frameSlot.isAvailable else { lastDrawState = "busy"; return }
         let scale = window.backingScaleFactor, width = Int(ceil(bounds.width * scale))
         guard drawable.texture.width == width, drawable.texture.height == Int(ceil(bounds.height * scale)) else {
-            lastDrawState = "resizing"; uncover(); return
+            lastDrawState = "resizing"; uncover(); retryAfterResize(); return
         }
         let y = (scroll.contentView.bounds.minY * scale).rounded() / scale
         let visibleRows = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
-        let first = visibleRows.lowerBound, end = visibleRows.upperBound
         let visible = visibleRows
-        let prefetchMargin = 48
-        for index in visible {
-            let row = scene.rows[index]
-            if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
-            schedule(row, width: width, scale: scale)
-        }
-        let prefetch = max(0, first - prefetchMargin)..<min(scene.rows.count, max(first, end) + prefetchMargin)
-        for index in prefetch where index < first || index >= end {
-            let row = scene.rows[index]
-            if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
-            schedule(row, width: width, scale: scale)
-        }
-        let allVisibleReady = visible.allSatisfy { index in
-            let row = scene.rows[index]
-            return cache[row.id].map { $0.row == row && $0.width == width && $0.scale == scale } ?? false
-        }
-        guard allVisibleReady else {
-            // Never present a partly empty tree or stale text while new artwork loads.
-            // Visible rows have priority over prefetch; batched completions restore Metal.
+        let cachedComposition = reusableComposition(visible: visible, width: width, scale: scale)
+        if cachedComposition == nil, !artworkReady(scene: scene) {
+            // Missing artwork still reveals complete native rows; never cache blank text.
             lastDrawState = "artwork missing"; uncover(); displayDriver?.stop(); legacyClock?.stop(); return
         }
         if !dirty, CACurrentMediaTime() > activeUntil {
             lastDrawState = "idle"; displayDriver?.stop(); legacyClock?.stop(); return
         }
         let changed = y != lastPosition || sceneRevision != lastSceneRevision
+        guard let command = queue.makeCommandBuffer() else { uncover(); return }
+        let composed = cachedComposition ?? buildComposition(scene: scene, visible: visible, width: width, scale: scale, command: command)
+        guard let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(drawable.texture)) else { uncover(); return }
+        configure(encoder, texture: drawable.texture)
+        if let composed {
+            if cachedComposition != nil { compositionReuses += 1 }
+            let top = Float((CGFloat(composed.rows.lowerBound) * 24 - y) * scale)
+            let bottom = top + Float(composed.texture.height), right = Float(width)
+            let vertices: [SIMD4<Float>] = [
+                .init(0, top, 0, 0), .init(right, top, 1, 0), .init(0, bottom, 0, 1),
+                .init(right, top, 1, 0), .init(right, bottom, 1, 1), .init(0, bottom, 0, 1)]
+            vertices.withUnsafeBytes { encoder.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
+            var fill = SIMD4<Float>(0, 0, 0, 1)
+            encoder.setFragmentBytes(&fill, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            encoder.setFragmentTexture(composed.texture, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        } else {
+            encodeRows(scene: scene, visible: visible, y: y, width: width, scale: scale, encoder: encoder)
+        }
+        encoder.endEncoding()
+        if let capture = captureNextFrame, !drawable.texture.isFramebufferOnly {
+            captureNextFrame = nil
+            capturePixels(drawable.texture, command: command, completion: capture)
+        }
+        lastDrawnRange = visible
+        guard frameSlot.acquire() else { return }
+        dirty = false; lastPosition = y; lastSceneRevision = sceneRevision
+        resizeRetries = 0
+        lastDrawState = "submitted"
+        isHidden = false
+        drawable.addPresentedHandler { [weak self] drawable in
+            let time = drawable.presentedTime
+            DispatchQueue.main.async { [weak self] in
+                guard let self, time > 0 else { return }
+                self.presentedFrames &+= 1
+                if changed { self.changedFrames &+= 1 }
+                if self.recordsMotionSamples {
+                    self.motionSamples.append((time, Double(y), changed))
+                    if self.motionSamples.count > 4000 { self.motionSamples.removeFirst(self.motionSamples.count - 4000) }
+                }
+                if !self.isHidden, !self.isCoveringNativeRows {
+                    self.isCoveringNativeRows = true; self.coverageChanged?(true)
+                }
+            }
+        }
+        let slot = frameSlot
+        if let profile {
+            let cpu = CACurrentMediaTime() - started
+            command.addCompletedHandler { buffer in
+                guard buffer.gpuStartTime > 0, buffer.gpuEndTime >= buffer.gpuStartTime else { return }
+                let gpu = buffer.gpuEndTime - buffer.gpuStartTime
+                DispatchQueue.main.async { profile(cpu, gpu) }
+            }
+        }
+        command.addCompletedHandler { [weak self] command in
+            // Release on Metal's completion thread. Waiting for a main-run-loop hop can
+            // make an already completed frame reject the next display-link update.
+            slot.release()
+            guard command.status == .error else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.lastDrawState = command.error?.localizedDescription ?? "completed"
+                if command.status == .error { self.composition = nil; self.uncover(); self.displayDriver?.stop(); self.legacyClock?.stop() }
+            }
+        }
+        command.present(drawable); command.commit()
+    }
+
+    private func retryAfterResize() {
+        // A display-link drawable can reflect the previous layer size. Hiding the
+        // rejected surface without another wake leaves it stuck on native rows,
+        // especially after the first scrollbar changes the clip-view width.
+        guard !resizeRetryScheduled, resizeRetries < 3 else { return }
+        resizeRetryScheduled = true; resizeRetries += 1
+        let token = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { [weak self] in
+            guard let self, self.generation == token else { return }
+            self.resizeRetryScheduled = false
+            guard self.window?.isVisible == true, self.window?.isMiniaturized == false else { return }
+            self.invalidateScene(contentChanged: false)
+        }
+    }
+
+    private func reusableComposition(visible: Range<Int>, width: Int, scale: CGFloat) -> Composition? {
+        guard usesCachedComposition, let composition, composition.revision == sceneRevision,
+              composition.texture.width == width, composition.scale == scale,
+              composition.rows.lowerBound <= visible.lowerBound,
+              composition.rows.upperBound >= visible.upperBound else { return nil }
+        return composition
+    }
+
+    private func renderPass(_ texture: MTLTexture) -> MTLRenderPassDescriptor {
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].texture = texture
         pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 20/255, green: 20/255, blue: 20/255, alpha: 1)
-        guard let command = queue.makeCommandBuffer(), let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { uncover(); return }
+        return pass
+    }
+
+    private func configure(_ encoder: MTLRenderCommandEncoder, texture: MTLTexture) {
         encoder.setRenderPipelineState(pipeline)
-        var viewport = SIMD2<Float>(Float(drawable.texture.width), Float(drawable.texture.height))
+        var viewport = SIMD2<Float>(Float(texture.width), Float(texture.height))
         encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+    }
+
+    /// Composite nearby immutable rows on the GPU once. Scrolling then samples this
+    /// native-resolution strip with one quad; CPU row iteration and bindings are reused.
+    private func buildComposition(scene: Scene, visible: Range<Int>, width: Int, scale: CGFloat,
+                                  command: MTLCommandBuffer) -> Composition? {
+        guard usesCachedComposition, !visible.isEmpty else { return nil }
+        let rowHeight = Int((24 * scale).rounded())
+        // Additional GPU storage is bounded independently of the row artwork cache.
+        let maxRows = min(16384 / max(1, rowHeight), (16 * 1024 * 1024) / max(1, width * rowHeight * 4))
+        guard visible.count <= maxRows else { composition = nil; return nil }
+        var first = visible.lowerBound, end = visible.upperBound
+        let margin = min(24, (maxRows - visible.count) / 2)
+        func ready(_ index: Int) -> Bool {
+            let row = scene.rows[index]
+            return cache[row.id].map { $0.row == row && $0.width == width && $0.scale == scale } ?? false
+        }
+        while first > max(0, visible.lowerBound - margin), ready(first - 1) { first -= 1 }
+        while end < min(scene.rows.count, visible.upperBound + margin), ready(end) { end += 1 }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+            width: width, height: (end - first) * rowHeight, mipmapped: false)
+        descriptor.storageMode = .private; descriptor.usage = [.renderTarget, .shaderRead]
+        guard let texture = device.makeTexture(descriptor: descriptor),
+              let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(texture)) else { composition = nil; return nil }
+        configure(encoder, texture: texture)
+        encodeRows(scene: scene, visible: first..<end, y: CGFloat(first) * 24, width: width, scale: scale, encoder: encoder)
+        encoder.endEncoding()
+        let result = Composition(rows: first..<end, revision: sceneRevision, scale: scale, texture: texture)
+        composition = result; compositionBuilds += 1
+        return result
+    }
+
+    private func encodeRows(scene: Scene, visible: Range<Int>, y: CGFloat, width: Int, scale: CGFloat,
+                            encoder: MTLRenderCommandEncoder) {
         for index in visible {
             let row = scene.rows[index]
             guard var art = cache[row.id] else { continue }
@@ -318,42 +454,6 @@ final class ExplorerMetalView: NSView {
             encoder.setFragmentTexture(art.texture, index: 0)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
-        encoder.endEncoding()
-        if let capture = captureNextFrame, !drawable.texture.isFramebufferOnly {
-            captureNextFrame = nil
-            capturePixels(drawable.texture, command: command, completion: capture)
-        }
-        lastDrawnRange = visible
-        guard frameSlot.acquire() else { return }
-        dirty = false; lastPosition = y; lastSceneRevision = sceneRevision
-        lastDrawState = "submitted"
-        isHidden = false
-        drawable.addPresentedHandler { [weak self] drawable in
-            let time = drawable.presentedTime
-            DispatchQueue.main.async { [weak self] in
-                guard let self, time > 0 else { return }
-                self.presentedFrames &+= 1
-                if changed { self.changedFrames &+= 1 }
-                self.motionSamples.append((time, Double(y), changed))
-                if self.motionSamples.count > 4000 { self.motionSamples.removeFirst(self.motionSamples.count - 4000) }
-                if !self.isHidden, !self.isCoveringNativeRows {
-                    self.isCoveringNativeRows = true; self.coverageChanged?(true)
-                }
-            }
-        }
-        let slot = frameSlot
-        command.addCompletedHandler { [weak self] command in
-            // Release on Metal's completion thread. Waiting for a main-run-loop hop can
-            // make an already completed frame reject the next display-link update.
-            slot.release()
-            guard command.status == .error else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.lastDrawState = command.error?.localizedDescription ?? "completed"
-                if command.status == .error { self.uncover(); self.displayDriver?.stop(); self.legacyClock?.stop() }
-            }
-        }
-        command.present(drawable); command.commit()
     }
 
     private func capturePixels(_ texture: MTLTexture, command: MTLCommandBuffer, completion: @escaping (CGImage) -> Void) {
