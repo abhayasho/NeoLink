@@ -21,16 +21,16 @@ jobs:
           persist-credentials: false
       - name: Install coding runtimes
         run: brew install neovim ripgrep pyright
+      - name: Editor runtime regression
+        run: python3 scripts/test-editor.py
+      - name: Offline benchmark validation
+        run: python3 scripts/test-benchmark.py
       - name: Native regression tests
         run: swift test
       - name: Agent transport on a constrained task pool
         run: |
           neolink_test_bundle="$(swift build --show-bin-path)/NeoLinkPackageTests.xctest"
           LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 xcrun xctest -XCTest NeoLinkTests.ACPTests "$neolink_test_bundle"
-      - name: Editor runtime regression
-        run: python3 scripts/test-editor.py
-      - name: Offline benchmark validation
-        run: python3 scripts/test-benchmark.py
       - name: Package release app
         run: ./scripts/build-app.sh
       - name: Verify packaged resources and signature

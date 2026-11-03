@@ -88,12 +88,21 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
                 # NeoLink intentionally defers diagnostics during Insert mode.
                 # Leave it before checking the published diagnostic count.
                 lua('vim.cmd("stopinsert")')
-                for _ in range(300):
+                # A clean CI image also cold-starts Node, Pyright and typeshed.
+                # Use a wall-clock deadline rather than assuming 300 RPC process
+                # launches take a predictable time on every Mac.
+                diagnostic_deadline = time.monotonic() + 60
+                while True:
                     snapshot = dispatch(method='status')['state']
                     current = next(b for b in snapshot['buffers'] if b['path'] == str(source))
                     if current['diagnostics'] > 0: break
-                    time.sleep(.05)
+                    if time.monotonic() >= diagnostic_deadline: break
+                    time.sleep(.1)
                 assert 'pyright' in current['servers'], current
+                if current['diagnostics'] == 0:
+                    print('LSP diagnostic timeout:', current, 'mode:', lua('vim.fn.mode()'))
+                    lsp_log = pathlib.Path(lua('vim.lsp.log.get_filename()'))
+                    if lsp_log.is_file(): print(lsp_log.read_text(errors='replace')[-6000:])
                 assert current['diagnostics'] > 0, 'No Python type diagnostic'
                 definition = lua('vim.json.encode(vim.lsp.buf_request_sync(0,"textDocument/definition",vim.lsp.util.make_position_params(0,"utf-16"),3000))')
                 assert 'example.py' in definition and '"line":0' in definition, definition
