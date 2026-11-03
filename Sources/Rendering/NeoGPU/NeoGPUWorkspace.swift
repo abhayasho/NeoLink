@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 @preconcurrency import Metal
 import QuartzCore
 
@@ -53,9 +54,13 @@ final class NeoGPUWorkspace: NSView {
     private var source: FrameClock?
     private let slot = ExplorerFrameSlot()
     private var observers: [NSObjectProtocol] = []
+    private var refreshObservation: AnyCancellable?
+    private(set) var continuousRefresh: Bool
     private(set) var enabled = true
     private(set) var suspended = false
     private(set) var presentedFrames: UInt64 = 0
+    private(set) var presentationTiming = FrameTiming()
+    func resetPresentationTiming() { presentationTiming = FrameTiming() }
     private(set) var lastNodeCount = 0
     private var generation: UInt64 = 0
     private(set) var drawCallbacks = 0
@@ -68,18 +73,24 @@ final class NeoGPUWorkspace: NSView {
         return root
     }
 
-    init?(window: WorkspaceWindow, device: MTLDevice) {
+    init?(window: WorkspaceWindow, device: MTLDevice, preferences: TerminalRenderingPreferences? = nil) {
         guard #available(macOS 14, *), let content = window.contentView,
               let renderer = NeoGPUResources.shared.renderer(device: device), let queue = device.makeCommandQueue() else { return nil }
+        let preferences = preferences ?? .shared
         self.device = device; self.renderer = renderer; self.queue = queue
+        continuousRefresh = preferences.continuousRefresh
         super.init(frame: content.bounds)
         autoresizingMask = [.width, .height]; wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
         setAccessibilityElement(false)
         content.addSubview(self, positioned: .above, relativeTo: nil)
         configureSource()
+        refreshObservation = preferences.$continuousRefresh.dropFirst().sink { [weak self] enabled in
+            self?.continuousRefresh = enabled
+            self?.wake()
+        }
         for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didChangeScreenNotification,
-                     NSWindow.didDeminiaturizeNotification, NSWindow.didEndLiveResizeNotification] {
+                     NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification, NSWindow.didEndLiveResizeNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.configureSource(); self?.wake() }
             })
@@ -108,6 +119,7 @@ final class NeoGPUWorkspace: NSView {
     override func setFrameSize(_ size: NSSize) { super.setFrameSize(size); wake() }
 
     private func configureSource() {
+        presentationTiming.pause()
         source?.invalidate(); source = nil
         guard !Self.allowsOffscreenTesting else { return }
         guard #available(macOS 14, *), let layer = layer as? CAMetalLayer else { return }
@@ -138,7 +150,9 @@ final class NeoGPUWorkspace: NSView {
     }
     func wake() {
         guard enabled, !suspended, !clients.isEmpty, let window, window.isVisible, !window.isMiniaturized,
-              window.occlusionState.contains(.visible), let layer = layer as? CAMetalLayer else { return }
+              window.occlusionState.contains(.visible), let layer = layer as? CAMetalLayer else {
+            source?.stop(); presentationTiming.pause(); return
+        }
         let scale = window.backingScaleFactor
         let size = CGSize(width: max(1, (bounds.width * scale).rounded()), height: max(1, (bounds.height * scale).rounded()))
         if layer.contentsScale != scale || layer.drawableSize != size {
@@ -153,6 +167,7 @@ final class NeoGPUWorkspace: NSView {
         guard suspended != value else { return }
         generation &+= 1
         suspended = value; isHidden = value
+        presentationTiming.pause()
         let existing = clients.values.compactMap(\.value)
         clients.removeAll()
         existing.forEach { $0.gpuSetHosted(false) }
@@ -179,7 +194,8 @@ final class NeoGPUWorkspace: NSView {
 
     private func draw(_ drawable: CAMetalDrawable, allowOffscreen: Bool = false) -> Bool {
         drawCallbacks += 1
-        guard enabled, !suspended, let window, allowOffscreen || window.occlusionState.contains(.visible) else { return false }
+        guard enabled, !suspended, let window,
+              allowOffscreen || (window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)) else { return false }
         guard slot.isAvailable else { return true }
         let scale = window.backingScaleFactor
         guard drawable.texture.width == Int((bounds.width * scale).rounded()),
@@ -233,6 +249,9 @@ final class NeoGPUWorkspace: NSView {
                 // Completion can arrive after an overlay, fallback or tab change.
                 // It must not hide a surface that has returned to native ownership.
                 guard self.enabled, !self.suspended, self.generation == generation else { return }
+                // Visibility transitions explicitly pause this series. Keep even
+                // long visible-window stalls instead of silently filtering them.
+                self.presentationTiming.record(timestamp: time, work: 0, includeLongIntervals: true)
                 callbacks.forEach { $0(time) }
             }
         }
@@ -242,6 +261,9 @@ final class NeoGPUWorkspace: NSView {
             if buffer.status == .error { DispatchQueue.main.async { self?.fail() } }
         }
         command.present(drawable); command.commit()
-        return nodes.contains { $0.0.needsAnotherFrame } || ((window as? WorkspaceWindow)?.frames.isRunning ?? false)
+        // Repeat only at the owning display-link deadline. Retained pane textures
+        // avoid reshaping unchanged text; do not enqueue timer-driven extra frames.
+        return (continuousRefresh && !nodes.isEmpty) || nodes.contains { $0.0.needsAnotherFrame }
+            || ((window as? WorkspaceWindow)?.frames.isRunning ?? false)
     }
 }

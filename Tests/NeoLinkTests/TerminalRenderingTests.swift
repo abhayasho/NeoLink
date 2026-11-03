@@ -11,6 +11,11 @@ final class TerminalRenderingTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = TerminalRenderingPreferences(defaults: defaults)
         XCTAssertTrue(preferences.useGPU)
+        XCTAssertTrue(preferences.continuousRefresh)
+        preferences.setContinuousRefresh(false)
+        XCTAssertFalse(TerminalRenderingPreferences(defaults: defaults).continuousRefresh)
+        preferences.setContinuousRefresh(true)
+        XCTAssertTrue(TerminalRenderingPreferences(defaults: defaults).continuousRefresh)
         preferences.setUseGPU(false)
         XCTAssertFalse(TerminalRenderingPreferences(defaults: defaults).useGPU)
         preferences.setUseGPU(true)

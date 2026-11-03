@@ -9,18 +9,27 @@ import Metal
 final class TerminalRenderingPreferences: ObservableObject {
     static let shared = TerminalRenderingPreferences()
     @Published private(set) var useGPU: Bool
+    @Published private(set) var continuousRefresh: Bool
     private let defaults: UserDefaults
     private static let key = "NeoLink.useGPUTextRendering"
+    private static let refreshKey = "NeoLink.continuousGPURefresh"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         useGPU = defaults.object(forKey: Self.key) as? Bool ?? true
+        continuousRefresh = defaults.object(forKey: Self.refreshKey) as? Bool ?? true
     }
 
     func setUseGPU(_ enabled: Bool) {
         guard enabled != useGPU else { return }
         defaults.set(enabled, forKey: Self.key)
         useGPU = enabled
+    }
+
+    func setContinuousRefresh(_ enabled: Bool) {
+        guard enabled != continuousRefresh else { return }
+        defaults.set(enabled, forKey: Self.refreshKey)
+        continuousRefresh = enabled
     }
 }
 

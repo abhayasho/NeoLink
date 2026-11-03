@@ -198,6 +198,18 @@ final class FrameSchedulingTests: XCTestCase {
         timing.record(timestamp: 10.03, work: 0.001)
         XCTAssertEqual(timing.lateIntervals(target: 120), 1)
     }
+
+    func testDrawableStatisticsRetainLongVisibleStallsButExcludeExplicitPauses() {
+        var timing = FrameTiming()
+        timing.record(timestamp: 1, work: 0, includeLongIntervals: true)
+        timing.record(timestamp: 1.4, work: 0, includeLongIntervals: true)
+        XCTAssertEqual(timing.intervals.count, 1)
+        XCTAssertEqual(timing.intervals[0], 0.4, accuracy: 0.0001)
+        XCTAssertEqual(timing.lateIntervals(target: 120), 1)
+        timing.pause()
+        timing.record(timestamp: 20, work: 0, includeLongIntervals: true)
+        XCTAssertEqual(timing.intervals.count, 1, "A hidden window is not a visible stall")
+    }
 }
 
 final class InputLatencySchedulingTests: XCTestCase {

@@ -85,6 +85,9 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
                 source = root / 'example.py'
                 source.write_text('def greet(name: str) -> str:\n    return "Hello " + name\n\ngreet(123)\n')
                 assert dispatch(method='open', path=str(source), line=4)['ok']
+                # NeoLink intentionally defers diagnostics during Insert mode.
+                # Leave it before checking the published diagnostic count.
+                lua('vim.cmd("stopinsert")')
                 for _ in range(300):
                     snapshot = dispatch(method='status')['state']
                     current = next(b for b in snapshot['buffers'] if b['path'] == str(source))

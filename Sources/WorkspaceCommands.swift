@@ -1,4 +1,5 @@
 import AppKit
+import Metal
 
 extension Notification.Name {
     static let neoLinkNewTab = Notification.Name("NeoLink.newTab")
@@ -96,6 +97,7 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         view.addItem(equalZoom)
         view.addItem(.separator())
         add("Use GPU Text Rendering", action: #selector(toggleGPUTextRendering(_:)), target: self, to: view)
+        add("Continuous High Refresh", action: #selector(toggleContinuousRefresh(_:)), target: self, to: view)
         add("Renderer Information…", action: #selector(showRendererInformation(_:)), target: self, to: view)
         add("Performance Monitor…", action: #selector(showPerformanceMonitor(_:)), target: self, to: view)
         view.addItem(.separator())
@@ -161,6 +163,22 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
     @objc private func toggleGPUTextRendering(_ sender: NSMenuItem) {
         let preferences = TerminalRenderingPreferences.shared
         preferences.setUseGPU(!preferences.useGPU)
+        if preferences.useGPU {
+            // A launch with GPU disabled has no shared workspace yet. Compile
+            // resources off-thread before installing it in the existing window.
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let device = MTLCreateSystemDefaultDevice() { NeoGPUResources.shared.prepare(device: device) }
+                DispatchQueue.main.async {
+                    guard TerminalRenderingPreferences.shared.useGPU else { return }
+                    NSApp.windows.compactMap { $0 as? WorkspaceWindow }.forEach { $0.installGPUWorkspace() }
+                }
+            }
+        }
+    }
+
+    @objc private func toggleContinuousRefresh(_ sender: NSMenuItem) {
+        let preferences = TerminalRenderingPreferences.shared
+        preferences.setContinuousRefresh(!preferences.continuousRefresh)
     }
 
     @objc private func showRendererInformation(_ sender: NSMenuItem) {
@@ -198,6 +216,9 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleGPUTextRendering(_:)) {
             menuItem.state = TerminalRenderingPreferences.shared.useGPU ? .on : .off
+        }
+        if menuItem.action == #selector(toggleContinuousRefresh(_:)) {
+            menuItem.state = TerminalRenderingPreferences.shared.continuousRefresh ? .on : .off
         }
         // Native dialog text fields still need Select All. Workspace shortcuts,
         // including Shift-Command-G, must defer to the file picker's commands.

@@ -41,11 +41,11 @@ struct FrameTiming {
     private(set) var intervals: [Double] = []
     private(set) var work: [Double] = []
     private var last: Double?
-    mutating func record(timestamp: Double, work duration: Double) {
+    mutating func record(timestamp: Double, work duration: Double, includeLongIntervals: Bool = false) {
         if let last {
             let interval = timestamp - last
             // A paused/hidden window is not a dropped frame.
-            if interval > 0, interval < 0.25 { intervals.append(interval) }
+            if interval > 0, includeLongIntervals || interval < 0.25 { intervals.append(interval) }
         }
         last = timestamp
         work.append(duration)

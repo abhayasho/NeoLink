@@ -10,20 +10,20 @@
   <img src="https://img.shields.io/badge/Swift-6.0%2B-F05138?logo=swift&logoColor=white" alt="Swift 6.0+">
   <img src="https://img.shields.io/badge/UI-SwiftUI-0A84FF" alt="SwiftUI">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
-  <img src="https://img.shields.io/badge/status-prototype-orange" alt="Prototype">
+  <img src="https://img.shields.io/badge/status-preview-yellow" alt="Preview">
 </p>
 
 **NeoLink** is a native macOS coding workspace and terminal that puts tabbed local and SSH sessions next to a file browser, so you can work with local and remote files from one window. I wanted a terminal like this for macOS and couldn't find one I liked, so I started building it.
 
 > [!NOTE]
-> NeoLink is an early prototype. Expect rough edges.
+> NeoLink is in preview. Automated release checks are included; public notarization and authenticated remote release checks remain outstanding.
 
-Build 24 (1.11.0) introduces **NeoGPU**, a custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
+Build 25 (1.11.1) adds saved continuous-refresh control, actual workspace presentation metrics, automated macOS release checks, and cleanup of unused scaffolding. **NeoGPU** is the custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
 
 ## Features
 
 - **Persistent terminal tabs.** Switch between local and SSH sessions without restarting shells or losing scrollback, powered by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
-- **GPU text rendering at up to 120 Hz.** Shells, SSH sessions, agent terminals, and the Neovim editor draw with Metal: CoreText glyphs are cached in an atlas and drawn as GPU quads, and a row that only moved is translated instead of being shaped again. On macOS 14+, NeoGPU latches pending state and animations at one shared workspace drawable deadline, then presents visible terminal/editor and explorer panes together. Independent surface and native clocks remain available for overlays, fallback and older macOS versions. Clocks stop when idle. Typed output is submitted promptly and every frame keeps VSync enabled. Shell scrollback follows trackpad displacement directly and keeps its fractional position when momentum stops. The explorer defers background row changes during scrolling to avoid interrupting motion. The rendering documentation separates current release measurements from historical latency figures; natural trackpad feel still needs visual comparison. **View → Performance Monitor…** shows the same latency and frame-interval numbers live; **View → Use GPU Text Rendering** switches renderers without restarting sessions, and failures fall back to CoreGraphics. Zed GPUI is not embedded; NeoGPU is an independently implemented Swift/Metal scene engine. [Rendering details and benchmarks](docs/RENDERING.md).
+- **GPU text rendering at up to 120 Hz.** Shells, SSH sessions, agent terminals, and the Neovim editor draw with Metal: CoreText glyphs are cached in an atlas and drawn as GPU quads, and a row that only moved is translated instead of being shaped again. On macOS 14+, NeoGPU latches pending state and animations at one shared workspace drawable deadline, then presents visible terminal/editor and explorer panes together. Independent surface and native clocks remain available for overlays, fallback and older macOS versions. On macOS 14+, **View → Continuous High Refresh** keeps retained coding panes presenting at the display-link rate (up to 120 Hz), including idle frames. It is on by default; turn it off to reduce idle GPU work. Hidden/minimized windows pause. Typed output is submitted promptly and every frame keeps VSync enabled. Shell scrollback follows trackpad displacement directly and keeps its fractional position when momentum stops. The explorer defers background row changes during scrolling to avoid interrupting motion. The rendering documentation separates current release measurements from historical latency figures; natural trackpad feel still needs visual comparison. **View → Performance Monitor…** shows the same latency and frame-interval numbers live; **View → Use GPU Text Rendering** switches renderers without restarting sessions, and failures fall back to CoreGraphics. NeoGPU is an independently implemented Swift/Metal scene engine. [Rendering details and benchmarks](docs/RENDERING.md).
 - **Code and PDFs in tabs.** One shared, on-demand Neovim engine provides a dark code editor inside NeoLink. PDFs use a native viewer. Reopening a file selects its existing tab and preserves editing state. A native text editor is available when Neovim is not installed.
 - **Code intelligence.** Syntax highlighting, completion, diagnostics, definition, references, hover, rename and code actions use installed language servers. Run supported files in a terminal directly from the code toolbar.
 - **Native agent conversations.** Connect an installed ACP adapter from **Agent → Native conversation (ACP)**. Stream replies, inspect tool input and file-change previews, approve or reject requested actions, change advertised modes, and stop a turn in the right panel. Multiple sessions can run alongside code; hiding the panel keeps them alive. Optional stdio MCP server configurations are passed to the adapter. [Setup and limits](docs/AGENT_GUIDE.md).
@@ -48,6 +48,10 @@ Build 24 (1.11.0) introduces **NeoGPU**, a custom retained Metal scene engine. T
 
 ## Performance and benchmarks
 
+Build 25's final full-screen release check measured **8.3 ms p95 / 16.7 ms maximum** between presented motion frames on an M2 Max's built-in 120 Hz display. Continuous mode also maintained 8.3 ms idle drawable intervals. It uses more idle GPU/CPU work; turn off **View → Continuous High Refresh** for demand-driven operation. This is a procedural test, not a guarantee of every refresh or human-perceived smoothness. [Build 25 results and power tradeoff](docs/RENDERING.md#continuous-workspace-refresh-1111-build-25).
+
+The earlier renderer architecture comparison below is retained as a **Build 24 historical baseline**.
+
 Build 24 was measured on an **M2 Max MacBook Pro with a built-in 120 Hz display**, in native full screen at 1728 × 1084 points, 2× backing resolution and 12-point terminal text. Four runs used the same release binary: NeoGPU shared presentation and independent surface presentation, repeated in alternating order. Each run animated terminal scrollback and the explorer together for five seconds, followed by presentation drain.
 
 | Metric | NeoGPU shared workspace | Independent surfaces (control) |
@@ -64,13 +68,26 @@ Frame intervals use the actual presentation time of changed content; p95 is the 
 
 The shared renderer used **5.3% and 7.9% less motion CPU** in the two pairs, at a cost of about **51 MiB more process memory**. Both paths had the same 8.3 ms p95 frame interval; that alone does not establish uninterrupted 120 FPS. Occasional held frames remain. These are short procedural workloads, and the results do not measure subjective trackpad smoothness, energy use or authenticated SSH/SFTP performance. Idle measurements varied and are not suitable for an idle-CPU claim.
 
-**Is NeoLink faster than Zed or VS Code?** A matched comparison against those applications has not been run, so this project does not claim to outperform either. The measurements above compare two NeoLink rendering paths, not competing editors. Startup, file opening, typing latency, workspace search and real-input scrolling need separate, equivalent workloads before making an overall speed comparison.
+**Is NeoLink faster than VS Code?** See the scoped terminal-output comparison below. Overall editor speed, startup, typing latency and search have not been compared.
+
+### Terminal output versus VS Code
+
+On this M2 Max, Build 24 accepted a sustained **81 MB ASCII output stream** in a median **11.63 s**, versus **12.84 s** in VS Code 1.144.0: **9.4% less producer write time** (about 10.4% more throughput). Three runs per app used 12-point text, GPU rendering and 500-line scrollback.
+
+| Producer workload | NeoLink: all runs (seconds) | VS Code: all runs (seconds) |
+| --- | --- | --- |
+| 200,000 lines / 16.2 MB burst | 0.520 / 0.354 / 1.633 | 1.415 / 1.399 / 1.363 |
+| 1,000,000 lines / 81 MB sustained | 11.076 / 11.979 / 11.633 | 13.040 / 12.840 / 12.599 |
+
+This measures **PTY backpressure until the producer finishes writing**, not when the final pixels appear. The short-burst result varies substantially. Both apps were full screen, but native chrome produced different grids (227×63 versus 234×68). VS Code used a fresh profile with no user extensions; an existing workspace remained open to preserve unsaved documents. Runs were sequential, not randomized, and desktop background load was not controlled. These results do **not** establish lower typing latency, smoother scrolling, lower memory use or a faster IDE overall. Build 25’s continuous-refresh policy was not used for this Build 24 comparison.
+
+[Full method, raw measurements and reproduction](docs/TERMINAL_BENCHMARK.md).
 
 [Raw runs and tested binary hash](docs/rendering-build24.json) · [Method, limits and reproduction command](docs/RENDERING.md#shared-neogpu-workspace-1110-build-24) · [Renderer architecture](docs/NEOGPU.md)
 
 ## Requirements
 
-Version 1.10.0/build 20 adds a Metal explorer and display-link-provided terminal/editor drawables on macOS 14+, with native fallbacks. Rendering follows the display up to 120 Hz; this is a target, not a guarantee of every refresh. [Measurements and limits](docs/RENDERING.md).
+Shared GPU presentation requires macOS 14+; macOS 13 retains independent/native fallbacks. Rendering follows the display up to 120 Hz; this is a target, not a guarantee of every refresh. [Measurements and limits](docs/RENDERING.md).
 
 - macOS 13 Ventura or later
 - Xcode 16 or later, or a Swift 6.0+ toolchain with the macOS SDK
@@ -157,9 +174,12 @@ Agents operate on saved files. Save your editor changes first. Native conversati
 ```bash
 swift test
 python3 scripts/test-editor.py
+python3 scripts/test-benchmark.py
+./scripts/build-app.sh
+python3 scripts/verify-app.py NeoLink.app
 ```
 
-The regression suite (137 tests) covers Metal rendering of smooth-scrolled frames compared pixel by pixel, the scroll model, frame scheduling and input-latency attribution, wheel-delta accumulation, persisted text sizing, docked-agent lifecycle, Git staging/unstaging and commits (including an unborn repository), local branch conflicts, stash previews, literal filenames, ACP streaming/permissions/cancellation/timeouts and parallel session isolation, isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials; the rendering tests skip without a Metal GPU. Authenticated SFTP transfers and remote previews still need an integration check against a server.
+The regression suite (138 tests) covers Metal rendering of smooth-scrolled frames compared pixel by pixel, the scroll model, frame scheduling and input-latency attribution, wheel-delta accumulation, persisted text sizing, docked-agent lifecycle, Git staging/unstaging and commits (including an unborn repository), local branch conflicts, stash previews, literal filenames, ACP streaming/permissions/cancellation/timeouts and parallel session isolation, isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials; the rendering tests skip without a Metal GPU. Authenticated SFTP transfers and remote previews still need an integration check against a server.
 
 To measure scrolling smoothness and typing latency on your machine, run the interaction benchmark described in [docs/RENDERING.md](docs/RENDERING.md#benchmark) on a release build.
 
@@ -177,7 +197,6 @@ Sources/
 ├── Sessions/       saved sessions, sidebar, persistence
 ├── FileBrowser/    local file browser pane
 ├── SFTP/           SFTP manager, connection pool, browser view, Keychain passwords
-├── Security/       credential store
 └── NeoLinkTheme.swift
 Vendor/SwiftTerm/   SwiftTerm 1.20.0 with NeoLink's rendering changes (see UPSTREAM.md)
 ```
@@ -201,3 +220,5 @@ The [feature plan](docs/FEATURE_PLAN.md) distinguishes shipped native tools from
 ## License
 
 [MIT](LICENSE) © 2026 Abhay Ashok
+
+GitHub Actions runs these checks on macOS. Hardware presentation and natural trackpad feel require local release checks. [Release checklist and remaining limits](docs/RELEASING.md).

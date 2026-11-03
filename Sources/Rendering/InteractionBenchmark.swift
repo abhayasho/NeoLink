@@ -410,6 +410,7 @@ final class InteractionBenchmark {
                          _ body: () async -> Void) async {
         let frames = window.frames
         frames.resetPresentationTiming()
+        window.gpuWorkspace?.resetPresentationTiming()
         let started = CACurrentMediaTime(), cpuStart = Self.cpuSeconds()
         // Main-thread responsiveness: a background timer queues a block every 2 ms and
         // records how long each waited. A long wait is a stall of input and drawing.
@@ -474,6 +475,13 @@ final class InteractionBenchmark {
             result["keyStagesMedianMs"] = Dictionary(uniqueKeysWithValues: PresentationTiming.stageNames.map {
                 ($0, ms(p(presented.stages[$0] ?? [], 0.5)))
             })
+        }
+        if let workspace = window.gpuWorkspace {
+            let intervals = workspace.presentationTiming.intervals
+            result["workspaceContinuousRefresh"] = workspace.continuousRefresh
+            result["workspaceDrawableIntervalMs"] = stats(intervals)
+            result["workspaceDrawableIntervals"] = intervals.count
+            result["workspaceDrawableLateIntervals"] = intervals.filter { $0 > 1.5 / Double(frames.targetRate) }.count
         }
         if let expectKeys, presented.answeredInputs < expectKeys * 9 / 10 {
             problems.insert("only \(presented.answeredInputs) of \(expectKeys) keys answered")

@@ -8,6 +8,7 @@ final class PerformanceMonitor: NSObject, NSWindowDelegate {
     static let shared = PerformanceMonitor()
     private var panel: NSPanel?
     private weak var frames: WindowFrameScheduler?
+    private weak var workspace: NeoGPUWorkspace?
     private let text = NSTextField(wrappingLabelWithString: "")
     private var timer: Timer?
     private var previous: [ObjectIdentifier: (name: String, count: UInt64)] = [:]
@@ -16,6 +17,7 @@ final class PerformanceMonitor: NSObject, NSWindowDelegate {
 
     func show(for window: NSWindow?) {
         frames = WindowFrameScheduler.forWindow(window)
+        workspace = (window as? WorkspaceWindow)?.gpuWorkspace
         previous = frames?.gpuSamples ?? [:]
         previousChanged = frames?.gpuChangedSamples ?? [:]
         lastSample = CACurrentMediaTime()
@@ -63,8 +65,11 @@ final class PerformanceMonitor: NSObject, NSWindowDelegate {
             }
             return label
         }
-        text.stringValue = frames.summary + "\n\n" + (rates.isEmpty ? "No visible Metal surface." : rates.joined(separator: "\n"))
-            + "\n\nGPU rates count displayed drawables. Explorer can briefly repeat a cached scene to keep ProMotion active; its scene-change rate separates motion from repeats. Frame work covers the window clock; surface Metal callbacks and native work can occur outside it."
+        let intervals = workspace?.presentationTiming.intervals ?? []
+        let cadence = intervals.isEmpty ? "" : String(format: "\nWorkspace drawable intervals: p95 %.1f ms · max %.1f ms (last %d)",
+            PresentationTiming.percentile(intervals, 0.95) * 1000, (intervals.max() ?? 0) * 1000, intervals.count)
+        text.stringValue = frames.summary + "\n\n" + (rates.isEmpty ? "No visible Metal surface." : rates.joined(separator: "\n")) + cadence
+            + "\n\nGPU rates count displayed drawables, including cached repeats. Scene changes measure new content separately. Continuous High Refresh requests the display rate up to 120 Hz while a coding pane is visible; macOS controls physical refresh. Disable it in View to reduce idle GPU work. Frame work covers the window clock; native work can occur outside it."
         previous = samples; previousChanged = changed; lastSample = now
     }
 

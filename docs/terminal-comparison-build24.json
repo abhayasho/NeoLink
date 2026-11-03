@@ -1,0 +1,175 @@
+{
+  "scope": "PTY producer write completion, not final pixel presentation or overall IDE speed",
+  "machine": "Apple M2 Max MacBook Pro, built-in display, 120 Hz setting",
+  "os": "26.6.2",
+  "neolink": {
+    "version": "1.11.0",
+    "build": 24,
+    "binarySHA256": "24ec6e4579440d065aaa96040dafa965addd6a5d22348a2ada2b7e05e9c37fc9"
+  },
+  "vscode": {
+    "version": "1.144.0",
+    "profile": "fresh NeoLink Benchmark profile, no user extensions"
+  },
+  "setup": "Full screen, 12-point terminal font, GPU enabled, 500-line scrollback. Native chrome produced different terminal grids: NeoLink 227x63, VS Code 234x68. Original VS Code workspace remained open to preserve unsaved documents. No aggregate memory/CPU comparison is claimed.",
+  "method": "Same precomputed ASCII bytes, same Python script and interpreter; three consecutive runs per workload/app, two seconds between runs. Applications tested sequentially; not randomized. Other desktop processes were not controlled.",
+  "rejected": "neolink-long-* ran concurrently with a Swift build and is excluded. Initial process sampler ran before the workload and is excluded.",
+  "runs": {
+    "neolink": {
+      "burst": {
+        "samples": [
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 200000,
+            "bytes": 16200000,
+            "sha256": "28dfac53f7b2543b307c764fc706acfa5333da4f39724d1656256cfc9c007640",
+            "columns": 227,
+            "rows": 63,
+            "seconds": 0.5196242909878492,
+            "producerCPUSeconds": 0.067463,
+            "MiBPerSecond": 29.732104895270414
+          },
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 200000,
+            "bytes": 16200000,
+            "sha256": "28dfac53f7b2543b307c764fc706acfa5333da4f39724d1656256cfc9c007640",
+            "columns": 227,
+            "rows": 63,
+            "seconds": 0.35432779195252806,
+            "producerCPUSeconds": 0.07399999999999998,
+            "MiBPerSecond": 43.60234866321505
+          },
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 200000,
+            "bytes": 16200000,
+            "sha256": "28dfac53f7b2543b307c764fc706acfa5333da4f39724d1656256cfc9c007640",
+            "columns": 227,
+            "rows": 63,
+            "seconds": 1.6327986249234527,
+            "producerCPUSeconds": 0.13670199999999996,
+            "MiBPerSecond": 9.461989794672652
+          }
+        ],
+        "medianSeconds": 0.5196242909878492
+      },
+      "sustained": {
+        "samples": [
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 1000000,
+            "bytes": 81000000,
+            "sha256": "1417d4efe09ddab6d5fd6987a2c30850e0f9246990cc407e5bccae5ac2d6c8de",
+            "columns": 227,
+            "rows": 63,
+            "seconds": 11.075774875003844,
+            "producerCPUSeconds": 0.833425,
+            "MiBPerSecond": 6.974466391804432
+          },
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 1000000,
+            "bytes": 81000000,
+            "sha256": "1417d4efe09ddab6d5fd6987a2c30850e0f9246990cc407e5bccae5ac2d6c8de",
+            "columns": 227,
+            "rows": 63,
+            "seconds": 11.978694332996383,
+            "producerCPUSeconds": 0.884088,
+            "MiBPerSecond": 6.448751214572759
+          },
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 1000000,
+            "bytes": 81000000,
+            "sha256": "1417d4efe09ddab6d5fd6987a2c30850e0f9246990cc407e5bccae5ac2d6c8de",
+            "columns": 227,
+            "rows": 63,
+            "seconds": 11.633037207997404,
+            "producerCPUSeconds": 0.836627,
+            "MiBPerSecond": 6.640365559546269
+          }
+        ],
+        "medianSeconds": 11.633037207997404
+      }
+    },
+    "vscode": {
+      "burst": {
+        "samples": [
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 200000,
+            "bytes": 16200000,
+            "sha256": "28dfac53f7b2543b307c764fc706acfa5333da4f39724d1656256cfc9c007640",
+            "columns": 234,
+            "rows": 68,
+            "seconds": 1.414628958911635,
+            "producerCPUSeconds": 0.08121500000000002,
+            "MiBPerSecond": 10.921255236897993
+          },
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 200000,
+            "bytes": 16200000,
+            "sha256": "28dfac53f7b2543b307c764fc706acfa5333da4f39724d1656256cfc9c007640",
+            "columns": 234,
+            "rows": 68,
+            "seconds": 1.3994687079684809,
+            "producerCPUSeconds": 0.08191499999999999,
+            "MiBPerSecond": 11.0395636842844
+          },
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 200000,
+            "bytes": 16200000,
+            "sha256": "28dfac53f7b2543b307c764fc706acfa5333da4f39724d1656256cfc9c007640",
+            "columns": 234,
+            "rows": 68,
+            "seconds": 1.3629175840178505,
+            "producerCPUSeconds": 0.07896099999999999,
+            "MiBPerSecond": 11.335625944627115
+          }
+        ],
+        "medianSeconds": 1.3994687079684809
+      },
+      "sustained": {
+        "samples": [
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 1000000,
+            "bytes": 81000000,
+            "sha256": "1417d4efe09ddab6d5fd6987a2c30850e0f9246990cc407e5bccae5ac2d6c8de",
+            "columns": 234,
+            "rows": 68,
+            "seconds": 13.040499833994545,
+            "producerCPUSeconds": 0.5893660000000001,
+            "MiBPerSecond": 5.923670151625153
+          },
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 1000000,
+            "bytes": 81000000,
+            "sha256": "1417d4efe09ddab6d5fd6987a2c30850e0f9246990cc407e5bccae5ac2d6c8de",
+            "columns": 234,
+            "rows": 68,
+            "seconds": 12.840283290948719,
+            "producerCPUSeconds": 0.578193,
+            "MiBPerSecond": 6.016037020254771
+          },
+          {
+            "scope": "producer PTY write/flush throughput; excludes final presentation",
+            "lines": 1000000,
+            "bytes": 81000000,
+            "sha256": "1417d4efe09ddab6d5fd6987a2c30850e0f9246990cc407e5bccae5ac2d6c8de",
+            "columns": 234,
+            "rows": 68,
+            "seconds": 12.598535457975231,
+            "producerCPUSeconds": 0.5785559999999998,
+            "MiBPerSecond": 6.131476145507556
+          }
+        ],
+        "medianSeconds": 12.840283290948719
+      }
+    }
+  }
+}

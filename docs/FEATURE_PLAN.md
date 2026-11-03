@@ -17,15 +17,15 @@ NeoLink continues incrementally on SwiftUI/AppKit, SwiftTerm, PDFKit and a share
 | Multi-buffers / diagnostics excerpts | Planned. Source-linked editable excerpts need shared-buffer mapping, coordinated undo, conflict handling and reliable multi-file saving. Existing diagnostics use Neovim's list. |
 | ACP agent integration | ACP v1 stdio conversations: streamed text, tool input/diff previews, plans, advertised modes, explicit tool approval and cancellation, plus parallel sessions. Optional active-file path context and access to Git review. Terminal CLIs remain available. No persisted conversations or editor-managed agent filesystem/terminal RPC. |
 | Models / MCP | Agents retain authentication and model/provider choices. ACP launch accepts explicit stdio MCP server configurations for the adapter to manage. No NeoLink API-key store, model router, direct Ollama connection or standalone native MCP client. |
-| Edit predictions | Planned. No model is downloaded and no source is sent for background predictions. Zeta is not bundled. |
+| Edit predictions | Planned. No prediction model is bundled or downloaded, and no source is sent for background predictions. |
 | DAP debugger | Planned. Requires adapter lifecycle, breakpoint state, stack/variable inspection, launch configuration and terminal routing. Running a file or opening a REPL is not debugging. |
 | Extensions | Planned after an explicit permission/lifecycle model. There is no extension marketplace, plugin auto-installation or compatibility claim with another editor's extensions. |
-| Rendering | SwiftTerm 1.20's native Metal glyph-atlas renderer powers shells, SSH, agent terminals and Neovim by default, with a saved View-menu switch and CoreGraphics fallback. AppKit/SwiftUI/PDFKit still draw the surrounding UI and PDFs. GPUI/Alacritty are not embedded. [Details and frame-rate limits](RENDERING.md). |
+| Rendering | SwiftTerm 1.20's native Metal glyph-atlas renderer powers shells, SSH, agent terminals and Neovim by default, with a saved View-menu switch and CoreGraphics fallback. AppKit/SwiftUI/PDFKit still draw the surrounding UI and PDFs. NeoGPU shares presentation across coding panes on macOS 14+. [Details and frame-rate limits](RENDERING.md). |
 
 ## Research notes
 
-[GPUI](https://gpui.rs/) is an open-source Rust UI framework, not a proprietary engine or a drop-in Swift renderer. Replacing the rendering layer would be a separate architecture migration. GPU rendering cannot guarantee zero input latency.
+NeoGPU is a retained Swift/Metal compositor. CoreText rasterization, terminal parsing and language services still require CPU work. GPU rendering cannot guarantee zero input latency.
 
-Zed distinguishes [ACP external agents](https://zed.dev/docs/ai/external-agents) from terminal-based sessions. Its [MCP documentation](https://zed.dev/docs/ai/mcp) likewise distinguishes editor-managed context servers from a CLI's native configuration. NeoLink supports both terminal sessions and a bounded ACP v1 stdio client; optional MCP configuration is delegated to the adapter. See the [agent guide](AGENT_GUIDE.md).
+ACP conversations and terminal-based agent sessions have separate transports. NeoLink supports a bounded ACP v1 stdio client; optional MCP configuration is delegated to the adapter. See the [agent guide](AGENT_GUIDE.md).
 
-[Zed multi-buffers](https://zed.dev/docs/multibuffers) edit underlying files through shared excerpts; reproducing this needs more than a concatenated text preview. [DAP](https://zed.dev/docs/debugger) is a separate client/server protocol, and [edit prediction](https://zed.dev/docs/ai/edit-prediction) requires an explicitly configured provider. Those systems should be integrated and tested independently rather than represented by inactive controls.
+Editable multi-file excerpts require shared source buffers, coordinated undo and conflict handling. Debugging requires a separate DAP client; edit prediction requires an explicitly configured provider. Each system needs its own integration and validation.
