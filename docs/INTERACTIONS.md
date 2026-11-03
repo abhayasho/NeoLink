@@ -9,23 +9,33 @@ The explorer keeps its native table for input, accessibility, keyboard navigatio
 
 ## Evidence and limits
 
-[Reports, setup and hashes](interactions-build26.json). The baseline is Build 25 at `f2038f1`. The initial and corrected intermediate release runs used the same full-screen size, text size and refresh policy, stayed frontmost/unlocked and used the same scenario implementations for the common focus metric.
+[Reports, setup and hashes](interactions-build26.json). The baseline is Build 25 at `f2038f1`. The baseline and final release checks used the same full-screen size (1728 × 1084 points), 2× backing scale, 12-point text and refresh policy on this M2 Max, frontmost and unlocked. Common focus measurements use the same 24-switch procedural workload.
 
-| Workload | Before | Corrected intermediate |
+| Workload | Before | Final installed release |
 | --- | ---: | ---: |
-| 24 tab switches, selection to focus, median / worst | 110.5 / 141.7 ms | 40.6 / 69.2 ms |
-| Main-thread worst wait during tab switches | 36.4 ms | 33.9 ms |
+| 24 tab switches, selection to focus, median / worst | 110.5 / 141.7 ms | 45.2 / 64.1 ms |
+| Main-thread worst wait during tab switches | 36.4 ms | 35.2 ms |
 | 60 offscreen hover changes, strip builds | 60 | 0 |
 | Offscreen hover CPU encode, median / worst | 0.714 / 1.740 ms | 0.226 / 1.149 ms |
 | Headless warm-buffer command completion, paired medians | 7.01 / 7.05 ms, subprocess | 0.744 / 0.750 ms, persistent |
 
-The corrected intermediate run additionally timed 18 editor switches from selection to a drawable containing the acknowledged buffer: **77.9 ms median, 94.8 ms worst**, without timeouts. The baseline did not have this instrumentation, so it is not a before/after presentation comparison. Fixtures contain identical source text in different paths; the marker identifies the selected buffer, and the displayed status path changes. This is procedural selection, not a physical click-to-photon measurement.
+The offscreen hover comparison is a debug rendering-cost check, not an on-screen latency measurement. The command comparison measures warm Neovim command completion without a GUI, not file-opening or click-to-screen latency.
 
-Procedural scrolling still reached 8.3 ms p95 on both surfaces. Its maximum intervals and stalls varied; the first intermediate had a 25 ms content interval. These results do not establish a general smoothness speedup. Two early tab timeouts were fixed before the corrected run. An early highlight timing scenario could change offscreen rows and is excluded from visible-content claims; the final harness requires six fully visible rows.
+The final release additionally timed 18 editor switches from selection to a drawable containing the acknowledged buffer: **77.9 ms median, 98.3 ms worst**, without presentation timeouts or focus failures. The baseline did not have this instrumentation, so this is not a before/after presentation comparison. Fixtures contain identical source text in different paths; the post-redraw marker identifies the selected buffer, and the displayed status path changes. This is procedural selection, not a physical click-to-photon measurement.
 
-**Sidebar resizing remains expensive.** The corrected intermediate's repeated full-screen divider sweep had a 33.3 ms p95 changed-terminal interval and a 197 ms maximum main-thread wait. Cancelling obsolete artwork does not establish a resize speedup; SwiftUI/AppKit layout, terminal reflow and GPU surface reallocation still contribute work. A later profiling attempt was rejected when the Mac locked. Native fallback during resize remains deliberate: an old-sized drawable is never stretched.
+For 60 procedural highlight updates across six fully visible rows, the final release built **zero strip textures**. Explorer CPU encoding was **0.4 ms p95, 0.6 ms worst**; highlight-to-presentation was **43.9 ms median, 45.4 ms worst**, with no timeouts and a 3.8 ms maximum main-thread wait. Cheap composition does not mean immediate presentation: that remaining response delay is recorded separately from frame cadence. Two intermediate highlight runs could change offscreen rows; their latency is excluded from visible-content claims.
 
-The final package additionally caches active-row lookup during hover, ignores stale redraw markers, and corrects the visible-row benchmark. It builds and passes automated checks, but its final live repeat and natural trackpad acceptance are pending after the screen lock. No parity with another editor, uninterrupted 120 FPS, macOS 13 device performance or authenticated SSH/SFTP performance is claimed.
+During five seconds of procedural scrolling, both changed-content streams had **8.3 ms p95, 16.7 ms maximum** intervals. The maximum main-thread wait was 6.8 ms, versus 13.1 ms in the baseline. Final instrumented CPU was 36.9% of one core, versus 40.4% before. These single-run differences do not establish a general scrolling or CPU speedup: the baseline explorer's maximum interval was 8.3 ms, and occasional held frames remain. Refresh targets and the existing continuous-refresh preference were unchanged. Two early tab timeouts were fixed before the corrected intermediate and final runs; the rejected results remain in the raw report.
+
+**Sidebar resizing remains expensive.** The final repeated full-screen divider sweep had a **33.3 ms p95, 75 ms maximum** changed-terminal interval and a **178.8 ms maximum main-thread wait**. Cancelling obsolete explorer artwork bounds queued work but does not establish a resize speedup. A separate sampled resize run points primarily to terminal row rebuilding/text work and native split-view constraint layout; explorer GPU preparation was a small part of that sample. That run started with different shell content and incurred profiler overhead, so its timings are diagnostic, not an equivalent-workload comparison. Native fallback during resize remains deliberate: an old-sized drawable is never stretched.
+
+## Verification and remaining acceptance
+
+- **Automated correctness:** 144 native tests pass, including highlight overlap/reference pixel equality, native fallback, glyph phases, minimal reveal, scroll cancellation, anchor preservation and rapid selection/save/close ordering. Actual Neovim runtime checks pass, including Python diagnostics/definition, dirty-buffer preservation, external conflicts, UTF-16/CRLF and large-file mode. Eight offline benchmark checks and packaged-resource/signature verification pass. [Clean macOS CI passed](https://github.com/abhayasho/NeoLink/actions/runs/41740089285). Pyright uses its push-diagnostic capability path to avoid unreliable dynamic pull registration during rapid startup; the runtime test still requires a real diagnostic and definition response.
+- **Procedural on-screen checks:** the release binary completed scrolling, tab, visible-highlight and resize scenarios frontmost and unlocked. Its measured executable hash is recorded separately from the subsequently re-signed installed package. The later Python-diagnostic fix changed the Lua resource and the app signature; no Swift/Metal source changed.
+- **Real UI actions:** expanded/collapsed directories, refreshed while scrolling, opened two code files, switched repeatedly between them and the shell, inspected developer context actions, and resized the sidebar through native controls. These establish interaction correctness, not physical trackpad latency. A passive full-screen run failed setup; a later maximized run lost foreground focus and had insufficient motion samples. Both are retained as rejected timing evidence.
+
+Natural trackpad feel and sustained external-input timing remain unverified. No parity with another editor, uninterrupted 120 FPS, macOS 13 device performance or authenticated SSH/SFTP performance is claimed. The native table, keyboard/accessibility paths, context menus, drag/drop and remote views remain in place; no authenticated remote session was exercised in this change.
 
 ## Reproduce
 

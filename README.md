@@ -49,7 +49,7 @@ Build 26 (1.11.2) keeps explorer text cached through hover/selection changes, re
 
 ## Performance and benchmarks
 
-[Build 26 interaction checks](docs/INTERACTIONS.md) separate command completion, focus and visible-content response. A corrected intermediate release reduced median tab-selection-to-focus time from 110.5 to 40.6 ms across 24 procedural switches. This is not a general frame-rate claim; sidebar resizing and final natural-input verification remain outstanding.
+[Build 26 interaction checks](docs/INTERACTIONS.md) separate command completion, focus and visible-content response. The final installed release reduced median tab-selection-to-focus time from 110.5 to 45.2 ms across 24 procedural switches (worst: 141.7 to 64.1 ms). This is not a general frame-rate claim; sidebar resizing still stalls, and natural trackpad smoothness remains unverified.
 
 Build 25's full-screen release checks measured **8.3 ms motion p95** on an M2 Max's built-in 120 Hz display. The latest five-second installed-app run also had an 8.3 ms maximum; earlier repeats had 16.7–25 ms gaps. Continuous mode also maintained 8.3 ms idle drawable intervals. It uses more idle GPU/CPU work; turn off **View → Continuous High Refresh** for demand-driven operation. This is a procedural test, not a guarantee of every refresh or human-perceived smoothness. [Build 25 results and power tradeoff](docs/RENDERING.md#continuous-workspace-refresh-1111-build-25).
 
