@@ -280,8 +280,15 @@ for _,server in ipairs(servers) do
       local path=api.nvim_buf_get_name(ev.buf)
       if ((uv.fs_stat(path) or {}).size or 0)>2*1024*1024 then return end
       local root=vim.fs.root(path,server.markers) or vim.fs.dirname(path)
+      local capabilities={workspace={didChangeWatchedFiles={dynamicRegistration=false}}}
+      if server.name=='pyright' then
+        -- Pyright dynamically replaces pull registrations during startup. Buffers
+        -- attached before initialization can miss that refresh; negotiate its
+        -- supported push-diagnostic path instead, retaining the same diagnostics.
+        capabilities.textDocument={diagnostic={dynamicRegistration=false}}
+      end
       vim.lsp.start({name=server.name,cmd=server.cmd,root_dir=root,settings=server.settings,
-        flags={debounce_text_changes=300},capabilities={workspace={didChangeWatchedFiles={dynamicRegistration=false}}}}, {bufnr=ev.buf})
+        flags={debounce_text_changes=300},capabilities=capabilities}, {bufnr=ev.buf})
     end})
   end
 end

@@ -108,6 +108,8 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
                     if time.monotonic() >= diagnostic_deadline: break
                     time.sleep(.1)
                 assert 'pyright' in current['servers'], current
+                assert lua('vim.lsp.get_clients({bufnr=0})[1].capabilities.textDocument.diagnostic.dynamicRegistration') == 'false'
+
                 if current['diagnostics'] == 0:
                     print('LSP diagnostic timeout:', current, 'mode:', lua('vim.fn.mode()'))
                     print('LSP clients:', lua('vim.json.encode(vim.tbl_map(function(c) return {id=c.id,initialized=c.initialized,stopped=c:is_stopped(),root=c.config.root_dir,diagnosticProvider=c.server_capabilities.diagnosticProvider,requests=c.requests} end,vim.lsp.get_clients({bufnr=0})))'))
