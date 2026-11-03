@@ -93,6 +93,38 @@ final class FrameSchedulingTests: XCTestCase {
     }
 
     @MainActor
+    func testSurfaceAnimationAdvancesOnlyWithItsDrawableAndSurvivesFallback() {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let clock = ManualFrameClock()
+        var visible = true
+        let frames = WindowFrameScheduler(window: window, clockFactory: { _, _, tick in clock.tick = tick; return clock }, visibility: { visible })
+        defer { frames.invalidate(); window.close() }
+        let surface = NSObject(), animation = NSObject(), other = NSObject()
+        let id = ObjectIdentifier(surface)
+        var updates: [Double] = [], events: [String] = []
+        frames.setDrawableDriver(id, wake: {})
+        frames.animate(ObjectIdentifier(animation), surface: id) { time in
+            events.append("animation"); updates.append(time); return time.isFinite
+        }
+        frames.enqueue(from: id) { events.append("output") }
+        frames.noteInteraction(); clock.fire()
+        XCTAssertTrue(updates.isEmpty, "The window clock must not consume a Metal animation early")
+        frames.prepareDrawable(ObjectIdentifier(other), at: 7)
+        XCTAssertTrue(updates.isEmpty, "Another drawable must not advance this surface")
+        frames.prepareDrawable(id, at: 8)
+        XCTAssertEqual(events, ["output", "animation"], "Parsed output precedes motion for the same drawable")
+        XCTAssertEqual(updates, [8])
+        frames.setDrawableDriver(id, wake: nil)
+        clock.fire()
+        XCTAssertEqual(updates.count, 2, "CoreGraphics fallback must retain the animation")
+        visible = false; clock.fire()
+        XCTAssertEqual(updates.last, .infinity)
+        XCTAssertFalse(frames.hasDrawableAnimation(id))
+    }
+
+    @MainActor
     func testBackgroundAndUnavailableClocksDrainWorkWithoutAnimationLoop() async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)

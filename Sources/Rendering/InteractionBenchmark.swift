@@ -45,6 +45,18 @@ final class InteractionBenchmark {
 
     private func run() async {
         await sleep(2.0)
+        // Enter the native full-screen Space before preparing fixtures. Clicking a
+        // changing accessibility tree mid-setup can minimize the wrong window.
+        if ProcessInfo.processInfo.environment["NEOLINK_WINDOW"] == "fullscreen" {
+            window.toggleFullScreen(nil)
+            await sleep(2)
+            guard window.styleMask.contains(.fullScreen), window.isKeyWindow else {
+                fail("setup", "native full-screen window did not become key")
+                write()
+                tabs.shutdownAgents(); tabs.codeSession.shutdown()
+                exit(1)
+            }
+        }
         // Surrounding-UI scenarios need a project. A development build may not resolve the
         // installed app's folder bookmarks; use the checkout and restore the setting at the end.
         let savedProject = UserDefaults.standard.string(forKey: "activeProjectPath")
@@ -69,7 +81,14 @@ final class InteractionBenchmark {
                       let table = scroll.documentView as? ExplorerNSTableView, let coordinator = table.coordinator else {
                     fail(scenario, "shell or native explorer unavailable"); continue
                 }
-                if let sources = coordinator.rows.first(where: { $0.name == "Sources" && !$0.expanded }) { coordinator.parent.onToggle(sources) }
+                // The same expanded fixture must scroll even at the full Retina height.
+                // Expanding only Sources leaves fewer rows than a 16-inch viewport.
+                for name in ["Sources", "Documents", "FileBrowser", "Rendering", "Tests"] {
+                    if let row = coordinator.rows.first(where: { $0.name == name && !$0.expanded && $0.item.isDirectory }) {
+                        coordinator.parent.onToggle(row)
+                        await sleep(0.3)
+                    }
+                }
                 await sleep(1)
                 guard let surface = Self.find(ExplorerMetalView.self, in: scroll, where: { _ in true }),
                       await wait(8, { surface.isCoveringNativeRows }) else { fail(scenario, "explorer Metal surface did not present"); continue }
@@ -79,6 +98,10 @@ final class InteractionBenchmark {
                 _ = shell.scrollViewport(towardTop: 100)
                 shell.smoothScrollSource = .scrollback
                 await sleep(0.5)
+                var renderCPU: [Double] = [], renderGPU: [Double] = [], renderQueue: [Double] = []
+                shell.metalFrameProfile = { cpu, gpu, queue in
+                    renderCPU.append(cpu); renderGPU.append(gpu); renderQueue.append(queue)
+                }
                 let start = CACurrentMediaTime(), oldFallbacks = surface.nativeFallbacks
                 let oldDrawableCounters = shell.rendering.drawableCounters
                 await measure(scenario, extra: {
@@ -86,6 +109,9 @@ final class InteractionBenchmark {
                     let intervals = zip(samples, samples.dropFirst()).map { $1.time - $0.time }
                     func ms(_ value: Double) -> Double { (value * 10_000).rounded() / 10 }
                     return ["inputDriver": "procedural animation, no input injection",
+                            "terminalRenderCPUms": ["p50": ms(PresentationTiming.percentile(renderCPU, 0.5)), "p95": ms(PresentationTiming.percentile(renderCPU, 0.95)), "max": ms(renderCPU.max() ?? 0)],
+                            "terminalRenderGPUms": ["p50": ms(PresentationTiming.percentile(renderGPU, 0.5)), "p95": ms(PresentationTiming.percentile(renderGPU, 0.95)), "max": ms(renderGPU.max() ?? 0)],
+                            "terminalGPUQueueMs": ["p50": ms(PresentationTiming.percentile(renderQueue, 0.5)), "p95": ms(PresentationTiming.percentile(renderQueue, 0.95)), "max": ms(renderQueue.max() ?? 0)],
                             "terminalDrawableCounters": shell.rendering.drawableCounters.merging(oldDrawableCounters) { current, old in current - old },
                             "explorerChangedFrames": samples.count,
                             "explorerPresentedIntervalMs": ["p50": ms(PresentationTiming.percentile(intervals, 0.5)),
@@ -106,6 +132,7 @@ final class InteractionBenchmark {
                         }
                     }
                 }
+                shell.metalFrameProfile = nil
                 shell.smoothScrollOffset = 0
             case "manual-motion":
                 // Passive capture: all input comes from the user or an external UI driver.
@@ -887,6 +914,7 @@ final class InteractionBenchmark {
         setup.merge([
             "displayMaximumHz": window.screen?.maximumFramesPerSecond ?? 0,
             "backingScale": window.backingScaleFactor,
+            "nativeFullScreen": window.styleMask.contains(.fullScreen),
             "windowPoints": "\(Int(window.frame.width))x\(Int(window.frame.height))",
             "fontPointSize": TextSizePreferences.shared.pointSize,
             "shellGrid": shell.map { "\($0.getTerminal().cols)x\($0.getTerminal().rows)" } ?? "",

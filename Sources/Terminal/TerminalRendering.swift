@@ -144,8 +144,12 @@ final class TerminalRendering {
                 }
                 // Consume all parsed state for this surface immediately before drawing.
                 // The update may schedule/replace pendingDraw with the newest dirty rows.
-                frames.prepareDrawable(ObjectIdentifier(view))
-                guard let draw = self.pendingDraw else { self.drawableClock?.stop(); return }
+                let id = ObjectIdentifier(view)
+                frames.prepareDrawable(id, at: self.drawableClock?.targetTimestamp)
+                guard let draw = self.pendingDraw else {
+                    if !frames.hasDrawableAnimation(id) { self.drawableClock?.stop() }
+                    return
+                }
                 self.pendingDraw = nil
                 let output = self.pendingOutput; self.pendingOutput = nil
                 view.metalExternalDrawable = drawable

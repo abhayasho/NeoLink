@@ -153,7 +153,11 @@ final class WindowFrameScheduler {
         let changedCount: (() -> UInt64)?
     }
     private var surfaces: [ObjectIdentifier: Surface] = [:]
-    private var animations: [ObjectIdentifier: (Double) -> Bool] = [:]
+    private struct Animation {
+        let surface: ObjectIdentifier?
+        let step: (Double) -> Bool
+    }
+    private var animations: [ObjectIdentifier: Animation] = [:]
     private var activeUntil = 0.0
     private var fallbackScheduled = false
     private let clockFactory: ((NSWindow, Int, @escaping () -> Void) -> FrameClock?)?
@@ -266,6 +270,10 @@ final class WindowFrameScheduler {
     }
     func unregister(_ id: ObjectIdentifier) {
         surfaces.removeValue(forKey: id); pendingPresentations.removeValue(forKey: id)
+        for (key, animation) in animations where animation.surface == id {
+            animations.removeValue(forKey: key)
+            _ = animation.step(.infinity)
+        }
         setDrawableDriver(id, wake: nil)
     }
 
@@ -273,12 +281,20 @@ final class WindowFrameScheduler {
     /// state wait for the independent window clock before it can use a drawable.
     func setDrawableDriver(_ id: ObjectIdentifier, wake: (() -> Void)?) {
         drawableDrivers[id] = wake
-        if wake == nil { drawableUpdates.removeValue(forKey: id)?.forEach { $0() } }
+        if wake == nil {
+            drawableUpdates.removeValue(forKey: id)?.forEach { $0() }
+            if hasDrawableAnimation(id) { self.wake() }
+        }
     }
 
-    func prepareDrawable(_ id: ObjectIdentifier) {
+    func prepareDrawable(_ id: ObjectIdentifier, at time: Double? = nil) {
         let batch = drawableUpdates.removeValue(forKey: id) ?? []
         batch.forEach { $0() }
+        runAnimations(at: time ?? now(), surface: id)
+    }
+
+    func hasDrawableAnimation(_ id: ObjectIdentifier) -> Bool {
+        animations.values.contains { $0.surface == id }
     }
 
     /// `surface` is the terminal whose output produced the update.
@@ -331,15 +347,23 @@ final class WindowFrameScheduler {
     /// Runs `step` once per frame, after terminal updates and before presentation, with
     /// the time the frame will be shown. Returning false ends the animation. A window that
     /// cannot animate finishes it at once by passing `.infinity`.
-    func animate(_ id: ObjectIdentifier, step: @escaping (Double) -> Bool) {
-        animations[id] = step
+    func animate(_ id: ObjectIdentifier, surface: ObjectIdentifier? = nil, step: @escaping (Double) -> Bool) {
+        animations[id] = Animation(surface: surface, step: step)
         activeUntil = max(activeUntil, now() + 0.05)
-        wake()
+        if let surface, let driver = drawableDrivers[surface], canAnimate { driver() }
+        else { wake() }
     }
 
-    private func runAnimations(at time: Double) {
+    private func runAnimations(at time: Double, surface: ObjectIdentifier? = nil) {
         guard !animations.isEmpty else { return }
-        for (id, step) in animations where !step(time) { animations.removeValue(forKey: id) }
+        for (id, animation) in animations {
+            // A drawable advances only its own motion. Native/fallback animations use
+            // the window clock; shutdown settles every animation without another frame.
+            let belongs = surface.map { animation.surface == $0 } ??
+                (animation.surface.map { drawableDrivers[$0] == nil } ?? true)
+            guard belongs || !time.isFinite else { continue }
+            if !animation.step(time) { animations.removeValue(forKey: id) }
+        }
         if !animations.isEmpty { activeUntil = max(activeUntil, now() + 0.05) }
     }
 

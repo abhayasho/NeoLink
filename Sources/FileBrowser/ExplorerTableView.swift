@@ -50,7 +50,7 @@ struct ExplorerTableView: NSViewRepresentable {
         column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
 
-        let scroll = NSScrollView()
+        let scroll = ExplorerScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
@@ -164,12 +164,13 @@ struct ExplorerTableView: NSViewRepresentable {
         }
 
         private func refreshNativeCoverage() {
+            (scroll as? ExplorerScrollView)?.usesMetalScrolling = metalSurface?.isCoveringNativeRows == true
             guard let table else { return }
             let visible = table.rows(in: table.visibleRect)
             guard visible.location != NSNotFound else { return }
             CATransaction.begin(); CATransaction.setDisableActions(true)
             for row in visible.location..<min(rows.count, NSMaxRange(visible)) {
-                table.view(atColumn: 0, row: row, makeIfNecessary: false)?.layer?.opacity = metalSurface?.isCoveringNativeRows == true ? 0 : 1
+                (table.view(atColumn: 0, row: row, makeIfNecessary: false) as? ExplorerCellView)?.setMetalCovered(metalSurface?.isCoveringNativeRows == true)
             }
             CATransaction.commit()
         }
@@ -356,10 +357,8 @@ struct ExplorerTableView: NSViewRepresentable {
                 let c = ExplorerCellView(); c.identifier = id; return c
             }()
             let entry = rows[row]
+            cell.setMetalCovered(metalSurface?.isCoveringNativeRows == true)
             cell.configure(entry, active: entry.item.id == activeFileURL, selected: row == tableView.selectedRow, hovered: row == hoveredRow)
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            cell.layer?.opacity = metalSurface?.isCoveringNativeRows == true ? 0 : 1
-            CATransaction.commit()
             return cell
         }
 
@@ -516,6 +515,41 @@ final class ExplorerRowView: NSTableRowView {
     override var isOpaque: Bool { false }
 }
 
+/// AppKit's concurrent scrolling animates its own backing layers. The Metal viewport
+/// is a sibling, so it must receive the input position directly rather than sampling a
+/// separately animated native layer. macOS still supplies trackpad momentum deltas.
+final class ExplorerScrollView: NSScrollView {
+    var usesMetalScrolling = false
+
+    override func scrollWheel(with event: NSEvent) {
+        guard usesMetalScrolling, event.hasPreciseScrollingDeltas,
+              event.modifierFlags.intersection([.command, .option, .shift]).isEmpty,
+              abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let center = NotificationCenter.default
+        if event.phase.contains(.began) || event.momentumPhase.contains(.began) {
+            center.post(name: NSScrollView.willStartLiveScrollNotification, object: self)
+        }
+        scrollPrecisely(by: event.scrollingDeltaY)
+        center.post(name: NSScrollView.didLiveScrollNotification, object: self)
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) {
+            center.post(name: NSScrollView.didEndLiveScrollNotification, object: self)
+        }
+    }
+
+    func scrollPrecisely(by delta: CGFloat) {
+        guard delta.isFinite, delta != 0 else { return }
+        var target = contentView.bounds
+        target.origin.y -= delta
+        target = contentView.constrainBoundsRect(target)
+        guard target.origin != contentView.bounds.origin else { return }
+        contentView.scroll(to: target.origin)
+        reflectScrolledClipView(contentView)
+    }
+}
+
 /// Fixed-height cells use direct frames and cached symbols, avoiding stack/constraint
 /// changes as recycled rows alternate between folders, icons and language tags.
 final class ExplorerCellView: NSTableCellView {
@@ -525,6 +559,9 @@ final class ExplorerCellView: NSTableCellView {
     private let diagnostics = NSTextField(labelWithString: "")
     private let gitBadge = NSTextField(labelWithString: "")
     private var current: ExplorerRow?
+    private var renderedEntry: ExplorerRow?
+    private let artwork = ExplorerCellArtwork()
+    private(set) var metalCovered = false
     private var active = false, selected = false, hovered = false
     private static var symbols: [String: NSImage] = [:]
 
@@ -536,7 +573,8 @@ final class ExplorerCellView: NSTableCellView {
         name.font = .systemFont(ofSize: 12)
         name.lineBreakMode = .byTruncatingMiddle
         for field in [diagnostics, gitBadge] { field.font = .monospacedSystemFont(ofSize: 10, weight: .medium); field.alignment = .right }
-        for view in [chevron, icon, abbreviation, name, diagnostics, gitBadge] { addSubview(view); view.setAccessibilityElement(false) }
+        addSubview(artwork)
+        for view in [chevron, icon, abbreviation, name, diagnostics, gitBadge] { artwork.addSubview(view); view.setAccessibilityElement(false) }
         setAccessibilityElement(true)
         setAccessibilityRole(.cell)
     }
@@ -545,6 +583,8 @@ final class ExplorerCellView: NSTableCellView {
 
     override func layout() {
         super.layout()
+        guard !metalCovered else { return }
+        artwork.frame = bounds
         let inset = 8 + CGFloat(current?.depth ?? 0) * 12
         chevron.frame = NSRect(x: inset, y: 8, width: 10, height: 8)
         icon.frame = NSRect(x: inset + 15, y: 4, width: 17, height: 16)
@@ -564,36 +604,52 @@ final class ExplorerCellView: NSTableCellView {
         current = entry
         self.active = active; self.selected = selected; self.hovered = hovered
         if changed {
-            let look = SemanticFileIcon.appearance(url: entry.item.url, directory: entry.item.isDirectory, expanded: entry.expanded)
-            chevron.isHidden = !entry.item.isDirectory
-            chevron.image = Self.symbol(entry.expanded ? "chevron.down" : "chevron.right", size: 8)
-            chevron.contentTintColor = NSColor(NeoLinkTheme.textSecondary)
-            icon.isHidden = look.abbreviation != nil
-            abbreviation.isHidden = look.abbreviation == nil
-            icon.image = Self.symbol(look.symbol, size: 12)
-            icon.contentTintColor = NSColor(look.color)
-            abbreviation.stringValue = look.abbreviation ?? ""
-            abbreviation.textColor = NSColor(look.color)
-            name.stringValue = entry.name
-            name.textColor = NSColor(entry.git?.color ?? NeoLinkTheme.textPrimary)
-            alphaValue = entry.git == .ignored ? 0.55 : 1
-            diagnostics.isHidden = entry.diagnostics.count == 0
-            diagnostics.stringValue = entry.diagnostics.count > 0 ? "\(entry.diagnostics.count)" : ""
-            diagnostics.textColor = NSColor(entry.diagnostics.errors > 0 ? NeoLinkTheme.error : NeoLinkTheme.warning)
-            gitBadge.isHidden = entry.git == nil || entry.git == .ignored
-            gitBadge.stringValue = gitBadge.isHidden ? "" : entry.git?.rawValue ?? ""
-            gitBadge.textColor = NSColor(entry.git?.color ?? NeoLinkTheme.textSecondary)
             toolTip = entry.item.url.path + (entry.git.map { " — " + $0.label } ?? "")
             var description = entry.name
             if entry.item.isDirectory { description += entry.expanded ? ", expanded folder" : ", folder" }
             if let git = entry.git { description += ", " + git.label }
             if entry.diagnostics.count > 0 { description += ", \(entry.diagnostics.errors) errors, \(entry.diagnostics.warnings) warnings" }
             setAccessibilityLabel(description)
-            needsLayout = true
         }
+        if !metalCovered { refreshArtwork() }
         setAccessibilitySelected(active || selected)
         paintBackground()
     }
+    /// Keep the cell itself available to AppKit hit testing, drag/drop and accessibility.
+    /// Layer opacity alone still lets AppKit rasterize every recycled row beneath Metal.
+    func setMetalCovered(_ covered: Bool) {
+        guard metalCovered != covered else { return }
+        metalCovered = covered
+        artwork.isHidden = covered
+        if !covered { refreshArtwork(); needsLayout = true }
+        paintBackground()
+    }
+
+    private func refreshArtwork() {
+        guard let entry = current, renderedEntry != entry else { return }
+        renderedEntry = entry
+        let look = SemanticFileIcon.appearance(url: entry.item.url, directory: entry.item.isDirectory, expanded: entry.expanded)
+        chevron.isHidden = !entry.item.isDirectory
+        chevron.image = Self.symbol(entry.expanded ? "chevron.down" : "chevron.right", size: 8)
+        chevron.contentTintColor = NSColor(NeoLinkTheme.textSecondary)
+        icon.isHidden = look.abbreviation != nil
+        abbreviation.isHidden = look.abbreviation == nil
+        icon.image = Self.symbol(look.symbol, size: 12)
+        icon.contentTintColor = NSColor(look.color)
+        abbreviation.stringValue = look.abbreviation ?? ""
+        abbreviation.textColor = NSColor(look.color)
+        name.stringValue = entry.name
+        name.textColor = NSColor(entry.git?.color ?? NeoLinkTheme.textPrimary)
+        alphaValue = entry.git == .ignored ? 0.55 : 1
+        diagnostics.isHidden = entry.diagnostics.count == 0
+        diagnostics.stringValue = entry.diagnostics.count > 0 ? "\(entry.diagnostics.count)" : ""
+        diagnostics.textColor = NSColor(entry.diagnostics.errors > 0 ? NeoLinkTheme.error : NeoLinkTheme.warning)
+        gitBadge.isHidden = entry.git == nil || entry.git == .ignored
+        gitBadge.stringValue = gitBadge.isHidden ? "" : entry.git?.rawValue ?? ""
+        gitBadge.textColor = NSColor(entry.git?.color ?? NeoLinkTheme.textSecondary)
+        needsLayout = true
+    }
+
     private static func symbol(_ name: String, size: CGFloat) -> NSImage? {
         let key = "\(name):\(size)"
         if let image = symbols[key] { return image }
@@ -603,11 +659,15 @@ final class ExplorerCellView: NSTableCellView {
     }
     func setHovered(_ hovered: Bool) { guard hovered != self.hovered else { return }; self.hovered = hovered; paintBackground() }
     private func paintBackground() {
-        let color = active || selected ? NeoLinkTheme.selection : (hovered ? NeoLinkTheme.rowHoverWhite : .clear)
+        let color = metalCovered ? .clear : (active || selected ? NeoLinkTheme.selection : (hovered ? NeoLinkTheme.rowHoverWhite : .clear))
         CATransaction.begin(); CATransaction.setDisableActions(true)
         layer?.backgroundColor = NSColor(color).cgColor
         CATransaction.commit()
     }
+}
+
+private final class ExplorerCellArtwork: NSView {
+    override var isFlipped: Bool { true }
 }
 
 /// Retained by an `NSMenuItem` (via `representedObject`) so a menu entry can run a Swift closure.

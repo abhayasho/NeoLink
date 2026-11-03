@@ -8,6 +8,11 @@ private final class RecordingExplorerTable: NSTableView {
     override func reloadData() { reloads += 1; super.reloadData() }
 }
 
+@MainActor
+private final class ScrollTestDocument: NSView {
+    override var isFlipped: Bool { true }
+}
+
 final class ExplorerTableTests: XCTestCase {
     private func row(_ name: String, depth: Int = 0, folder: Bool = false, expanded: Bool = false,
                      missing: Bool = false, errors: Int = 0, warnings: Int = 0) -> ExplorerRow {
@@ -154,10 +159,53 @@ final class ExplorerTableTests: XCTestCase {
         XCTAssertTrue(table.view(atColumn: 0, row: 0, makeIfNecessary: false) === cell)
         XCTAssertTrue(cell.accessibilityLabel()?.contains("1 errors, 0 warnings") == true)
         XCTAssertEqual(table.reloads, reloads)
-        let fields = cell.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+        let fields = cell.subviews.flatMap(\.subviews).compactMap { ($0 as? NSTextField)?.stringValue }
         XCTAssertTrue(fields.contains("1")); XCTAssertTrue(fields.contains("M"), "Git and diagnostic badges coexist")
         coordinator.setHovered(0); coordinator.setHovered(nil)
         XCTAssertEqual(table.reloads, reloads)
+    }
+
+    @MainActor
+    func testDirectTrackpadPositionIsBoundedAndReversesWithoutAnAnimationQueue() {
+        _ = NSApplication.shared
+        let scroll = ExplorerScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 120))
+        let document = ScrollTestDocument(frame: NSRect(x: 0, y: 0, width: 300, height: 2400))
+        scroll.documentView = document
+        scroll.scrollPrecisely(by: -35)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 35, accuracy: 0.01)
+        scroll.scrollPrecisely(by: 10)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 25, accuracy: 0.01)
+        scroll.scrollPrecisely(by: 10_000)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 0.01)
+        scroll.scrollPrecisely(by: -10_000)
+        XCTAssertEqual(scroll.contentView.bounds.maxY, document.bounds.maxY, accuracy: 0.01)
+        let parked = scroll.contentView.bounds
+        scroll.scrollPrecisely(by: .nan)
+        XCTAssertEqual(scroll.contentView.bounds, parked)
+    }
+
+    @MainActor
+    func testCoveredCellReuseKeepsAccessibilityAndRestoresNewestNativeArtwork() throws {
+        _ = NSApplication.shared
+        let cell = ExplorerCellView(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        cell.configure(row("old.swift"), active: false, selected: false, hovered: false)
+        cell.setMetalCovered(true)
+        cell.configure(row("new.swift", errors: 2), active: true, selected: true, hovered: false)
+        XCTAssertFalse(cell.isHidden, "The interaction/accessibility cell must remain available")
+        XCTAssertTrue(cell.accessibilityLabel()?.contains("new.swift") == true)
+        XCTAssertTrue(cell.accessibilityLabel()?.contains("2 errors") == true)
+        XCTAssertTrue(cell.isAccessibilitySelected())
+        let artwork = try XCTUnwrap(cell.subviews.first)
+        XCTAssertTrue(artwork.isHidden, "Covered native artwork must not be rasterized")
+        let fields = artwork.subviews.compactMap { $0 as? NSTextField }
+        XCTAssertTrue(fields.contains { $0.stringValue == "old.swift" }, "Row reuse defers invisible artwork updates")
+        cell.setMetalCovered(false)
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertFalse(artwork.isHidden)
+        XCTAssertTrue(fields.contains { $0.stringValue == "new.swift" })
+        XCTAssertTrue(fields.contains { $0.stringValue == "2" })
+        XCTAssertEqual(artwork.frame, cell.bounds)
+        XCTAssertTrue(fields.filter { !$0.isHidden }.allSatisfy { $0.frame.height > 0 })
     }
 
     @MainActor

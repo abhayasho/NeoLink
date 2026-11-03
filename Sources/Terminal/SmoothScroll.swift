@@ -413,7 +413,7 @@ final class SmoothScrollDriver {
     private func startAnimating() {
         guard !animating, let frames = WindowFrameScheduler.forWindow(view.window) else { return }
         animating = true
-        frames.animate(ObjectIdentifier(self)) { [weak self] time in
+        frames.animate(ObjectIdentifier(self), surface: ObjectIdentifier(view)) { [weak self] time in
             guard let self else { return false }
             guard self.source == .program else { self.animating = false; return false }
             guard time.isFinite else { self.reset(); self.animating = false; return false }

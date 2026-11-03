@@ -222,6 +222,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Host tag for the next submitted Metal frame. The renderer consumes it when it
     /// submits a frame; a refused frame leaves it for the next one.
     public var metalNextFrameTag: UInt64 = 0
+    /// Opt-in profiling: CPU preparation/encoding, GPU execution, and queue wait seconds, delivered on main.
+    public var metalFrameProfile: ((_ cpu: Double, _ gpu: Double, _ queue: Double) -> Void)?
     /// Called on the main thread when a submitted Metal frame was shown, with its tag and
     /// `MTLDrawable.presentedTime` (host time, `CACurrentMediaTime` base; 0 if never shown).
     public var metalFramePresented: ((_ tag: UInt64, _ presentedTime: CFTimeInterval) -> Void)?

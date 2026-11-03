@@ -9,6 +9,8 @@ Only the library target and its resources are included. The package manifest omi
 
 ## NeoLink changes
 
+- **Opt-in frame cost profiling** (`metalFrameProfile`): benchmark callbacks report CPU preparation/encoding, Metal GPU execution and queue wait separately. Normal rendering does not install completion telemetry or read back textures.
+
 - **Fractional glyph rasterization** (`CoreTextGlyphRasterizer.swift`, `MetalTerminalRenderer.swift`): cache up to 4×4 CoreText coverage variants per glyph, include phase in the atlas key, add one pixel of antialiasing padding, and draw unscaled glyphs on integer device pixels. Cursor text uses the same placement. This avoids a second antialiasing/filtering step; scaled glyph fitting and atlas bounds remain unchanged.
 - **Resize drawable validation** (`MetalTerminalRenderer.swift`): round drawable dimensions to device pixels, reject supplied textures with stale dimensions, and normalize vertices using the actual texture size.
 

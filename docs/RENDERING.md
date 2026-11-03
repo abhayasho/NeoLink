@@ -1,5 +1,49 @@
 # Native GPU text rendering
 
+## Full-size explorer work and surface motion (1.10.2, build 22)
+
+The larger-window investigation separated CPU preparation, GPU execution and actual drawable presentation. In the maximized baseline, terminal encoding took 0.2 ms at p95 and GPU execution 1.8 ms, while the main-thread probe saw waits up to 29.9 ms. A main-thread sample also found native AppKit glyph rasterization underneath the Metal explorer: setting row layer opacity to zero had not stopped that work.
+
+- Covered explorer cells now hide their artwork container and defer native label/icon updates. The cell itself remains available for accessibility, hit testing, menus and drag/drop. When Metal falls back, it restores the latest row artwork and geometry. Covered rows skip their native artwork layout.
+- Precise, unmodified vertical trackpad input goes directly into the Metal explorer's clip position, including macOS momentum deltas. This avoids sampling a separately animated AppKit backing layer. The viewport clamps at its bounds. Mouse wheels, modified/horizontal gestures and the native fallback retain AppKit handling; Folder List and SFTP are unchanged.
+- Editor scroll-settling animations advance on their own terminal Metal callback after parsed output, using its target presentation timestamp. They no longer depend on the phase of the independent window clock. Native fallback and occlusion still settle the animation.
+- Opt-in benchmark instrumentation reports CPU encoding, GPU execution and GPU queue wait. Normal rendering does not install this profiling callback or read back pixels. Retina backing resolution, phase-aware glyph coverage and VSync are unchanged.
+
+These are independently implemented Swift changes informed by [Zed's supplied-drawable window callback](https://github.com/zed-industries/zed/blob/504a7f2cf25b817cda3998cab93473adef15f93c/crates/gpui_macos/src/window.rs#L3435) and [Apple's target presentation timestamp guidance](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/update/targetpresentationtimestamp). They do not embed GPUI or replace the existing workspace features.
+
+### Release checks
+
+The native regression suite passes 129 tests, including covered-cell reuse/accessibility/fallback, precise scroll bounds, Metal pixel comparisons, and surface animation ownership/fallback/occlusion. Neovim runtime checks and eight offline benchmark checks pass.
+
+On the M2 Max's built-in 120 Hz display, at 2x backing scale and 13-point text, two valid five-second **native macOS full-screen** runs produced:
+
+| Metric | Run 1 | Run 2 |
+|---|---:|---:|
+| Terminal new-frame interval, p50 / p95 | 8.3 / 8.3 ms | 8.3 / 8.3 ms |
+| Explorer changed-frame interval, p50 / p95 | 8.3 / 8.3 ms | 8.3 / 8.3 ms |
+| Longest terminal / explorer interval | 25 / 33.3 ms | 16.7 / 33.3 ms |
+| Terminal intervals over 12.5 ms | 1.2% | 1.0% |
+| Terminal GPU execution, p95 | 0.8 ms | 0.7 ms |
+| Native explorer fallbacks | 0 | 0 |
+
+A final-package repeat (after removing an unreachable statement in benchmark setup) again measured 8.3 ms at p50/p95 on both surfaces, with 16.7 ms maximum intervals, 2.1% terminal intervals over 12.5 ms, no explorer fallbacks, and no idle clock callbacks or terminal frames. Its binary hash and raw report are recorded alongside the earlier runs. Release UI checks verified tree expansion and scrolling, file context actions, opening code in a tab, code scrolling, and restoring the latest native row artwork when GPU rendering is toggled off and on.
+
+The window was 1728 x 1084 points, with a 187 x 59 terminal grid; `nativeFullScreen: true` verifies the window mode. A repeated 1000 x 682 point run had terminal p95 of 16.7 ms and explorer p95 of 8.3 ms. An earlier small-window run had 25 ms p95 on both surfaces; it is retained in the raw data rather than discarded. Idle in the repeated runs had zero window-clock callbacks and no terminal frames. The first full-screen run had idle activity (463 window callbacks); its cause was not isolated.
+
+An intermediate matched maximized-window comparison, before the final scroll-routing changes, reduced CPU usage from 56.4% to 38.8% of one core and the longest main-thread wait from 29.9 ms to 6 ms. This supports removing duplicate native artwork work, but is not an end-to-end speedup claim for every workload.
+
+[Raw reports](rendering-build22.json) include the baseline, intermediate build, poorer small-window result, full-screen repeats and rejected-run reasons. **This is not a guarantee of uninterrupted 120 FPS or visual equivalence to Zed.** The workload is a procedural animation, not a natural trackpad gesture; occasional held frames and run-to-run variability remain. Native fullscreen versus composited windows is also a confounding factor. Human trackpad acceptance and authenticated SSH/SFTP performance remain separate checks.
+
+Reproduce native full-screen without racing an accessibility-tree button during fixture loading:
+
+```sh
+NEOLINK_WINDOW=fullscreen NEOLINK_BENCHMARK=render-motion,idle \
+NEOLINK_BENCHMARK_OUTPUT=/tmp/neolink-fullscreen.json \
+NeoLink.app/Contents/MacOS/NeoLink
+```
+
+The harness enters the full-screen Space, waits for the transition and fails setup unless the window is key and full-screen. `NEOLINK_WINDOW=max` maximizes within the visible screen; `1000x650` requests a smaller content size. Keep the window frontmost and screen unlocked; the harness exits after writing the report. The expanded fixture now contains enough rows to scroll at full display height.
+
 ## Text clarity and surface updates (1.10.1, build 21)
 
 This follows the reported Build 20 blur/judder regression and retains the subsequent larger explorer cache, visible-row prefetch priority, scroll-reversal correction and local row-hover changes.

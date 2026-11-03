@@ -396,6 +396,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        let cpuStarted = CACurrentMediaTime()
 #if canImport(os)
         let drawID = OSSignpostID(log: MetalTerminalRenderer.profileLog)
         if MetalTerminalRenderer.profileEnabled {
@@ -706,6 +707,18 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             self?.recordPresentedFrame()
         }
 #endif
+#endif
+#if os(macOS)
+        if let profile = terminalView.metalFrameProfile {
+            let submitted = CACurrentMediaTime()
+            let cpu = submitted - cpuStarted
+            commandBuffer.addCompletedHandler { buffer in
+                guard buffer.gpuStartTime > 0, buffer.gpuEndTime >= buffer.gpuStartTime else { return }
+                let gpu = buffer.gpuEndTime - buffer.gpuStartTime
+                let queue = max(0, buffer.gpuStartTime - submitted)
+                DispatchQueue.main.async { profile(cpu, gpu, queue) }
+            }
+        }
 #endif
         commandBuffer.present(drawable)
         bufferPool.commit(commandBuffer: commandBuffer)
