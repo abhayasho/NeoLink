@@ -40,6 +40,7 @@ final class ACPTransport {
     private var pending: [Int: CheckedContinuation<[String: Any], Error>] = [:]
     private var deadlines: [Int: Task<Void, Never>] = [:]
     private let writer = DispatchQueue(label: "NeoLink.ACP.write")
+    private var generation = UUID()
     private(set) var stderrTail = ""
     private(set) var isRunning = false
 
@@ -62,24 +63,48 @@ final class ACPTransport {
         input = stdin.fileHandleForWriting
         _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         isRunning = true
+        generation = UUID()
+        let generation = self.generation
         let reader = stdout.fileHandleForReading
-        Task.detached { [weak self] in
+        // POSIX pipe reads block until bytes arrive. They must not occupy Swift's
+        // bounded cooperative executor: two quiet agents can exhaust it on a
+        // low-core Mac and prevent their own response tasks from progressing.
+        DispatchQueue(label: "NeoLink.ACP.stdout", qos: .userInitiated).async { [weak self] in
             defer { try? reader.close() }
             var framer = ACPLineFramer()
             do {
-                while await self?.isRunning == true {
+                while true {
                     let chunk = try Self.readChunk(reader)
                     if chunk.isEmpty { break }
-                    for message in try framer.append(chunk) { await self?.receive(message) }
+                    for message in try framer.append(chunk) {
+                        // Keep pipe backpressure: at most one chunk waits for the
+                        // main actor instead of accumulating unbounded messages.
+                        DispatchQueue.main.sync { [weak self] in
+                            guard self?.generation == generation else { return }
+                            self?.receive(message)
+                        }
+                    }
                 }
-                await self?.finish(framer.hasPartialMessage ? "The agent closed a partial protocol message." : "Agent disconnected.")
-            } catch { await self?.finish(error.localizedDescription) }
+                let message = framer.hasPartialMessage ? "The agent closed a partial protocol message." : "Agent disconnected."
+                DispatchQueue.main.async { [weak self] in
+                    guard self?.generation == generation else { return }
+                    self?.finish(message)
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    guard self?.generation == generation else { return }
+                    self?.finish(error.localizedDescription)
+                }
+            }
         }
         let errorReader = errors.fileHandleForReading
-        Task.detached { [weak self] in
+        DispatchQueue(label: "NeoLink.ACP.stderr", qos: .utility).async { [weak self] in
             defer { try? errorReader.close() }
-            while await self?.isRunning == true, let chunk = try? Self.readChunk(errorReader), !chunk.isEmpty {
-                await self?.appendError(chunk)
+            while let chunk = try? Self.readChunk(errorReader), !chunk.isEmpty {
+                DispatchQueue.main.sync { [weak self] in
+                    guard self?.generation == generation else { return }
+                    self?.appendError(chunk)
+                }
             }
         }
     }
@@ -121,13 +146,19 @@ final class ACPTransport {
 
     private func send(_ message: [String: Any]) {
         guard isRunning, let input else { return }
+        let generation = self.generation
         do {
             var data = try JSONSerialization.data(withJSONObject: message, options: [.fragmentsAllowed])
             guard data.count <= ACPLineFramer.limit else { throw ACPFailure(message: "Outgoing ACP message is too large.") }
             data.append(10)
             writer.async { [weak self] in
                 do { try input.write(contentsOf: data) }
-                catch { Task { @MainActor in self?.finish("Could not send to agent: \(error.localizedDescription)") } }
+                catch {
+                    DispatchQueue.main.async {
+                        guard self?.generation == generation else { return }
+                        self?.finish("Could not send to agent: \(error.localizedDescription)")
+                    }
+                }
             }
         } catch { finish(error.localizedDescription) }
     }

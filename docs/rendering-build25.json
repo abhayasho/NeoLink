@@ -2,7 +2,6 @@
   "version": "1.11.1",
   "build": 25,
   "intermediateBinarySHA256": "b917c9313f10a4381cc6dcc1aa7d14af79e734819a99f0921af2f2962b967b56",
-  "finalBinarySHA256": "b589a9ca839dc296fed9f3a7b21e74da03715d693a335d220057772411f8e890",
   "setup": "M2 Max MacBook Pro, built-in display at 120 Hz, native full screen, 1728x1084 points, 2x backing, 12-point terminal font. Frontmost and unlocked. Shared workspace enabled.",
   "method": "Alternating continuous/demand-driven same-binary runs. Final package repeats continuous mode after removal of unreachable scaffolds and retaining long visible stalls in workspace timing. Each motion and idle scenario lasts five seconds plus drain. Metrics include the 2 ms main-thread probe, so CPU is instrumented, not normal idle energy use. Workspace drawable intervals are a bounded last-600 series; content intervals measure changed terminal content separately.",
   "runs": {
@@ -16574,5 +16573,8 @@
         "windowPoints": "1728x1084"
       }
     }
-  }
+  },
+  "rendererValidationBinarySHA256": "b589a9ca839dc296fed9f3a7b21e74da03715d693a335d220057772411f8e890",
+  "packagedBinaryAfterAgentFixSHA256": "d3bec87229565e75f76b6d4a8f0610c8251de27b20f5f49a6b97e026b6a54947",
+  "postValidationChange": "The later package fixes blocking ACP pipe reads and stale transport callbacks. Rendering code is unchanged. Its 139 native tests and eight constrained-pool ACP tests pass; the recorded final rendering run predates this agent-only change."
 }

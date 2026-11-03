@@ -14,7 +14,7 @@ Continuous idle drawable p95 was 8.3 ms in both runs (max 8.3 / 25 ms), with 17.
 
 The final package, after deleting unreachable scaffolds and retaining long visible stalls in presentation metrics, measured **8.3 ms motion p95 and 16.7 ms maximum** for workspace drawables, changed terminal content and changed explorer content. It had zero explorer fallbacks, 39.1% instrumented motion CPU, 8.3 ms idle drawable p95/max and 19.0% instrumented idle CPU. This single final run does not establish lower CPU than earlier builds. Native chrome and the display panel remain controlled by macOS; natural trackpad feel and authenticated remote performance are separate acceptance checks.
 
-[All reports, setup and intermediate/final binary hashes](rendering-build25.json). The final binary passes 138 native tests, actual Neovim runtime checks (including Python diagnostics/definition), eight offline benchmark checks, and packaged-resource/signature verification. These checks do not establish public notarization or zero dropped frames.
+[All reports, setup and intermediate/final binary hashes](rendering-build25.json). The current package additionally fixes low-core ACP task-pool starvation, without changing rendering code. Its 139 native tests pass, including eight ACP tests with one cooperative worker. The recorded final rendering run predates this agent-only fix. It passes actual Neovim runtime checks (including Python diagnostics/definition), eight offline benchmark checks, and packaged-resource/signature verification. These checks do not establish public notarization or zero dropped frames.
 
 [Terminal-output comparison with VS Code](TERMINAL_BENCHMARK.md) · [Release checks and distribution limits](RELEASING.md)
 

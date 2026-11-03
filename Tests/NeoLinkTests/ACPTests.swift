@@ -120,4 +120,21 @@ final class ACPTests: XCTestCase {
         XCTAssertTrue(second.isReady)
         XCTAssertTrue(second.messages.contains { $0.text == "Rejected." })
     }
+
+    @MainActor
+    func testRestartIgnoresLateDisconnectFromTheClosedProcess() async throws {
+        let session = try fixture(), transport = ACPTransport()
+        defer { transport.close() }
+        let params: [String: Any] = ["protocolVersion":1,
+            "clientCapabilities":["terminal":false,"fs":["writeTextFile":false]]]
+        try transport.start(session.agent, directory: session.directory)
+        _ = try await transport.request("initialize", params)
+        transport.close()
+        try transport.start(session.agent, directory: session.directory)
+        let response = try await transport.request("initialize", params)
+        XCTAssertEqual(response["protocolVersion"] as? Int, 1)
+        let fresh = try await transport.request("session/new", ["cwd":session.directory.path,"mcpServers":[]])
+        XCTAssertEqual(fresh["sessionId"] as? String, "fixture-session")
+        XCTAssertTrue(transport.isRunning)
+    }
 }

@@ -2,7 +2,9 @@ name: macOS checks
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '**.md', 'assets/**']
   pull_request:
+    paths-ignore: ['docs/**', '**.md', 'assets/**']
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,10 +19,14 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Install editor runtime
-        run: brew list neovim >/dev/null 2>&1 || brew install neovim
+      - name: Install coding runtimes
+        run: brew install neovim ripgrep pyright
       - name: Native regression tests
         run: swift test
+      - name: Agent transport on a constrained task pool
+        run: |
+          neolink_test_bundle="$(swift build --show-bin-path)/NeoLinkPackageTests.xctest"
+          LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 xcrun xctest -XCTest NeoLinkTests.ACPTests "$neolink_test_bundle"
       - name: Editor runtime regression
         run: python3 scripts/test-editor.py
       - name: Offline benchmark validation
