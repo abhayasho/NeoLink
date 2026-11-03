@@ -49,6 +49,12 @@ final class TerminalRendering: NeoGPUClient {
     private var drawableRate = 0
     private var pendingDraw: (() -> Void)?
     private var pendingOutput: Double?
+    private var editorSelections: [UInt64: UInt64] = [:]
+    private func recordEditorSelection(_ tag: UInt64) {
+        guard tag != 0, let editor = view as? CodeTerminalView, let session = editor.session else { return }
+        if editorSelections.count > 64 { editorSelections.removeAll(keepingCapacity: true) }
+        editorSelections[tag] = session.parsedSelection
+    }
     private(set) var drawableCounters: [String: Int] = [:]
     private weak var workspaceGPU: NeoGPUWorkspace?
     private var workspaceObserver: NSObjectProtocol?
@@ -92,6 +98,9 @@ final class TerminalRendering: NeoGPUClient {
                 // The display's timestamp; 0 when the system did not report one.
                 let time = presentedTime > 0 ? presentedTime : CACurrentMediaTime()
                 PhaseTrace.mark(kind + ".firstFramePresented", at: time)
+                if let self, let token = self.editorSelections.removeValue(forKey: tag), let editor = self.view as? CodeTerminalView {
+                    editor.session?.selectionPresented(token, at: presentedTime)
+                }
                 // The editor draws once while still hidden; its first frame a user sees comes after it is shown.
                 if let shown = PhaseTrace.moments[kind + ".shown"], time > shown { PhaseTrace.mark(kind + ".firstFrameAfterShown", at: time) }
             }
@@ -113,7 +122,7 @@ final class TerminalRendering: NeoGPUClient {
                 if let frames = self.frames {
                     let output = self.outputSinceLastFrame
                     self.outputSinceLastFrame = nil
-                    let draw = { [weak view, weak frames] in
+                    let draw = { [weak self, weak view, weak frames] in
                         guard let view, let frames else { return }
                         let tag = frames.presentationTag
                         if tag != 0 {
@@ -126,6 +135,7 @@ final class TerminalRendering: NeoGPUClient {
                         present()
                         // The renderer consumed the tag only if it submitted the frame.
                         if tag != 0, view.metalNextFrameTag == 0 {
+                            self?.recordEditorSelection(tag)
                             frames.frameDrawn(tag: tag, changed: view.metalLastFrameChanged, scroll: view.scrollTraceSample())
                         }
                     }
@@ -288,13 +298,16 @@ final class TerminalRendering: NeoGPUClient {
         var encoded: UInt64 = 0
         if pendingDraw != nil || fresh || !hostTextureReady {
             let output = pendingOutput; pendingOutput = nil
-            let draw = pendingDraw ?? { [weak view, weak frames] in
+            let draw = pendingDraw ?? { [weak self, weak view, weak frames] in
                 guard let view, let frames else { return }
                 let tag = frames.presentationTag
                 if view.metalNextFrameTag != 0 { frames.mergeTag(view.metalNextFrameTag, into: tag) }
                 view.metalNextFrameTag = tag
                 view.drawMetalFrameNow()
-                if view.metalNextFrameTag == 0 { frames.frameDrawn(tag: tag, changed: view.metalLastFrameChanged, scroll: view.scrollTraceSample()) }
+                if view.metalNextFrameTag == 0 {
+                    self?.recordEditorSelection(tag)
+                    frames.frameDrawn(tag: tag, changed: view.metalLastFrameChanged, scroll: view.scrollTraceSample())
+                }
             }
             pendingDraw = nil
             view.metalHostTexture = hostTexture; view.metalHostCommandBuffer = command

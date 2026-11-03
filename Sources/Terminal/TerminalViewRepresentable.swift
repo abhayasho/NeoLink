@@ -293,6 +293,7 @@ final class TerminalHostView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func synchronize(tabs: [TerminalTab], selectedTabID: UUID?, isActive: Bool = true) {
+        guard self.tabs != tabs || self.selectedTabID != selectedTabID || isActiveRequested != isActive else { return }
         self.tabs = tabs
         self.selectedTabID = selectedTabID
         if isHidden == isActive {

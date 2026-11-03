@@ -158,9 +158,14 @@ final class InteractionBenchmark {
                 let seconds = min(180, max(5, Double(ProcessInfo.processInfo.environment["NEOLINK_BENCHMARK_SECONDS"] ?? "60") ?? 60))
                 let sampler = Self.explorerScrollView(in: window).map { ScrollPositionSampler(scrollView: $0, window: window) }
                 sampler?.start()
+                tabs.codeSession.recordsSelectionSamples = true
+                let selectionCount = tabs.codeSession.selectionSamples.count
                 await measure(scenario, extra: {
                     var report: [String: Any] = ["inputDriver": "external", "continuousScrollBenchmark": false,
                                                "scope": "manual input; geometry is not pixel presentation"]
+                    let selections = Array(self.tabs.codeSession.selectionSamples.dropFirst(selectionCount))
+                    report["tabSelectionToPresentedMs"] = Self.summary(selections)
+                    report["tabSelectionSamples"] = selections.count
                     report["terminalScrollFrames"] = self.window.frames.presentation.scrollSamples.map {
                         ["presented": $0.presented, "inputLines": $0.input, "drawnLines": $0.drawn]
                     }
@@ -168,6 +173,7 @@ final class InteractionBenchmark {
                     return report
                 }) { await self.sleep(seconds) }
                 sampler?.stop()
+                tabs.codeSession.recordsSelectionSamples = false
             case "idle":
                 // Nothing changes on screen: the clock and the GPU should stay quiet.
                 await sleep(1.5)
@@ -246,6 +252,38 @@ final class InteractionBenchmark {
             case "editor-capture":
                 guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
                 await captureSmoothScroll(view)
+            case "ui-highlights":
+                guard let scroll = Self.explorerScrollView(in: window), let table = scroll.documentView as? ExplorerNSTableView,
+                      let coordinator = table.coordinator, let surface = coordinator.metalSurface,
+                      await wait(8, { surface.isCoveringNativeRows }), coordinator.rows.count >= 6 else {
+                    fail(scenario, "explorer unavailable"); continue
+                }
+                let firstVisible = min(coordinator.rows.count - 6, max(0, Int(ceil(scroll.contentView.bounds.minY / 24))))
+                guard CGFloat(firstVisible + 6) * 24 <= scroll.contentView.bounds.maxY else {
+                    fail(scenario, "six fully visible rows are required"); continue
+                }
+                var latencies: [Double] = [], cpu: [Double] = [], timeouts = 0
+                surface.frameProfile = { time, _ in cpu.append(time) }
+                let builds = surface.compositionBuilds
+                await measure(scenario, extra: {
+                    ["inputDriver": "procedural hover/selection, no pointer injection",
+                     "highlightToPresentedMs": Self.summary(latencies), "timeouts": timeouts,
+                     "explorerCPUms": Self.summary(cpu), "compositionBuilds": surface.compositionBuilds - builds,
+                     "visibleRowRange": [firstVisible, firstVisible + 6]]
+                }) {
+                    for index in 0..<60 {
+                        let start = CACurrentMediaTime()
+                        coordinator.setHovered(firstVisible + index % 6)
+                        if index % 10 == 0 { table.selectRowIndexes(IndexSet(integer: firstVisible + index % 6), byExtendingSelection: false) }
+                        let revision = surface.visualRevision
+                        if await self.wait(1, { surface.presentedSceneRevision >= revision }) {
+                            latencies.append(surface.presentedSceneTime - start)
+                        } else { timeouts += 1 }
+                        await self.sleep(0.012)
+                    }
+                }
+                surface.frameProfile = nil
+                coordinator.setHovered(nil)
             case "ui-tabs":
                 // Rapid switches between two editor tabs and the shell.
                 guard await editor() != nil, let firstEditor = tabs.selectedTabID,
@@ -255,8 +293,14 @@ final class InteractionBenchmark {
                     fail(scenario, "second editor did not open"); continue
                 }
                 await sleep(0.8)
-                var latencies: [Double] = []
-                await measure(scenario, extra: { ["switchToFocusedMs": Self.summary(latencies), "switches": latencies.count] }) {
+                var latencies: [Double] = [], visible: [Double] = [], timeouts = 0
+                var failures: [[String: Any]] = []
+                await measure(scenario, extra: {
+                    ["switchToFocusedMs": Self.summary(latencies), "switches": latencies.count,
+                     "switchToContentPresentedMs": Self.summary(visible), "presentedSwitches": visible.count,
+                     "presentationTimeouts": timeouts, "failures": failures,
+                     "inputDriver": "procedural selection, not pointer input"]
+                }) {
                     let order = [shellTab, firstEditor, secondEditor, firstEditor]
                     for index in 0..<24 {
                         let target = order[index % order.count]
@@ -264,6 +308,23 @@ final class InteractionBenchmark {
                         self.tabs.selectedTabID = target
                         while CACurrentMediaTime() - started < 1, !self.isShowing(target) { await self.sleep(0.002) }
                         latencies.append(CACurrentMediaTime() - started)
+                        if !self.isShowing(target) {
+                            failures.append(["index": index, "stage": "focus", "pending": self.tabs.codeSession.requestedPath != nil,
+                                             "selected": self.tabs.selectedTabID == target,
+                                             "parsed": self.tabs.codeSession.parsedSelection, "requested": self.tabs.codeSession.selectionToken,
+                                             "editorFocused": self.window.firstResponder === self.tabs.codeSession.terminal])
+                        }
+                        if self.tabs.selectedTab?.document?.usesNeovim == true {
+                            let token = self.tabs.codeSession.selectionToken
+                            if await self.wait(1, { self.tabs.codeSession.presentedSelection?.token == token }),
+                               let presentation = self.tabs.codeSession.presentedSelection {
+                                visible.append(presentation.time - started)
+                            } else {
+                                timeouts += 1
+                                failures.append(["index": index, "stage": "presentation", "parsed": self.tabs.codeSession.parsedSelection,
+                                                 "requested": token, "presented": self.tabs.codeSession.presentedSelection?.token ?? 0])
+                            }
+                        }
                         await self.sleep(0.12)
                     }
                 }

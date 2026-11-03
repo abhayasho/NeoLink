@@ -4,6 +4,27 @@ import XCTest
 
 final class NeovimTabsTests: XCTestCase {
     @MainActor
+    func testStaleRedrawMarkersAndResponsesCannotExposeOrSelectAnObsoleteFile() {
+        let session = NeovimSession(executable: nil)
+        var selected: String? = "/tmp/first.txt"
+        session.selectedPath = { selected }
+        session.prepareSelection(selected)
+        let oldToken = session.selectionToken
+        selected = "/tmp/last.txt"
+        session.prepareSelection(selected)
+        session.selectionParsed(oldToken)
+        XCTAssertEqual(session.requestedPath, selected)
+        let stale = NeovimSnapshot(revision: 20, buffers: [], active: "/tmp/first.txt", mode: "i", unnamedModified: false, selection: oldToken)
+        XCTAssertFalse(session.canAdoptSelection(stale))
+        session.selectionParsed(session.selectionToken)
+        XCTAssertNil(session.requestedPath)
+        XCTAssertFalse(session.canAdoptSelection(stale), "An older response cannot select its old tab after the latest redraw")
+        session.prepareSelection(nil)
+        session.selectionParsed(oldToken)
+        XCTAssertNil(session.requestedPath, "An old editor callback cannot restore focus after selecting the shell")
+    }
+
+    @MainActor
     func testRapidOpeningKeepsFinalSelectionAndSharesEditor() async throws {
         guard CommandRunner.executable("nvim") != nil else { throw XCTSkip("Neovim is optional") }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLinkTabs-\(UUID().uuidString)")
@@ -37,4 +58,46 @@ final class NeovimTabsTests: XCTestCase {
         XCTAssertEqual(controller.codeSession.snapshot?.active, files[0].path)
         XCTAssertEqual(controller.tabs.compactMap(\.document).count, 3)
     }
+    @MainActor
+    func testRapidSelectionsCoalesceAndKeepDirtyBufferThroughSaveAndClose() async throws {
+        guard CommandRunner.executable("nvim") != nil else { throw XCTSkip("Neovim is optional") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLink-switch-\(UUID().uuidString)").resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let files = (0..<3).map { root.appendingPathComponent("file-\($0).txt") }
+        for file in files { try Data("original\n".utf8).write(to: file) }
+        let controller = TabsController()
+        defer { controller.codeSession.shutdown(); try? FileManager.default.removeItem(at: root) }
+        for file in files { controller.openFile(file) }
+        try await settle { controller.tabs.compactMap(\.document).allSatisfy { !$0.isLoading } && controller.codeSession.requestedPath == nil }
+        let editor = try XCTUnwrap(controller.codeSession.terminal)
+        editor.send(txt: "changed ")
+        try await settle { controller.selectedTab?.document?.isModified == true }
+        let dirty = try XCTUnwrap(controller.selectedTab?.document)
+        let documents = controller.tabs.compactMap(\.document)
+        let before = controller.codeSession.dispatchedRequests
+        for index in 0..<90 { controller.selectedTabID = documents[index % 3].id }
+        controller.selectedTabID = documents[0].id
+        try await settle { controller.codeSession.requestedPath == nil && controller.codeSession.snapshot?.active == files[0].path }
+        XCTAssertEqual(controller.selectedTabID, documents[0].id)
+        XCTAssertGreaterThan(controller.codeSession.skippedSelections, 70)
+        XCTAssertLessThan(controller.codeSession.dispatchedRequests - before, 10)
+        XCTAssertTrue(dirty.isModified, "Switching must retain unsaved buffers")
+        let saved = await controller.codeSession.save(files[2])
+        XCTAssertTrue(saved)
+        XCTAssertTrue(try String(contentsOf: files[2]).contains("changed"))
+        controller.closeTab(dirty.id, discardingChanges: true)
+        _ = await controller.codeSession.refresh()
+        XCTAssertFalse(controller.tabs.contains { $0.id == dirty.id })
+        XCTAssertFalse(controller.codeSession.snapshot?.buffers.contains { $0.path == files[2].path } ?? true)
+        XCTAssertEqual(controller.selectedTabID, documents[0].id)
+        XCTAssertNil(controller.codeSession.error)
+    }
+
+    @MainActor
+    private func settle(_ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(8)
+        while !condition(), Date() < deadline { try await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertTrue(condition(), "Editor did not settle before deadline")
+    }
+
 }

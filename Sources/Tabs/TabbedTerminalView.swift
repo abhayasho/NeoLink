@@ -2,12 +2,6 @@ import SwiftUI
 
 struct TabbedTerminalView: View {
     @ObservedObject var controller: TabsController
-    @ObservedObject private var codeSession: NeovimSession
-
-    init(controller: TabsController) {
-        self.controller = controller
-        self.codeSession = controller.codeSession
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,12 +23,7 @@ struct TabbedTerminalView: View {
                 .allowsHitTesting(controller.selectedTab?.document == nil)
                 .accessibilityHidden(controller.selectedTab?.document != nil)
 
-                if codeSession.isStarted || controller.selectedTab?.document?.usesNeovim == true {
-                    CodeWorkspaceView(session: codeSession, controller: controller)
-                        .opacity(controller.selectedTab?.document?.usesNeovim == true ? 1 : 0)
-                        .allowsHitTesting(controller.selectedTab?.document?.usesNeovim == true)
-                        .accessibilityHidden(controller.selectedTab?.document?.usesNeovim != true)
-                }
+                EditorPane(controller: controller, session: controller.codeSession)
                 if let document = controller.selectedTab?.document, !document.usesNeovim {
                     DocumentTabView(document: document).id(document.id)
                 }
@@ -69,7 +58,7 @@ struct TabbedTerminalView: View {
                 }
                 .onChange(of: controller.selectedTabID) { id in
                     guard let id else { return }
-                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) }
+                    proxy.scrollTo(id)
                 }
             }
 
@@ -87,6 +76,21 @@ struct TabbedTerminalView: View {
         }
         .frame(height: 34)
         .background(NeoLinkTheme.panelBackground)
+    }
+}
+
+/// Session mode/readiness changes stay inside the editor instead of invalidating
+/// the terminal host and every tab-strip button.
+private struct EditorPane: View {
+    @ObservedObject var controller: TabsController
+    @ObservedObject var session: NeovimSession
+    var body: some View {
+        if session.isStarted || controller.selectedTab?.document?.usesNeovim == true {
+            CodeWorkspaceView(session: session, controller: controller)
+                .opacity(controller.selectedTab?.document?.usesNeovim == true ? 1 : 0)
+                .allowsHitTesting(controller.selectedTab?.document?.usesNeovim == true)
+                .accessibilityHidden(controller.selectedTab?.document?.usesNeovim != true)
+        }
     }
 }
 

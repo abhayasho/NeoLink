@@ -1,5 +1,7 @@
 # Native GPU text rendering
 
+[Build 26 explorer and tab interaction changes, measurements and limits](INTERACTIONS.md). Highlight composition now retains the text strip independently; historical whole-strip invalidation descriptions below apply to their original builds.
+
 ## Continuous workspace refresh (1.11.1, build 25)
 
 The saved **View → Continuous High Refresh** preference defaults on. Shared coding panes reuse their retained textures and submit once per owning CAMetalDisplayLink deadline, up to the display rate capped at 120 Hz, even between content changes. There is no additional timer, independent animation phase, synchronous GPU wait or unbounded frame queue. Hidden/minimized windows pause. Turning the preference off restores demand-driven operation; native panels and macOS 13 retain their existing paths. This increases idle GPU work and does not force the panel’s physical refresh or guarantee no missed frames.

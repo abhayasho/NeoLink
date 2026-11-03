@@ -43,6 +43,59 @@ final class ExplorerTableTests: XCTestCase {
     }
 
     @MainActor
+    func testRevealLeavesVisibleRowsStationaryAndMovesOnlyToTheNearestEdge() {
+        let (coordinator, table, scroll) = setup()
+        let rows = (0..<100).map { row("\($0).swift") }
+        coordinator.apply(rows: rows, revision: 1, activeFileURL: nil)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 30 * 24 + 7))
+        let original = scroll.contentView.bounds.minY
+        coordinator.revealIfNeeded(revision: 1, file: rows[32].id)
+        XCTAssertEqual(scroll.contentView.bounds.minY, original, accuracy: 0.01)
+        coordinator.revealIfNeeded(revision: 2, file: rows[30].id)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 30 * 24, accuracy: 0.01)
+        coordinator.revealIfNeeded(revision: 3, file: rows[40].id)
+        XCTAssertEqual(scroll.contentView.bounds.maxY, 41 * 24, accuracy: 0.01)
+        XCTAssertEqual(table.numberOfRows, 100)
+    }
+
+    @MainActor
+    func testAsyncRevealCannotOverrideASubsequentScrollGesture() throws {
+        let (coordinator, _, scroll) = setup()
+        // Use the tree's real request revision, which is issued before async loading.
+        let root = URL(fileURLWithPath: "/tmp/NeoLink-table-tests")
+        coordinator.parent.tree.configure(root: root, hidden: true, compact: false, hideIgnored: false)
+        let rows = (0..<100).map { row("\($0).swift") }
+        coordinator.apply(rows: Array(rows.prefix(80)), revision: 1, activeFileURL: nil)
+        coordinator.parent.tree.reveal(rows[90].id)
+        let revision = coordinator.parent.tree.revealRevision
+        XCTAssertGreaterThan(revision, 0)
+        coordinator.revealIfNeeded(revision: revision, file: rows[90].id) // Not loaded yet.
+        coordinator.scrollBegan()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 30 * 24 + 7))
+        coordinator.apply(rows: rows, revision: 2, activeFileURL: nil)
+        coordinator.finishScrolling()
+        coordinator.revealIfNeeded(revision: revision, file: rows[90].id)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 30 * 24 + 7, accuracy: 0.01)
+        coordinator.revealIfNeeded(revision: revision + 1, file: rows[90].id)
+        XCTAssertEqual(scroll.contentView.bounds.maxY, 91 * 24, accuracy: 0.01, "A fresh explicit reveal still works")
+    }
+
+    @MainActor
+    func testCollapseAnchorsToTheVisibleChildsSurvivingParent() {
+        let (coordinator, _, scroll) = setup()
+        let prefix = (0..<20).map { row("before-\($0).swift") }
+        let folder = row("src", folder: true, expanded: true)
+        let children = (0..<30).map { row("child-\($0).swift", depth: 1) }
+        let suffix = (0..<30).map { row("after-\($0).swift") }
+        coordinator.apply(rows: prefix + [folder] + children + suffix, revision: 1, activeFileURL: nil)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 25 * 24 + 7))
+        coordinator.apply(rows: prefix + [row("src", folder: true)] + suffix, revision: 2, activeFileURL: nil)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 20 * 24 + 7, accuracy: 0.01)
+        coordinator.apply(rows: prefix + [row("src", folder: true, errors: 3)] + suffix, revision: 3, activeFileURL: nil)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 20 * 24 + 7, accuracy: 0.01)
+    }
+
+    @MainActor
     func testDragValidationNeverCopiesAndAcceptanceCopiesOnce() {
         var copies = 0, target: URL?
         let (coordinator, table, scroll) = setup(drop: { entry, _ in copies += 1; target = entry?.item.url; return true })

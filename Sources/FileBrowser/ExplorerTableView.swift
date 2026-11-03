@@ -134,7 +134,7 @@ struct ExplorerTableView: NSViewRepresentable {
 
         func updateRendering(enabled: Bool) {
             if enabled { installMetalSurface() }
-            else {
+            else if metalSurface != nil || preparingSurface {
                 surfaceGeneration = UUID(); preparingSurface = false
                 metalSurface?.shutdown(); metalSurface?.removeFromSuperview(); metalSurface = nil
             }
@@ -178,6 +178,7 @@ struct ExplorerTableView: NSViewRepresentable {
         @objc func scrollBegan() {
             scrollQuietWork?.cancel(); scrollQuietWork = nil
             trackingScroll = true; deferringUpdates = true
+            cancelPendingReveal()
             setHovered(nil)
         }
 
@@ -233,10 +234,18 @@ struct ExplorerTableView: NSViewRepresentable {
             displayedRoot = root
             let activeChanged = activeFileURL != self.activeFileURL
             self.activeFileURL = activeFileURL
-            if activeChanged { pendingActiveSelection = activeFileURL != nil }
+            if activeChanged {
+                pendingActiveSelection = activeFileURL != nil
+                if activeFileURL == nil { cancelPendingReveal() }
+            }
             guard let table else { return }
             guard lastRevision != revision else {
-                if activeChanged { selectActiveFile(); refreshVisibleCells() }
+                if activeChanged {
+                    applying = true
+                    selectActiveFile()
+                    applying = false
+                    refreshVisibleCells(contentChanged: false)
+                }
                 return
             }
             lastRevision = revision
@@ -289,9 +298,12 @@ struct ExplorerTableView: NSViewRepresentable {
             if oldIDs != newIDs, let anchor, let scroll {
                 var index = newIDs.firstIndex(of: anchor)
                 if index == nil {
-                    let survivor = oldIDs.dropFirst(top).first { newIndices[$0] != nil }
+                    let ancestor = oldRows.prefix(top).reversed().first {
+                        $0.depth < oldRows[top].depth && newIndices[$0.id] != nil
+                    }?.id
+                    let survivor = ancestor ?? oldIDs.dropFirst(top).first { newIndices[$0] != nil }
                         ?? oldIDs.prefix(top).reversed().first { newIndices[$0] != nil }
-                    index = survivor.flatMap { newIDs.firstIndex(of: $0) }
+                    index = survivor.flatMap { newIndices[$0] }
                 }
                 if let index {
                     let clip = scroll.contentView
@@ -310,7 +322,7 @@ struct ExplorerTableView: NSViewRepresentable {
             pendingActiveSelection = false
         }
 
-        private func refreshVisibleCells() {
+        private func refreshVisibleCells(contentChanged: Bool = true) {
             guard let table else { return }
             let visible = table.rows(in: table.visibleRect)
             guard visible.location != NSNotFound, visible.length > 0 else { return }
@@ -321,20 +333,28 @@ struct ExplorerTableView: NSViewRepresentable {
                 }
             }
             refreshNativeCoverage()
-            metalSurface?.invalidateScene()
+            if contentChanged { metalSurface?.invalidateScene() }
+            else { metalSurface?.invalidateHighlights() }
         }
+
+        func cancelPendingReveal() { lastReveal = parent.tree.revealRevision }
 
         func revealIfNeeded(revision: Int, file: URL?) {
             guard revision != lastReveal, let file else { return }
-            finishScrolling()
-            guard let table, let row = rows.firstIndex(where: { $0.item.id == file }) else { return }
+            if let activeFileURL, file != activeFileURL { return }
+            // A gesture begun after this request owns the viewport, including while
+            // ancestors are still loading. A later explicit reveal gets a new revision.
+            guard !deferringUpdates else { lastReveal = revision; return }
+            guard let table, let scroll, let row = rows.firstIndex(where: { $0.item.id == file }) else { return }
             lastReveal = revision
-            table.scrollRowToVisible(row)
-            // Center it when there is room, matching the old anchor: .center.
-            if let scroll, row < rows.count {
-                let target = CGFloat(row) * Self.rowHeight - (scroll.contentView.bounds.height - Self.rowHeight) / 2
-                let maxY = max(0, (table.frame.height) - scroll.contentView.bounds.height)
-                table.scroll(NSPoint(x: 0, y: min(max(0, target), maxY)))
+            let clip = scroll.contentView
+            let top = CGFloat(row) * Self.rowHeight, bottom = top + Self.rowHeight
+            let current = clip.bounds
+            let target = top < current.minY ? top : (bottom > current.maxY ? bottom - current.height : current.minY)
+            let bounded = min(max(0, table.bounds.height - current.height), max(0, target))
+            if bounded != current.minY {
+                clip.scroll(to: NSPoint(x: current.minX, y: bounded))
+                scroll.reflectScrolledClipView(clip)
             }
         }
 
@@ -369,7 +389,7 @@ struct ExplorerTableView: NSViewRepresentable {
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !applying, let table else { return }
             selectedID = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
-            refreshVisibleCells()
+            refreshVisibleCells(contentChanged: false)
         }
 
         // MARK: Clicks and keyboard
@@ -383,6 +403,7 @@ struct ExplorerTableView: NSViewRepresentable {
         func activate(_ row: Int) {
             guard rows.indices.contains(row) else { return }
             let entry = rows[row]
+            cancelPendingReveal()
             if entry.item.isDirectory { parent.onToggle(entry) }
             else if !entry.missing { parent.onOpen(entry.item) }
         }
@@ -398,7 +419,7 @@ struct ExplorerTableView: NSViewRepresentable {
                     cell.setHovered(index == row)   // repaint one row, no reload
                 }
             }
-            metalSurface?.invalidateScene()
+            metalSurface?.invalidateHighlights()
         }
 
         // MARK: Context menu
@@ -486,6 +507,7 @@ final class ExplorerNSTableView: NSTableView {
 
     override var acceptsFirstResponder: Bool { true }
     override func mouseDown(with event: NSEvent) {
+        coordinator?.cancelPendingReveal()
         coordinator?.finishScrolling()
         super.mouseDown(with: event)
     }
@@ -495,6 +517,7 @@ final class ExplorerNSTableView: NSTableView {
     }
 
     override func keyDown(with event: NSEvent) {
+        coordinator?.cancelPendingReveal()
         coordinator?.finishScrolling()
         guard let coordinator, event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { super.keyDown(with: event); return }
         switch event.keyCode {
@@ -601,6 +624,7 @@ final class ExplorerCellView: NSTableCellView {
 
     func configure(_ entry: ExplorerRow, active: Bool, selected: Bool, hovered: Bool) {
         let changed = current != entry
+        guard changed || self.active != active || self.selected != selected || self.hovered != hovered else { return }
         current = entry
         self.active = active; self.selected = selected; self.hovered = hovered
         if changed {

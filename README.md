@@ -19,7 +19,7 @@
 > [!NOTE]
 > NeoLink is in preview. Automated release checks are included; public notarization and authenticated remote release checks remain outstanding.
 
-Build 25 (1.11.1) adds saved continuous-refresh control, actual workspace presentation metrics, automated macOS release checks, and cleanup of unused scaffolding. **NeoGPU** is the custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
+Build 26 (1.11.2) keeps explorer text cached through hover/selection changes, reveals files without recentering, and switches editor buffers over a persistent connection. Stale selection work is skipped while saves/closes remain ordered. [Interaction results and remaining resize limits](docs/INTERACTIONS.md). **NeoGPU** is the custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
 
 ## Features
 
@@ -48,6 +48,8 @@ Build 25 (1.11.1) adds saved continuous-refresh control, actual workspace presen
 - **Collapsible panels.** Close Connections or Files/SFTP with **×** and reopen them from the header. Your panel visibility is remembered across launches, while open tabs and saved connections stay available.
 
 ## Performance and benchmarks
+
+[Build 26 interaction checks](docs/INTERACTIONS.md) separate command completion, focus and visible-content response. A corrected intermediate release reduced median tab-selection-to-focus time from 110.5 to 40.6 ms across 24 procedural switches. This is not a general frame-rate claim; sidebar resizing and final natural-input verification remain outstanding.
 
 Build 25's full-screen release checks measured **8.3 ms motion p95** on an M2 Max's built-in 120 Hz display. The latest five-second installed-app run also had an 8.3 ms maximum; earlier repeats had 16.7–25 ms gaps. Continuous mode also maintained 8.3 ms idle drawable intervals. It uses more idle GPU/CPU work; turn off **View → Continuous High Refresh** for demand-driven operation. This is a procedural test, not a guarantee of every refresh or human-perceived smoothness. [Build 25 results and power tradeoff](docs/RENDERING.md#continuous-workspace-refresh-1111-build-25).
 

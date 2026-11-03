@@ -56,13 +56,17 @@ final class TabsController: ObservableObject {
         didSet {
             guard selectedTabID != oldValue else { return }
             if tabs.first(where: { $0.id == oldValue })?.terminal?.agentName != nil { fileRefreshRevision += 1 }
-            guard let document = selectedTab?.document, case .local(let url) = document.source else { return }
+            guard let document = selectedTab?.document, case .local(let url) = document.source else {
+                codeSession.prepareSelection(nil)
+                return
+            }
             if !document.usesNeovim {
+                codeSession.prepareSelection(nil)
                 Task { await document.refreshFromDiskIfUnmodified() }
                 return
             }
             codeSession.prepareSelection(url.path)
-            if !document.isLoading { Task { await codeSession.request(["method":"open", "path":url.path]) } }
+            if !document.isLoading { codeSession.select(url.path) }
         }
     }
     @Published private(set) var isConfirmingClose = false
@@ -236,9 +240,13 @@ final class TabsController: ObservableObject {
             ($0.path, ExplorerDiagnostics(errors: $0.errors ?? 0, warnings: $0.warnings ?? 0))
         }, uniquingKeysWith: { _, latest in latest })
         if explorerDiagnostics != counts { explorerDiagnostics = counts }
+        let documents = Dictionary(tabs.compactMap { tab -> (String, WorkspaceDocument)? in
+            guard let document = tab.document, case .local(let url) = document.source else { return nil }
+            return (url.path, document)
+        }, uniquingKeysWith: { first, _ in first })
         for buffer in snapshot.buffers where !codeSession.closedPaths.contains(buffer.path) {
-            let url = URL(fileURLWithPath: buffer.path).standardizedFileURL.resolvingSymlinksInPath()
-            if let document = tabs.compactMap(\.document).first(where: { $0.source == .local(url) }) {
+            let url = URL(fileURLWithPath: buffer.path)
+            if let document = documents[buffer.path] {
                 if document.isModified && !buffer.modified { fileRefreshRevision &+= 1 }
                 document.update(from: buffer)
             } else {
@@ -248,7 +256,7 @@ final class TabsController: ObservableObject {
                 document.finishAdoptingBuffer()
             }
         }
-        if selectedTab?.document?.usesNeovim == true, selectedTab?.document?.isLoading == false, !isConfirmingClose, codeSession.requestedPath == nil,
+        if selectedTab?.document?.usesNeovim == true, selectedTab?.document?.isLoading == false, !isConfirmingClose, codeSession.canAdoptSelection(snapshot),
            let active = tabs.first(where: { $0.document?.source == .local(URL(fileURLWithPath: snapshot.active)) }), active.id != selectedTabID {
             selectedTabID = active.id
         }

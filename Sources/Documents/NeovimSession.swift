@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftTerm
 import Darwin
+import QuartzCore
 
 struct NeovimBufferSnapshot: Decodable {
     let path: String
@@ -19,6 +20,7 @@ struct NeovimSnapshot: Decodable {
     let active: String
     let mode: String
     let unnamedModified: Bool
+    var selection: UInt64? = nil
 }
 
 @MainActor
@@ -39,6 +41,29 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     private var watcher: DispatchSourceFileSystemObject?
     private var startup: Task<Void, Never>?
     private var requestChain: Task<Void, Never>?
+    private var control: EditorControlChannel?
+    private var epoch = UUID()
+    private var selection: UInt64 = 0
+    private let statusWorker = DispatchQueue(label: "com.neolink.editor.status", qos: .userInitiated)
+    private var readingStatus = false
+    private var statusPending = false
+    private(set) var skippedSelections = 0
+    private(set) var dispatchedRequests = 0
+    private(set) var parsedSelection: UInt64 = 0
+    private(set) var presentedSelection: (token: UInt64, time: Double)?
+    private var selectionBegan = 0.0
+    var recordsSelectionSamples = false
+    private(set) var selectionSamples: [Double] = []
+    func selectionPresented(_ token: UInt64, at time: Double) {
+        guard token == selection, token == parsedSelection, time > 0 else { return }
+        if presentedSelection?.token != token {
+            presentedSelection = (token, time)
+            if recordsSelectionSamples, time >= selectionBegan {
+                selectionSamples.append(time - selectionBegan)
+                if selectionSamples.count > 200 { selectionSamples.removeFirst(selectionSamples.count - 200) }
+            }
+        }
+    }
 
     init(executable: String? = CommandRunner.executable("nvim")) {
         self.executable = executable
@@ -63,6 +88,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
             let directory = URL(fileURLWithPath: "/tmp").appendingPathComponent("neolink-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
             self.directory = directory
+            control = EditorControlChannel(path: directory.appendingPathComponent("control.sock").path)
             let descriptor = Darwin.open(directory.path, O_EVTONLY)
             if descriptor >= 0 {
                 let watcher = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: [.write], queue: .main)
@@ -83,6 +109,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
             environment["COLORTERM"] = "truecolor"
             environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (environment["PATH"] ?? "")
             environment["NEOLINK_STATUS_FILE"] = directory.appendingPathComponent("status.json").path
+            environment["NEOLINK_CONTROL_SOCKET"] = directory.appendingPathComponent("control.sock").path
             let state = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("NeoLink/EditorState", isDirectory: true)
             try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
             environment["XDG_STATE_HOME"] = state.path
@@ -98,7 +125,10 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
                 // 5 ms poll notices it within a frame; each check is one stat.
                 for _ in 0..<1_000 {
                     guard !Task.isCancelled else { return }
-                    if FileManager.default.fileExists(atPath: directory.appendingPathComponent("status.json").path) {
+                    if await Task.detached(priority: .userInitiated, operation: {
+                        FileManager.default.fileExists(atPath: directory.appendingPathComponent("status.json").path)
+                        && FileManager.default.fileExists(atPath: directory.appendingPathComponent("control.sock").path)
+                    }).value {
                         PhaseTrace.mark("editor.neovimReady")
                         self?.readPublishedState()
                         self?.isReady = true
@@ -112,78 +142,132 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     }
 
     private func readPublishedState() {
-        guard let directory,
-              let data = try? Data(contentsOf: directory.appendingPathComponent("status.json")), data.count < 1024 * 1024,
-              let state = try? JSONDecoder().decode(NeovimSnapshot.self, from: data) else { return }
-        accept(state)
+        guard let directory else { return }
+        guard !readingStatus else { statusPending = true; return }
+        readingStatus = true
+        let token = epoch
+        statusWorker.async { [weak self] in
+            let state: NeovimSnapshot? = {
+                guard let data = try? Data(contentsOf: directory.appendingPathComponent("status.json")), data.count < 1024 * 1024,
+                      let raw = try? JSONDecoder().decode(NeovimSnapshot.self, from: data) else { return nil }
+                return Self.normalized(raw)
+            }()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.epoch == token else { return }
+                self.readingStatus = false
+                if let state { self.accept(state) }
+                if self.statusPending { self.statusPending = false; self.readPublishedState() }
+            }
+        }
     }
 
-    private func accept(_ raw: NeovimSnapshot) {
-        // File notifications can arrive after a newer RPC response. Never replay old selection/dirty state.
-        guard raw.revision > (snapshot?.revision ?? -1) else { return }
-        // Foundation and libuv spell macOS /private/var aliases differently.
-        let normalize: (String) -> String = { $0.isEmpty ? "" : URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path }
-        let state = NeovimSnapshot(revision: raw.revision, buffers: raw.buffers.map {
-            NeovimBufferSnapshot(path: normalize($0.path), modified: $0.modified, filetype: $0.filetype, servers: $0.servers, diagnostics: $0.diagnostics, errors: $0.errors, warnings: $0.warnings)
-        }, active: normalize(raw.active), mode: raw.mode, unnamedModified: raw.unnamedModified)
-        if requestedPath == state.active { requestedPath = nil }
+    nonisolated static func normalized(_ raw: NeovimSnapshot) -> NeovimSnapshot {
+        // Foundation and libuv spell macOS /private/var aliases differently. Resolve
+        // paths off-main, once per distinct path in this snapshot.
+        var paths: [String: String] = ["": ""]
+        func normalize(_ path: String) -> String {
+            if let cached = paths[path] { return cached }
+            let value = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+            paths[path] = value; return value
+        }
+        return NeovimSnapshot(revision: raw.revision, buffers: raw.buffers.map {
+            NeovimBufferSnapshot(path: normalize($0.path), modified: $0.modified, filetype: $0.filetype, servers: $0.servers,
+                                 diagnostics: $0.diagnostics, errors: $0.errors, warnings: $0.warnings)
+        }, active: normalize(raw.active), mode: raw.mode, unnamedModified: raw.unnamedModified, selection: raw.selection)
+    }
+
+    private func accept(_ state: NeovimSnapshot) {
+        guard state.revision > (snapshot?.revision ?? -1) else { return }
         snapshot = state
         let mode = state.mode.hasPrefix("i") ? "Insert" : (state.mode == "n" ? "Normal" : "Visual / Command")
         if self.mode != mode { self.mode = mode }
         onSnapshot?(state)
     }
 
+    func selectionParsed(_ token: UInt64) {
+        guard token == selection else { return }
+        parsedSelection = token
+        guard requestedPath == selectedPath?() else { return }
+        if requestedPath != nil { requestedPath = nil }
+    }
+
     @discardableResult
-    func request(_ message: [String: Any]) async -> Bool {
+    func request(_ message: [String: Any]) async -> Bool { await enqueue(message).value }
+
+    private func enqueue(_ message: [String: Any]) -> Task<Bool, Never> {
         if message["method"] as? String == "open", let path = message["path"] as? String {
             closedPaths.remove(path)
         }
         start()
-        await startup?.value
-        guard isReady, let executable, let directory else { return false }
-        // Serialize commands so a slow open cannot overtake the following save or close.
-        let preceding = requestChain
+        // Enqueue before awaiting startup: saves/closes cannot overtake a cold open.
+        let preceding = requestChain, startup = startup, token = epoch
         let task = Task { @MainActor [weak self] () -> Bool in
             await preceding?.value
-            guard let self else { return false }
+            await startup?.value
+            guard let self, self.epoch == token, self.isReady, let control = self.control else { return false }
             do {
                 var message = message
-                if message["method"] as? String == "open", let path = message["path"] as? String, let selectedPath = self.selectedPath {
-                    message["activate"] = path == selectedPath()
+                let opening = message["method"] as? String == "open"
+                if opening, let path = message["path"] as? String {
+                    if self.closedPaths.contains(path) { return false }
+                    let active = self.selectedPath.map { path == $0() } ?? true
+                    if let requested = message.removeValue(forKey: "selectionOnly") as? UInt64,
+                       !active || requested != self.selection {
+                        self.skippedSelections += 1
+                        return true
+                    }
+                    message["activate"] = active
+                    if active { message["selection"] = self.selection }
                 }
                 let data = try JSONSerialization.data(withJSONObject: message)
-                let json = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "'", with: "''")
-                let expression = "luaeval('NeoLink.dispatch(_A)', '\(json)')"
-                let opening = message["method"] as? String == "open"
                 if opening { PhaseTrace.mark("editor.openRequest.begin") }
-                let result = try await CommandRunner.run(executable, ["--server", directory.appendingPathComponent("editor.sock").path, "--remote-expr", expression], timeout: 8)
+                self.dispatchedRequests += 1
+                let output = try await control.request(data)
                 if opening { PhaseTrace.mark("editor.openRequest.end") }
                 struct Response: Decodable { let ok: Bool; let error: String; let state: NeovimSnapshot }
-                guard result.status == 0 else { throw NSError(domain: "Neovim", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: String(decoding: result.output, as: UTF8.self)]) }
-                let response = try JSONDecoder().decode(Response.self, from: result.output)
+                let response = try await Task.detached(priority: .userInitiated) {
+                    let value = try JSONDecoder().decode(Response.self, from: output)
+                    return Response(ok: value.ok, error: value.error, state: Self.normalized(value.state))
+                }.value
+                guard self.epoch == token else { return false }
                 self.accept(response.state)
                 if !response.ok { self.error = response.error }
                 return response.ok
             } catch {
-                self.error = error.localizedDescription
+                if self.epoch == token { self.error = error.localizedDescription }
                 return false
             }
         }
         requestChain = Task { _ = await task.value }
-        return await task.value
+        return task
     }
 
-    func action(_ name: String) { Task { await request(["method":"action", "action":name]) } }
-    func prepareSelection(_ path: String) { requestedPath = path }
+    func select(_ path: String) {
+        let token = selection
+        _ = enqueue(["method": "open", "path": path, "selectionOnly": token])
+    }
+
+    func action(_ name: String) { _ = enqueue(["method":"action", "action":name]) }
+    func prepareSelection(_ path: String?) {
+        selection &+= 1
+        selectionBegan = CACurrentMediaTime()
+        if requestedPath != path { requestedPath = path }
+    }
+    var selectionToken: UInt64 { selection }
+    func canAdoptSelection(_ state: NeovimSnapshot) -> Bool {
+        requestedPath == nil && (state.selection == nil || state.selection == selection)
+    }
     func closeBuffer(_ url: URL) {
         closedPaths.insert(url.path)
-        Task { await request(["method":"close", "path":url.path]) }
+        _ = enqueue(["method":"close", "path":url.path])
     }
     func save(_ url: URL) async -> Bool { await request(["method":"save", "path":url.path]) }
     func refresh() async -> Bool { await request(["method":"status"]) }
 
     func shutdown() {
+        epoch = UUID()
         startup?.cancel()
+        control?.close(); control = nil
         watcher?.cancel()
         watcher = nil
         terminal?.processDelegate = nil
@@ -194,7 +278,11 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     }
 
     nonisolated func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-    nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+    nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        guard title.hasPrefix("neolink-selection:"), let token = UInt64(title.dropFirst("neolink-selection:".count)) else { return }
+        if Thread.isMainThread { MainActor.assumeIsolated { selectionParsed(token) } }
+        else { DispatchQueue.main.async { [weak self] in self?.selectionParsed(token) } }
+    }
     nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
         Task { @MainActor [weak self] in
@@ -244,11 +332,11 @@ final class NeovimHostView: NSView {
             terminal?.isHidden = !active
             if active { PhaseTrace.mark("editor.shown") }
         }
-        needsLayout = true
+        if mounting { needsLayout = true }
         if active, terminal != nil, mounting || self.selection != selection {
             self.selection = selection
             DispatchQueue.main.async { [weak self] in
-                guard let self, let terminal = self.terminal, !terminal.isHidden else { return }
+                guard let self, self.selection == selection, let terminal = self.terminal, !terminal.isHidden else { return }
                 self.window?.makeFirstResponder(terminal)
                 PhaseTrace.mark("editor.focused")
             }

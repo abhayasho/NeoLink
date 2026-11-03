@@ -116,7 +116,7 @@ function M.snapshot()
       end
     end
   end
-  return {revision=M.revision,buffers=buffers,active=api.nvim_buf_get_name(0),mode=api.nvim_get_mode().mode,unnamedModified=unnamed}
+  return {revision=M.revision,buffers=buffers,active=api.nvim_buf_get_name(0),mode=api.nvim_get_mode().mode,unnamedModified=unnamed,selection=M.selection}
 end
 function M.publish()
   if not status_path or M.pending then return end
@@ -214,7 +214,23 @@ end
 function M.dispatch(json)
   local ok,err=pcall(function()
     local request=vim.json.decode(json)
-    if request.method=='open' then M.open(request.path,request.line,request.activate)
+    if request.method=='open' then
+      M.open(request.path,request.line,request.activate)
+      if request.activate~=false and request.selection then
+        -- The marker follows the complete redraw on the PTY. The native host only
+        -- exposes this buffer after parsing it, never on an earlier control reply.
+        M.selection=request.selection
+        vim.cmd('redraw')
+        if api.nvim_ui_send then
+          api.nvim_ui_send('\27]2;neolink-selection:'..tostring(request.selection)..'\7')
+        else
+          -- Older Neovim versions expose titles through the TUI event stream.
+          -- Never write raw bytes to stdout: in split TUI mode stdout is RPC.
+          vim.o.title=true
+          vim.o.titlestring='neolink-selection:'..tostring(request.selection)
+          vim.cmd('redraw')
+        end
+      end
     elseif request.method=='save' then M.save(request.path)
     elseif request.method=='close' then M.close(request.path)
     elseif request.method=='action' then M.action(request.action) end
@@ -276,3 +292,33 @@ vim.keymap.set('n','K',vim.lsp.buf.hover)
 vim.keymap.set('n','<F2>',vim.lsp.buf.rename)
 vim.keymap.set('i','<C-Space>',function() if #vim.lsp.get_clients({bufnr=0})>0 then vim.lsp.completion.get() else api.nvim_feedkeys(api.nvim_replace_termcodes('<C-n>',true,false,true),'n',false) end end)
 api.nvim_create_autocmd('VimEnter',{callback=M.publish})
+
+-- Private newline-delimited JSON control channel. This removes one subprocess per
+-- command. Scheduling all requests onto the editor loop preserves save/close order.
+-- The containing temporary directory is owner-only, like the existing RPC socket.
+if vim.env.NEOLINK_CONTROL_SOCKET then
+  local server=assert(uv.new_pipe(false))
+  assert(server:bind(vim.env.NEOLINK_CONTROL_SOCKET))
+  server:listen(1,function(err)
+    if err then return end
+    local client=uv.new_pipe(false)
+    if not client or server:accept(client)~=0 then if client then client:close() end; return end
+    local input=''
+    client:read_start(function(read_error,data)
+      if read_error or not data then client:read_stop(); if not client:is_closing() then client:close() end; return end
+      input=input..data
+      if #input>1024*1024 then client:read_stop(); client:close(); return end
+      while true do
+        local newline=input:find('\n',1,true)
+        if not newline then break end
+        local request=input:sub(1,newline-1); input=input:sub(newline+1)
+        vim.schedule(function()
+          if client:is_closing() then return end
+          local response=M.dispatch(request)
+          client:write(response..'\n')
+        end)
+      end
+    end)
+  end)
+  M.control_server=server
+end

@@ -46,7 +46,8 @@ final class ExplorerMetalTests: XCTestCase {
         let surface = try XCTUnwrap(ExplorerMetalView(scroll: scroll))
         var selected = 1
         var hovered: Int?
-        surface.scene = { .init(rows: rows, active: nil, selected: selected, hovered: hovered) }
+        var active: URL?
+        surface.scene = { .init(rows: rows, active: active, selected: selected, hovered: hovered) }
         var covered: [Bool] = []
         surface.coverageChanged = { covered.append($0) }
         scroll.addSubview(surface, positioned: .above, relativeTo: scroll.contentView)
@@ -81,15 +82,44 @@ final class ExplorerMetalTests: XCTestCase {
         }
         XCTAssertGreaterThan(surface.compositionReuses, 0)
         XCTAssertTrue(surface.motionSamples.isEmpty, "Normal rendering must not retain benchmark traces")
+        if ProcessInfo.processInfo.environment["NEOLINK_INTERACTION_COSTS"] == "1" {
+            var cpu: [Double] = []
+            surface.frameProfile = { time, _ in cpu.append(time * 1000) }
+            let initialBuilds = surface.compositionBuilds
+            for index in 0..<60 {
+                hovered = 20 + index % 5
+                surface.invalidateHighlights()
+                _ = try capture(surface, contentChanged: false)
+            }
+            let sorted = cpu.sorted()
+            print("EXPLORER_HOVER_COST", "builds", surface.compositionBuilds - initialBuilds,
+                  "samples", cpu.count, "cpuMedianMs", sorted[sorted.count / 2], "cpuMaxMs", sorted.last!)
+            surface.frameProfile = nil
+        }
+        let buildsBeforeHighlights = surface.compositionBuilds
         selected = 21; hovered = 22
-        let decorated = try capture(surface)
+        surface.invalidateHighlights()
+        let decorated = try capture(surface, contentChanged: false)
+        XCTAssertEqual(surface.compositionBuilds, buildsBeforeHighlights, "Highlights retain the text strip")
         XCTAssertEqual(pixel(decorated, x: Int(300 * scale), y: Int(31 * scale)), [35,35,35])
         XCTAssertEqual(pixel(decorated, x: Int(300 * scale), y: Int(55 * scale)), [33,33,33])
         surface.usesCachedComposition = false
         let decoratedReference = try capture(surface, contentChanged: false)
         XCTAssertEqual(decorated.dataProvider!.data! as Data, decoratedReference.dataProvider!.data! as Data,
-                       "Changed selection and hover must invalidate the retained scene")
+                       "Highlights must match the reference without rebuilding text")
         surface.usesCachedComposition = true
+        let highlightBuilds = surface.compositionBuilds
+        for index in [23, 21, 24, 22] {
+            active = rows[index].item.id; selected = 21; hovered = index
+            surface.invalidateHighlights()
+            let cached = try capture(surface, contentChanged: false)
+            surface.usesCachedComposition = false
+            let reference = try capture(surface, contentChanged: false)
+            XCTAssertEqual(cached.dataProvider!.data! as Data, reference.dataProvider!.data! as Data,
+                           "Active, selected and hover overlap preserves paint order")
+            surface.usesCachedComposition = true
+        }
+        XCTAssertEqual(surface.compositionBuilds, highlightBuilds)
         scroll.contentView.scroll(to: .init(x: 0, y: 24 * 20 + 5))
         scroll.reflectScrolledClipView(scroll.contentView)
         let after = try capture(surface)

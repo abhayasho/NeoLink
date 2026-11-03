@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the actual Neovim runtime through its socket, using disposable files."""
-import json, os, pathlib, shutil, subprocess, tempfile, time
+import json, os, pathlib, shutil, socket as socket_module, subprocess, tempfile, time
 
 nvim = shutil.which('nvim')
 if not nvim:
@@ -9,8 +9,11 @@ config = pathlib.Path(__file__).resolve().parent.parent / 'Resources/Editor/neol
 with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
     root = pathlib.Path(tmp).resolve()
     socket = root / 'editor.sock'
+    control = root / 'control.sock'
+    connection = None
+    channel = None
     env = dict(os.environ, XDG_STATE_HOME=tmp, XDG_CACHE_HOME=tmp, XDG_DATA_HOME=tmp,
-               NEOLINK_STATUS_FILE=str(root / 'status.json'), PATH='/opt/homebrew/bin:/usr/local/bin:' + os.environ['PATH'])
+               NEOLINK_STATUS_FILE=str(root / 'status.json'), NEOLINK_CONTROL_SOCKET=str(control), PATH='/opt/homebrew/bin:/usr/local/bin:' + os.environ['PATH'])
     with (root / 'stderr').open('w+') as log:
         process = subprocess.Popen([nvim, '--headless', '--noplugin', '-u', str(config), '-i', 'NONE', '--listen', str(socket)], env=env, stdout=log, stderr=log)
         def expr(value):
@@ -20,14 +23,19 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
         def lua(value):
             return expr("luaeval('" + value.replace("'", "''") + "')")
         def dispatch(**request):
-            payload = json.dumps(request).replace("'", "''")
-            return json.loads(expr("luaeval('NeoLink.dispatch(_A)', '" + payload + "')"))
+            payload = json.dumps(request).encode() + b'\n'
+            channel.write(payload)
+            return json.loads(channel.readline())
         try:
             for _ in range(300):
                 if (root / 'status.json').exists(): break
                 if process.poll() is not None: raise AssertionError('Editor exited on startup')
                 time.sleep(.02)
             assert (root / 'status.json').exists(), 'Editor did not publish initial state'
+            connection = socket_module.socket(socket_module.AF_UNIX)
+            connection.settimeout(12)
+            connection.connect(str(control))
+            channel = connection.makefile('rwb', buffering=0)
             lua('vim.lsp.log.set_level("debug")')
             assert dispatch(method='status')['state']['buffers'] == []
             first = root / "quoted ' $(no-shell).lua"
@@ -111,6 +119,8 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
                 print('PASS: Python LSP diagnostics and definition')
             print('PASS: safe paths, shared buffers, dirty state, saving, external conflict, UTF-16/CRLF, large-file mode')
         finally:
+            if channel is not None: channel.close()
+            if connection is not None: connection.close()
             if process.poll() is None:
                 try: expr("execute('qa!')")
                 except Exception: pass

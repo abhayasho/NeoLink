@@ -26,9 +26,20 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         let revision: UInt64
         let scale: CGFloat
         let texture: MTLTexture
-        let scene: NeoGPUScene
     }
     private var composition: Composition?
+    private struct Highlights: Equatable {
+        let selected: Int
+        let hovered: Int?
+        let active: URL?
+    }
+    private var highlightKey: Highlights?
+    private var highlightedScene: NeoGPUScene?
+    private var contentRevision: UInt64 = 1
+    private var activeLookup: (revision: UInt64, url: URL?, index: Int?)?
+
+    /// Highlights change only a few row quads, never the retained text strip.
+    func invalidateHighlights() { invalidateScene(contentChanged: false, highlightsChanged: true) }
     // Tests compare the cached GPU pass with the original per-row pass pixel for pixel.
     var usesCachedComposition = true
     private(set) var compositionBuilds = 0
@@ -48,6 +59,8 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     private let worker = DispatchQueue(label: "com.neolink.explorer.artwork", qos: .userInitiated)
     private var cache: [URL: Artwork] = [:]
     private var jobs: Set<JobKey> = []
+    private let rasterEpoch = ExplorerRasterEpoch()
+    private var artworkSize: (width: Int, scale: CGFloat)?
     private var generation: UInt64 = 0
     private var useCounter: UInt64 = 0
     private var displayDriver: FrameClock?
@@ -69,6 +82,9 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     private(set) var isCoveringNativeRows = false
     private(set) var presentedFrames: UInt64 = 0
     private(set) var changedFrames: UInt64 = 0
+    private(set) var presentedSceneRevision: UInt64 = 0
+    private(set) var presentedSceneTime = 0.0
+    var visualRevision: UInt64 { sceneRevision }
     private(set) var nativeFallbacks = 0
     private(set) var drawCallbacks = 0
     private(set) var lastDrawState = "waiting"
@@ -203,8 +219,9 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         invalidateScene()
     }
 
-    func invalidateScene(contentChanged: Bool = true) {
-        if contentChanged { sceneRevision &+= 1 }
+    func invalidateScene(contentChanged: Bool = true, highlightsChanged: Bool = false) {
+        if contentChanged { contentRevision &+= 1 }
+        if contentChanged || highlightsChanged { sceneRevision &+= 1 }
         dirty = true
         // Keep ProMotion supplied during interaction, using display-link-provided drawables
         // rather than queuing redundant terminal frames ahead of the next real input.
@@ -238,6 +255,11 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     private func artworkReady(scene: Scene) -> Bool {
         guard let scroll, bounds.width > 0, bounds.height > 0 else { return false }
         let scale = window?.backingScaleFactor ?? 2, width = Int(ceil(bounds.width * scale))
+        if artworkSize?.width != width || artworkSize?.scale != scale {
+            generation &+= 1; rasterEpoch.set(generation)
+            jobs.removeAll(); artworkRefreshScheduled = false; resizeRetryScheduled = false
+            artworkSize = (width, scale)
+        }
         let y = scroll.contentView.bounds.minY
         let visibleRows = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
         if reusableComposition(visible: visibleRows, width: width, scale: scale) != nil { return true }
@@ -263,7 +285,7 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     func shutdown() {
         stoppingGPU = true
         workspaceGPU?.unregister(self)
-        generation &+= 1
+        generation &+= 1; rasterEpoch.set(generation)
         artworkRefreshScheduled = false
         resizeRetryScheduled = false
         displayDriver?.invalidate(); displayDriver = nil
@@ -312,14 +334,15 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         if !dirty, CACurrentMediaTime() > activeUntil {
             lastDrawState = "idle"; displayDriver?.stop(); legacyClock?.stop(); return
         }
-        let changed = y != lastPosition || sceneRevision != lastSceneRevision
+        let revision = sceneRevision
+        let changed = y != lastPosition || revision != lastSceneRevision
         guard let command = queue.makeCommandBuffer() else { uncover(); return }
         let composed = cachedComposition ?? buildComposition(scene: scene, visible: visible, width: width, scale: scale, command: command)
         if let composed {
             if cachedComposition != nil { compositionReuses += 1 }
             let translation = SIMD2<Float>(0, Float((CGFloat(composed.rows.lowerBound) * 24 - y) * scale))
             do {
-                try gpu.encode(composed.scene, into: drawable.texture, command: command, translation: translation,
+                try gpu.encode(displayScene(composed, scene: scene), into: drawable.texture, command: command, translation: translation,
                                clear: MTLClearColor(red: 20/255, green: 20/255, blue: 20/255, alpha: 1))
             } catch { composition = nil; uncover(); return }
         } else {
@@ -343,6 +366,9 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
             DispatchQueue.main.async { [weak self] in
                 guard let self, time > 0 else { return }
                 self.presentedFrames &+= 1
+                if revision > self.presentedSceneRevision {
+                    self.presentedSceneRevision = revision; self.presentedSceneTime = time
+                }
                 if changed { self.changedFrames &+= 1 }
                 if self.recordsMotionSamples {
                     self.motionSamples.append((time, Double(y), changed))
@@ -414,7 +440,9 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
             uncover(); return nil
         }
         if cached != nil { compositionReuses += 1 }
-        let changed = y != lastPosition || sceneRevision != lastSceneRevision
+        guard let display = try? displayScene(composed, scene: scene) else { uncover(); return nil }
+        let revision = sceneRevision
+        let changed = y != lastPosition || revision != lastSceneRevision
         dirty = false; lastPosition = y; lastSceneRevision = sceneRevision
         lastDrawnRange = visible; lastDrawState = "NeoGPU workspace"
         isHidden = false
@@ -425,10 +453,13 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
                 DispatchQueue.main.async { profile(cpu, gpu) }
             }
         }
-        return NeoGPUNode(scene: composed.scene, translation: .init(0, Float((CGFloat(composed.rows.lowerBound) * 24 - y) * scale)),
+        return NeoGPUNode(scene: display, translation: .init(0, Float((CGFloat(composed.rows.lowerBound) * 24 - y) * scale)),
                           needsAnotherFrame: CACurrentMediaTime() < activeUntil, presented: { [weak self] time in
             guard let self else { return }
             self.presentedFrames &+= 1
+            if revision > self.presentedSceneRevision {
+                self.presentedSceneRevision = revision; self.presentedSceneTime = time
+            }
             if changed { self.changedFrames &+= 1 }
             if self.recordsMotionSamples {
                 self.motionSamples.append((time, Double(y), changed))
@@ -440,7 +471,7 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     }
 
     private func reusableComposition(visible: Range<Int>, width: Int, scale: CGFloat) -> Composition? {
-        guard usesCachedComposition, let composition, composition.revision == sceneRevision,
+        guard usesCachedComposition, let composition, composition.revision == contentRevision,
               composition.texture.width == width, composition.scale == scale,
               composition.rows.lowerBound <= visible.lowerBound,
               composition.rows.upperBound >= visible.upperBound else { return nil }
@@ -488,21 +519,47 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
             let row = scene.rows[index]
             guard var art = cache[row.id] else { composition = nil; return nil }
             useCounter &+= 1; art.used = useCounter; cache[row.id] = art
-            var fill: SIMD4<Float> = (index == scene.selected || row.item.id == scene.active) ? .init(repeating: 35/255) :
-                (index == scene.hovered ? .init(repeating: 33/255) : .init(repeating: 20/255))
-            fill.w = 1
+            let fill = SIMD4<Float>(20/255, 20/255, 20/255, 1)
             quads.append(.init(bounds: .init(0, Float((index - first) * rowHeight), Float(width), Float(rowHeight)),
                                color: fill, texture: art.texture))
         }
         do {
             let rows = try NeoGPUScene(device: device, revision: sceneRevision, quads: quads)
             try gpu.encode(rows, into: texture, command: command)
-            let retained = try NeoGPUScene(device: device, revision: sceneRevision, quads: [
-                .init(bounds: .init(0, 0, Float(width), Float(texture.height)), texture: texture)])
-            let result = Composition(rows: first..<end, revision: sceneRevision, scale: scale, texture: texture, scene: retained)
-            composition = result; compositionBuilds += 1
+            let result = Composition(rows: first..<end, revision: contentRevision, scale: scale, texture: texture)
+            composition = result; highlightedScene = nil; highlightKey = nil; compositionBuilds += 1
             return result
         } catch { composition = nil; return nil }
+    }
+
+    /// Draw the immutable, opaque base first, then replace highlighted rows using
+    /// their original transparent artwork and new fill. This preserves the reference
+    /// shader's exact antialiasing and paint order without copying or allocating textures.
+    private func displayScene(_ composition: Composition, scene: Scene) throws -> NeoGPUScene {
+        let key = Highlights(selected: scene.selected, hovered: scene.hovered, active: scene.active)
+        if key == highlightKey, let highlightedScene { return highlightedScene }
+        let width = Float(composition.texture.width), height = Float(24 * composition.scale)
+        var quads: [NeoGPUScene.Quad] = [.init(bounds: .init(0, 0, width, Float(composition.texture.height)), texture: composition.texture)]
+        var indices = Set([scene.selected])
+        if let hovered = scene.hovered { indices.insert(hovered) }
+        if activeLookup?.revision != contentRevision || activeLookup?.url != scene.active {
+            let index = scene.active.flatMap { active in scene.rows.firstIndex { $0.item.id == active } }
+            activeLookup = (contentRevision, scene.active, index)
+        }
+        if let index = activeLookup?.index { indices.insert(index) }
+        for index in indices.sorted() where composition.rows.contains(index) {
+            guard let art = cache[scene.rows[index].id] else {
+                self.composition = nil; highlightedScene = nil
+                throw NeoGPUScene.Failure.allocation // Restore native rows until artwork is ready.
+            }
+            let selected = index == scene.selected || scene.rows[index].item.id == scene.active
+            let value: Float = selected ? 35/255 : 33/255
+            quads.append(.init(bounds: .init(0, Float(index - composition.rows.lowerBound) * height, width, height),
+                               color: .init(value, value, value, 1), texture: art.texture))
+        }
+        let result = try NeoGPUScene(device: device, revision: sceneRevision, quads: quads)
+        highlightedScene = result; highlightKey = key
+        return result
     }
 
     private func encodeRows(scene: Scene, visible: Range<Int>, y: CGFloat, width: Int, scale: CGFloat,
@@ -548,7 +605,7 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
 
     private func schedule(_ row: ExplorerRow, width: Int, scale: CGFloat) {
         let key = JobKey(id: row.id, width: width, scale: scale, generation: generation)
-        guard jobs.count < 128, !jobs.contains(key) else { return }
+        guard jobs.count < 16, !jobs.contains(key) else { return }
         jobs.insert(key)
         // Resolve AppKit symbols/colors/fonts on the main thread. CoreText rasterization
         // and bitmap allocation run on the worker; there is no per-frame text shaping.
@@ -563,10 +620,13 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         let nameFont = NSFont.systemFont(ofSize: 12) as CTFont
         let smallFont = NSFont.monospacedSystemFont(ofSize: 8, weight: .bold) as CTFont
         let badgeFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium) as CTFont
+        let rasterEpoch = rasterEpoch
         worker.async { [weak self] in
+            guard rasterEpoch.matches(key.generation) else { return }
             let art = Self.raster(row, width: width, scale: scale, abbreviation: look.abbreviation, symbol: symbol,
                 chevron: chevron, text: text, iconColor: iconColor, secondary: secondary, badgeColor: badgeColor,
                 diagnosticColor: diagnosticColor, nameFont: nameFont, smallFont: smallFont, badgeFont: badgeFont)
+            guard rasterEpoch.matches(key.generation) else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.jobs.remove(key)
@@ -703,4 +763,15 @@ final class ExplorerFrameSlot: @unchecked Sendable {
         return true
     }
     func release() { lock.lock(); busy = false; lock.unlock() }
+}
+
+/// Width changes obsolete queued raster work before it allocates bitmaps or returns
+/// textures to the main thread. At most one already-running raster finishes unused.
+private final class ExplorerRasterEpoch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+    func set(_ value: UInt64) { lock.lock(); generation = value; lock.unlock() }
+    func matches(_ value: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return generation == value
+    }
 }

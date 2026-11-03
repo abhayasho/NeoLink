@@ -62,7 +62,6 @@ final class ExplorerTree: ObservableObject {
     private var hideIgnored = false
     private var query = ""
     private var diagnostics: [String: ExplorerDiagnostics] = [:]
-    private var pendingReveal = false
     private var projectionTask: Task<Void, Never>?
     private var projectionRevision = UUID()
 
@@ -76,7 +75,7 @@ final class ExplorerTree: ObservableObject {
         let needsReload = changedRoot || self.hidden != hidden || self.compact != compact
         self.hidden = hidden; self.compact = compact; self.hideIgnored = hideIgnored
         if changedRoot {
-            self.root = root; expanded = []; selectedURL = nil; git = nil; pendingReveal = false
+            self.root = root; expanded = []; selectedURL = nil; git = nil
             children = [:]; stale = []
             if !rows.isEmpty { rowsRevision += 1; rows = [] }
             observeRoot()
@@ -148,14 +147,14 @@ final class ExplorerTree: ObservableObject {
     func reveal(_ url: URL) {
         guard let root, let path = ExplorerGitSnapshot.relativePath(url, in: root), !path.isEmpty else { return }
         selectedURL = url.standardizedFileURL
-        pendingReveal = true
+        revealRevision += 1
         var parent = url.deletingLastPathComponent().standardizedFileURL
         while parent != root, ExplorerGitSnapshot.relativePath(parent, in: root) != nil {
             expanded.insert(parent); parent.deleteLastPathComponent()
         }
         rebuild()
     }
-    func clearSelection() { selectedURL = nil; pendingReveal = false }
+    func clearSelection() { selectedURL = nil }
     func rowID(for url: URL?) -> URL? { rows.first(where: { $0.item.url.standardizedFileURL == url?.standardizedFileURL })?.id }
 
     private func rebuild() {
@@ -187,7 +186,6 @@ final class ExplorerTree: ObservableObject {
                     self.startLoad(directory)
                 }
                 self.isLoading = !self.loads.isEmpty
-                if self.pendingReveal, self.rowID(for: self.selectedURL) != nil { self.pendingReveal = false; self.revealRevision += 1 }
             } catch is CancellationError {} catch {
                 guard let self, self.projectionRevision == revision else { return }
                 self.isLoading = !self.loads.isEmpty
