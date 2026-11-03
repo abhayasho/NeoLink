@@ -217,6 +217,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// The renderer must never call MTKView.currentDrawable on that same layer.
     public var metalUsesExternalDrawables = false
     public var metalExternalDrawable: CAMetalDrawable?
+    /// NeoLink: an owning workspace compositor can encode the existing terminal
+    /// scene into a private texture and present it with other panes in one frame.
+    public var metalHostTexture: MTLTexture?
+    public var metalHostCommandBuffer: MTLCommandBuffer?
+    public var metalHostFrameEncoded: ((UInt64) -> Void)?
+    public func metalHostFramePresented(tag: UInt64, time: CFTimeInterval) {
+        metalRenderer?.hostFramePresented(tag: tag, time: time)
+    }
     public var metalDisplayLayer: CAMetalLayer? { metalView?.layer as? CAMetalLayer }
 #endif
     /// Host tag for the next submitted Metal frame. The renderer consumes it when it

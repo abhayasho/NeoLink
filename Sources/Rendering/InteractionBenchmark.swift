@@ -91,7 +91,7 @@ final class InteractionBenchmark {
                 }
                 await sleep(1)
                 guard let surface = Self.find(ExplorerMetalView.self, in: scroll, where: { _ in true }),
-                      await wait(8, { surface.isCoveringNativeRows }) else { fail(scenario, "explorer Metal surface did not present"); continue }
+                      await wait(8, { surface.isCoveringNativeRows }) else { fail(scenario, "explorer Metal surface did not present; \(window.gpuWorkspace?.diagnostics ?? "independent"); explorer=\(Self.find(ExplorerMetalView.self, in: scroll, where: { _ in true })?.lastDrawState ?? "missing")"); continue }
                 // Same-binary A/B for the retained GPU compositor; this is a developer
                 // benchmark option, never a persisted user preference.
                 surface.usesCachedComposition = ProcessInfo.processInfo.environment["NEOLINK_EXPLORER_COMPOSITION"] != "0"
@@ -109,6 +109,7 @@ final class InteractionBenchmark {
                 }
                 surface.recordsMotionSamples = true
                 let oldBuilds = surface.compositionBuilds, oldReuses = surface.compositionReuses
+                let oldWorkspaceFrames = self.window.gpuWorkspace?.presentedFrames ?? 0
                 let start = CACurrentMediaTime(), oldFallbacks = surface.nativeFallbacks
                 let oldDrawableCounters = shell.rendering.drawableCounters
                 await measure(scenario, extra: {
@@ -116,6 +117,9 @@ final class InteractionBenchmark {
                     let intervals = zip(samples, samples.dropFirst()).map { $1.time - $0.time }
                     func ms(_ value: Double) -> Double { (value * 10_000).rounded() / 10 }
                     return ["inputDriver": "procedural animation, no input injection",
+                            "workspacePresentedFrames": (self.window.gpuWorkspace?.presentedFrames ?? 0) - oldWorkspaceFrames,
+                            "workspaceVisiblePanes": self.window.gpuWorkspace?.lastNodeCount ?? 0,
+                            "gpuTimingScope": NeoGPUWorkspace.forWindow(self.window) == nil ? "individual surface" : "shared workspace command buffer",
                             "explorerCompositionEnabled": surface.usesCachedComposition,
                             "explorerRenderCPUms": ["p50": ms(PresentationTiming.percentile(explorerCPU, 0.5)), "p95": ms(PresentationTiming.percentile(explorerCPU, 0.95)), "total": ms(explorerCPU.reduce(0, +))],
                             "explorerRenderGPUms": ["p50": ms(PresentationTiming.percentile(explorerGPU, 0.5)), "p95": ms(PresentationTiming.percentile(explorerGPU, 0.95)), "total": ms(explorerGPU.reduce(0, +))],
@@ -936,6 +940,7 @@ final class InteractionBenchmark {
             "editorAlternateScreen": editor?.isDisplayingAlternateScreen ?? false,
             "editorMouseReporting": editor.map { $0.allowMouseReporting && $0.getTerminal().mouseMode != .off } ?? false,
             "gpuRendering": TerminalRenderingPreferences.shared.useGPU,
+            "neoGPUWorkspace": NeoGPUWorkspace.forWindow(window) != nil,
             "lowPowerMode": ProcessInfo.processInfo.isLowPowerModeEnabled,
             "thermalState": ProcessInfo.processInfo.thermalState.rawValue,
         ]) { _, new in new }

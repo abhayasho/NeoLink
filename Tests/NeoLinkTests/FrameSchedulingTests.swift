@@ -61,6 +61,37 @@ final class FrameSchedulingTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceDeadlineOwnsWindowAnimationAndRestoresNativeClock() {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let clock = ManualFrameClock()
+        var time = 10.0, wakes = 0, observed: [Double] = [], updates = 0
+        let frames = WindowFrameScheduler(window: window, clockFactory: { _, _, tick in clock.tick = tick; return clock }, visibility: { true }, now: { time })
+        defer { frames.invalidate(); window.close() }
+        frames.setWorkspaceDriver { wakes += 1 }
+        frames.enqueue { updates += 1 }
+        let animation = NSObject()
+        frames.animate(ObjectIdentifier(animation)) { observed.append($0); return observed.count < 2 }
+        XCTAssertGreaterThan(wakes, 0)
+        XCTAssertFalse(clock.running, "A second display link must not race the workspace latch")
+        frames.prepareWorkspace(at: 10.125)
+        XCTAssertEqual(updates, 1)
+        XCTAssertEqual(observed, [10.125])
+        time = 12
+        frames.prepareWorkspace(at: 12.125)
+        XCTAssertEqual(observed, [10.125, 12.125])
+        time = 13
+        frames.prepareWorkspace(at: 13)
+        XCTAssertFalse(frames.isRunning)
+        frames.setWorkspaceDriver(nil)
+        frames.enqueue { updates += 1 }
+        XCTAssertTrue(clock.running, "Native overlay/failure must retain pending work")
+        clock.fire()
+        XCTAssertEqual(updates, 2)
+    }
+
+    @MainActor
     func testDrawableConsumesNewestSurfaceStateWithoutWaitingForWindowClock() {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)

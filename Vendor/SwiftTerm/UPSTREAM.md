@@ -9,6 +9,8 @@ Only the library target and its resources are included. The package manifest omi
 
 ## NeoLink changes
 
+- **Hosted workspace rendering** (`metalHostTexture`, `metalHostCommandBuffer`, `metalHostFrameEncoded`, `metalHostFramePresented`): render into a private, native-resolution texture with the workspace owner’s command buffer. The terminal neither commits nor presents that buffer; the owner reports the actual shared drawable presentation time. Existing glyph, image, row-cache, scroll and capture paths are reused. Independent drawable rendering remains the fallback. Pixel tests compare the hosted output byte for byte against independent terminal rendering.
+
 - **Opt-in frame cost profiling** (`metalFrameProfile`): benchmark callbacks report CPU preparation/encoding, Metal GPU execution and queue wait separately. Normal rendering does not install completion telemetry or read back textures.
 
 - **Fractional glyph rasterization** (`CoreTextGlyphRasterizer.swift`, `MetalTerminalRenderer.swift`): cache up to 4×4 CoreText coverage variants per glyph, include phase in the atlas key, add one pixel of antialiasing padding, and draw unscaled glyphs on integer device pixels. Cursor text uses the same placement. This avoids a second antialiasing/filtering step; scaled glyph fitting and atlas bounds remain unchanged.

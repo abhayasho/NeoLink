@@ -459,7 +459,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         // another one. Both acquisition APIs must never own the same layer together.
 #if os(macOS)
         let external = terminalView.metalUsesExternalDrawables
-        let drawable = external ? terminalView.metalExternalDrawable : view.currentDrawable
+        let hostedTexture = terminalView.metalHostTexture
+        let hostedCommand = terminalView.metalHostCommandBuffer
+        let drawable = hostedTexture != nil ? nil : (external ? terminalView.metalExternalDrawable : view.currentDrawable)
 #else
         let drawable = view.currentDrawable
 #endif
@@ -477,7 +479,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #endif
         let passDescriptor: MTLRenderPassDescriptor?
 #if os(macOS)
-        if external, let drawable {
+        if let hostedTexture {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = hostedTexture
+            pass.colorAttachments[0].storeAction = .store
+            passDescriptor = pass
+        } else if external, let drawable {
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = drawable.texture
             pass.colorAttachments[0].storeAction = .store
@@ -495,11 +502,16 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             os_signpost(.end, log: MetalTerminalRenderer.profileLog, name: "Metal.RenderPass", signpostID: passID)
         }
 #endif
-        guard let drawable else {
+#if os(macOS)
+        let target = hostedTexture ?? drawable?.texture
+#else
+        let target = drawable?.texture
+#endif
+        guard let target else {
             frameCoordinator.refuse(frameToken, reason: .missingDrawable)
             return
         }
-        guard drawable.texture.width == Int(drawableSize.width), drawable.texture.height == Int(drawableSize.height) else {
+        guard target.width == Int(drawableSize.width), target.height == Int(drawableSize.height) else {
             frameCoordinator.refuse(frameToken, reason: .missingDrawable)
             return
         }
@@ -532,7 +544,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             os_signpost(.begin, log: MetalTerminalRenderer.profileLog, name: "Metal.Encode", signpostID: encodeID)
         }
 #endif
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+#if os(macOS)
+        let nextCommand = hostedCommand ?? commandQueue.makeCommandBuffer()
+#else
+        let nextCommand = commandQueue.makeCommandBuffer()
+#endif
+        guard let commandBuffer = nextCommand else {
 #if canImport(os)
             if MetalTerminalRenderer.profileEnabled {
                 os_signpost(.end, log: MetalTerminalRenderer.profileLog, name: "Metal.Encode", signpostID: encodeID)
@@ -560,7 +577,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
         bufferPool.beginFrame()
         // xy: drawable size; zw: translation applied by the vertex shaders.
-        let pixelSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
+        let pixelSize = CGSize(width: target.width, height: target.height)
         let viewport = SIMD4<Float>(Float(pixelSize.width), Float(pixelSize.height), 0, 0)
         let clip = RowClip(region: drawData.region, drawableSize: pixelSize)
 
@@ -693,17 +710,18 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #if os(macOS)
         let frameTag = terminalView.metalNextFrameTag
         terminalView.metalNextFrameTag = 0
-        if let capture = terminalView.metalFrameCapture, !drawable.texture.isFramebufferOnly {
+        if let capture = terminalView.metalFrameCapture, !target.isFramebufferOnly {
             terminalView.metalFrameCapture = nil
-            captureFrame(drawable.texture, commandBuffer: commandBuffer, completion: capture)
-        } else if let capture = terminalView.metalFrameCaptureEveryFrame, !drawable.texture.isFramebufferOnly {
-            captureFrame(drawable.texture, commandBuffer: commandBuffer) { capture($0, frameTag) }
+            captureFrame(target, commandBuffer: commandBuffer, completion: capture)
+        } else if let capture = terminalView.metalFrameCaptureEveryFrame, !target.isFramebufferOnly {
+            captureFrame(target, commandBuffer: commandBuffer) { capture($0, frameTag) }
         }
-        drawable.addPresentedHandler { [weak self] presented in
+        if hostedTexture != nil { terminalView.metalHostFrameEncoded?(frameTag) }
+        drawable?.addPresentedHandler { [weak self] presented in
             self?.recordPresentedFrame(tag: frameTag, presentedTime: presented.presentedTime)
         }
 #else
-        drawable.addPresentedHandler { [weak self] _ in
+        drawable?.addPresentedHandler { [weak self] _ in
             self?.recordPresentedFrame()
         }
 #endif
@@ -720,9 +738,13 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             }
         }
 #endif
-        commandBuffer.present(drawable)
+        if let drawable { commandBuffer.present(drawable) }
         bufferPool.commit(commandBuffer: commandBuffer)
+#if os(macOS)
+        if hostedCommand == nil { commandBuffer.commit() }
+#else
         commandBuffer.commit()
+#endif
 #if canImport(os)
         if MetalTerminalRenderer.profileEnabled {
             os_signpost(.end, log: MetalTerminalRenderer.profileLog, name: "Metal.Commit", signpostID: commitID)
@@ -755,6 +777,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             }
             DispatchQueue.main.async { completion(image) }
         }
+    }
+#endif
+
+#if os(macOS)
+    func hostFramePresented(tag: UInt64, time: CFTimeInterval) {
+        recordPresentedFrame(tag: tag, presentedTime: time)
     }
 #endif
 

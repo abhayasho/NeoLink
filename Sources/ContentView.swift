@@ -50,6 +50,7 @@ struct ContentView: View {
             workspaceFooter
         }
         .background(NeoLinkTheme.background)
+        .background(NeoGPUOverlayState(suspended: search != nil || gitReview != nil))
         // Quick Open / Find in Files and Git review are in-window overlays, not AppKit sheets.
         // A sheet's slide-in animation runs a nested run loop that froze the main thread for
         // about 330 ms on open; an overlay appears on the next frame.

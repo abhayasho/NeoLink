@@ -1,12 +1,24 @@
 import AppKit
 import QuartzCore
 import CoreVideo
+import Metal
 import os
 
 /// Native controls retain AppKit's drawing path; one window clock also paces
 /// terminal state, GPU submissions, and pending window drawing during interaction.
 final class WorkspaceWindow: NSWindow {
     lazy var frames = WindowFrameScheduler(window: self)
+    var gpuWorkspace: NeoGPUWorkspace?
+    var gpuOverlayPresented = false
+
+    @MainActor func installGPUWorkspace() {
+        guard #available(macOS 14, *), gpuWorkspace == nil,
+              ProcessInfo.processInfo.environment["NEOLINK_GPUI_WORKSPACE"] != "0",
+              let device = MTLCreateSystemDefaultDevice() else { return }
+        gpuWorkspace = NeoGPUWorkspace(window: self, device: device)
+        gpuWorkspace?.setSuspended(gpuOverlayPresented)
+        if gpuWorkspace != nil { NotificationCenter.default.post(name: .neoGPUWorkspaceReady, object: self) }
+    }
 
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
@@ -313,12 +325,27 @@ final class WindowFrameScheduler {
         if let surface, pendingInputs[surface] != nil { scheduleImmediateFrame() }
     }
 
+    private var workspaceDriver: (() -> Void)?
+
+    /// The workspace drawable owns the latch deadline while hosted. Keep the
+    /// native clock for overlays, older systems and renderer failure.
+    func setWorkspaceDriver(_ wake: (() -> Void)?) {
+        clock?.stop(); isRunning = false; timing.pause()
+        workspaceDriver = wake
+        if wake != nil || !updates.isEmpty || !animations.isEmpty || !pendingPresentations.isEmpty { self.wake() }
+    }
+
+    func prepareWorkspace(at time: Double) {
+        guard workspaceDriver != nil else { return }
+        frame(targetTimestamp: time)
+    }
+
     private var immediateScheduled = false
     private var inFrame = false
     private var lastFrameStart = -Double.infinity
 
     private func scheduleImmediateFrame() {
-        guard !immediateScheduled, !inFrame, isRunning else { return }
+        guard workspaceDriver == nil, !immediateScheduled, !inFrame, isRunning else { return }
         immediateScheduled = true
         // After the current batch of output has been parsed.
         DispatchQueue.main.async { [weak self] in
@@ -428,7 +455,12 @@ final class WindowFrameScheduler {
     }
 
     private func wake() {
-        guard canAnimate, let clock else { scheduleFallback(); return }
+        guard canAnimate else { scheduleFallback(); return }
+        if let workspaceDriver {
+            if !isRunning { timing.pause() }
+            isRunning = true; workspaceDriver(); return
+        }
+        guard let clock else { scheduleFallback(); return }
         guard !isRunning else { return }
         timing.pause()
         isRunning = true
@@ -472,7 +504,7 @@ final class WindowFrameScheduler {
 
     /// `immediate` frames present output answering input between display callbacks.
     /// They leave animations, cached re-presentation and cadence statistics to the clock.
-    private func frame(immediate: Bool = false) {
+    private func frame(immediate: Bool = false, targetTimestamp: Double? = nil) {
         guard canAnimate else { drainWithoutAnimation(); return }
         let start = now()
         inFrame = true
@@ -480,7 +512,7 @@ final class WindowFrameScheduler {
         lastFrameStart = start
         os_signpost(.begin, log: Self.log, name: immediate ? "Window.ImmediateFrame" : "Window.Frame")
         drainUpdates()
-        if !immediate { runAnimations(at: clock?.targetTimestamp ?? start + 1 / Double(targetRate)) }
+        if !immediate { runAnimations(at: targetTimestamp ?? clock?.targetTimestamp ?? start + 1 / Double(targetRate)) }
         let presentations = pendingPresentations
         pendingPresentations.removeAll(keepingCapacity: true)
         // Unchanged surfaces are not presented again. Repeating a frame after input keeps
@@ -527,7 +559,7 @@ final class WindowFrameScheduler {
     var gpuChangedSamples: [ObjectIdentifier: UInt64] { surfaces.compactMapValues { $0.changedCount?() } }
 
     func invalidate() {
-        clock?.invalidate(); clock = nil; isRunning = false
+        clock?.invalidate(); clock = nil; workspaceDriver = nil; isRunning = false
         drawableDrivers.removeAll(); drainDrawableUpdates()
         drainUpdates(); pendingPresentations.removeAll(); surfaces.removeAll(); animations.removeAll()
         observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()

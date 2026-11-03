@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import QuartzCore
 import SwiftTerm
+import Metal
 
 /// One setting covers shells, SSH, agent terminals, and the embedded Neovim surface.
 @MainActor
@@ -27,7 +28,7 @@ final class TerminalRenderingPreferences: ObservableObject {
 /// SwiftTerm owns dirty rows, drawable lifetimes and recovery. The window owns
 /// frame pacing, shared with native controls and all other visible surfaces.
 @MainActor
-final class TerminalRendering {
+final class TerminalRendering: NeoGPUClient {
     private weak var view: InteractiveTerminalView?
     private let preferences: TerminalRenderingPreferences
     private var observation: AnyCancellable?
@@ -40,6 +41,12 @@ final class TerminalRendering {
     private var pendingDraw: (() -> Void)?
     private var pendingOutput: Double?
     private(set) var drawableCounters: [String: Int] = [:]
+    private weak var workspaceGPU: NeoGPUWorkspace?
+    private var workspaceObserver: NSObjectProtocol?
+    private var hostTexture: MTLTexture?
+    private var hostScene: NeoGPUScene?
+    private var hostTextureReady = false
+    private var disablingGPU = false
 
     init(view: InteractiveTerminalView, preferences: TerminalRenderingPreferences? = nil) {
         self.view = view
@@ -56,6 +63,11 @@ final class TerminalRendering {
 
     func attachToWindow() {
         guard let view else { return }
+        workspaceGPU?.unregister(self)
+        if let workspaceObserver { NotificationCenter.default.removeObserver(workspaceObserver) }
+        workspaceObserver = NotificationCenter.default.addObserver(forName: .neoGPUWorkspaceReady, object: view.window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.prepareDrawableClock() }
+        }
         let id = ObjectIdentifier(view)
         let kind = view is CodeTerminalView ? "editor" : "shell"
         frames?.unregister(id)
@@ -113,6 +125,7 @@ final class TerminalRendering {
                         self.pendingDraw = draw
                         self.pendingOutput = self.pendingOutput ?? output
                         self.drawableClock?.start()
+                        self.workspaceGPU?.wake()
                     } else {
                         frames.requestPresentation(ObjectIdentifier(view), outputAt: output, present: draw)
                     }
@@ -127,28 +140,35 @@ final class TerminalRendering {
     }
 
     private func prepareDrawableClock() -> Bool {
-        guard #available(macOS 14, *), let view, view.isUsingMetalRenderer,
+        guard !disablingGPU, #available(macOS 14, *), let view, view.isUsingMetalRenderer,
               let layer = view.metalDisplayLayer else { return false }
+        if let workspace = NeoGPUWorkspace.forWindow(view.window) {
+            if workspaceGPU !== workspace {
+                drawableClock?.invalidate(); drawableClock = nil; drawableLayer = nil
+                workspaceGPU = workspace; workspace.register(self)
+            }
+            frames?.setDrawableDriver(ObjectIdentifier(view), wake: { [weak workspace] in workspace?.wake() })
+            return true
+        }
         let rate = WindowFrameScheduler.rate(for: view.window?.screen?.maximumFramesPerSecond ?? 60)
         if drawableLayer !== layer || drawableRate != rate {
             drawableClock?.invalidate()
             drawableLayer = layer
             drawableRate = rate
             view.metalUsesExternalDrawables = true
-            drawableClock = MetalDrawableClock(layer: layer, rate: rate) { [weak self] drawable in
+            drawableClock = NeoGPUFrameSource(layer: layer, rate: rate) { [weak self] drawable in
                 self?.drawableCounters["callbacks", default: 0] += 1
                 guard let self, let view = self.view, Self.isVisible(view),
                       view.metalDisplayLayer === self.drawableLayer, let frames = self.frames else {
                     self?.drawableClock?.stop()
-                    return
+                    return false
                 }
                 // Consume all parsed state for this surface immediately before drawing.
                 // The update may schedule/replace pendingDraw with the newest dirty rows.
                 let id = ObjectIdentifier(view)
                 frames.prepareDrawable(id, at: self.drawableClock?.targetTimestamp)
                 guard let draw = self.pendingDraw else {
-                    if !frames.hasDrawableAnimation(id) { self.drawableClock?.stop() }
-                    return
+                    return frames.hasDrawableAnimation(id)
                 }
                 self.pendingDraw = nil
                 let output = self.pendingOutput; self.pendingOutput = nil
@@ -156,6 +176,7 @@ final class TerminalRendering {
                 frames.presentDrawable(ObjectIdentifier(view), outputAt: output, present: draw)
                 self.drawableCounters[view.metalNextFrameTag == 0 ? "submitted" : "refused", default: 0] += 1
                 view.metalExternalDrawable = nil
+                return true
                 // Stay warm until an update arrives with no pending draw. Returning
                 // that unused drawable pauses the link without queuing a repeat.
             }
@@ -179,6 +200,9 @@ final class TerminalRendering {
         guard let view, view.window != nil else { return }
         if retry { attemptedGPU = false; failure = nil }
         if !enabled {
+            disablingGPU = true
+            defer { disablingGPU = false }
+            workspaceGPU?.unregister(self)
             frames?.setDrawableDriver(ObjectIdentifier(view), wake: nil)
             drawableClock?.invalidate(); drawableClock = nil; drawableLayer = nil
             pendingDraw = nil; pendingOutput = nil
@@ -214,6 +238,70 @@ final class TerminalRendering {
         case .disabled: status = failure.map { "CoreGraphics — \($0)" } ?? "CoreGraphics"
         }
         let refresh = view.window?.screen?.maximumFramesPerSecond ?? 60
-        return "\(status)\nPresented GPU frames: \(view.metalRendererStatus.presentedFrameCount)\nDisplay maximum refresh rate: \(refresh) Hz\n\n\(frames?.summary ?? "Native on-demand drawing")"
+        return "\(status)\nPresentation: \(workspaceGPU == nil ? "independent surface" : "NeoGPU workspace scene")\nPresented GPU frames: \(view.metalRendererStatus.presentedFrameCount)\nDisplay maximum refresh rate: \(refresh) Hz\n\n\(frames?.summary ?? "Native on-demand drawing")"
     }
+
+    var gpuInputView: NSView? { view }
+    func gpuReleaseHiddenResources() {
+        hostTexture = nil; hostScene = nil; hostTextureReady = false
+    }
+    func gpuSetHosted(_ hosted: Bool) {
+        guard let view else { return }
+        view.metalUsesExternalDrawables = hosted
+        if !hosted {
+            workspaceGPU = nil; hostTexture = nil; hostScene = nil; hostTextureReady = false
+            view.metalHostTexture = nil; view.metalHostCommandBuffer = nil; view.metalHostFrameEncoded = nil
+            view.metalDisplayLayer?.opacity = 1
+            if !disablingGPU {
+                DispatchQueue.main.async { [weak self] in
+                    _ = self?.prepareDrawableClock()
+                    self?.view?.needsDisplay = true
+                }
+            }
+        }
+    }
+
+    func gpuPrepare(time: Double, command: MTLCommandBuffer) -> NeoGPUNode? {
+        guard let view, let frames, let workspaceGPU, view.isUsingMetalRenderer else { return nil }
+        let id = ObjectIdentifier(view), scale = view.window?.backingScaleFactor ?? 2
+        frames.prepareDrawable(id, at: time)
+        let width = max(1, Int((view.bounds.width * scale).rounded()))
+        let height = max(1, Int((view.bounds.height * scale).rounded()))
+        var fresh = false
+        if hostTexture?.width != width || hostTexture?.height != height {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+            descriptor.storageMode = .private; descriptor.usage = [.renderTarget, .shaderRead]
+            guard let texture = workspaceGPU.device.makeTexture(descriptor: descriptor),
+                  let scene = try? NeoGPUScene(device: workspaceGPU.device, revision: 0, quads: [
+                    .init(bounds: .init(0, 0, Float(width), Float(height)), color: .zero, texture: texture)]) else { workspaceGPU.fail(); return nil }
+            hostTexture = texture; hostScene = scene; hostTextureReady = false; fresh = true
+        }
+        var encoded: UInt64 = 0
+        if pendingDraw != nil || fresh || !hostTextureReady {
+            let output = pendingOutput; pendingOutput = nil
+            let draw = pendingDraw ?? { [weak view, weak frames] in
+                guard let view, let frames else { return }
+                let tag = frames.presentationTag
+                if view.metalNextFrameTag != 0 { frames.mergeTag(view.metalNextFrameTag, into: tag) }
+                view.metalNextFrameTag = tag
+                view.drawMetalFrameNow()
+                if view.metalNextFrameTag == 0 { frames.frameDrawn(tag: tag, changed: view.metalLastFrameChanged, scroll: view.scrollTraceSample()) }
+            }
+            pendingDraw = nil
+            view.metalHostTexture = hostTexture; view.metalHostCommandBuffer = command
+            view.metalHostFrameEncoded = { encoded = $0 }
+            frames.presentDrawable(id, outputAt: output, present: draw)
+            view.metalHostTexture = nil; view.metalHostCommandBuffer = nil; view.metalHostFrameEncoded = nil
+            if encoded == 0 { pendingDraw = draw }
+            else { hostTextureReady = true }
+        }
+        guard hostTextureReady, let scene = hostScene else { return nil }
+        return NeoGPUNode(scene: scene, needsAnotherFrame: pendingDraw != nil || frames.hasDrawableAnimation(id), presented: { [weak view] time in
+            guard let view else { return }
+            view.metalDisplayLayer?.opacity = 0
+            view.metalHostFramePresented(tag: encoded, time: time)
+        })
+    }
+
+    deinit { if let workspaceObserver { NotificationCenter.default.removeObserver(workspaceObserver) } }
 }

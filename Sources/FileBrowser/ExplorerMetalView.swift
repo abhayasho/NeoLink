@@ -7,7 +7,7 @@ import QuartzCore
 /// surface; immutable row artwork is rasterized once off-thread, cached, and translated by
 /// Metal while scrolling. Missing artwork or a GPU failure reveals the native table.
 @MainActor
-final class ExplorerMetalView: NSView {
+final class ExplorerMetalView: NSView, NeoGPUClient {
     struct Scene {
         let rows: [ExplorerRow]
         let active: URL?
@@ -26,6 +26,7 @@ final class ExplorerMetalView: NSView {
         let revision: UInt64
         let scale: CGFloat
         let texture: MTLTexture
+        let scene: NeoGPUScene
     }
     private var composition: Composition?
     // Tests compare the cached GPU pass with the original per-row pass pixel for pixel.
@@ -43,6 +44,7 @@ final class ExplorerMetalView: NSView {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
+    private let gpu: NeoGPURenderer
     private let worker = DispatchQueue(label: "com.neolink.explorer.artwork", qos: .userInitiated)
     private var cache: [URL: Artwork] = [:]
     private var jobs: Set<JobKey> = []
@@ -60,6 +62,8 @@ final class ExplorerMetalView: NSView {
     private var windowObservers: [NSObjectProtocol] = []
     private weak var scroll: NSScrollView?
     private weak var frames: WindowFrameScheduler?
+    private weak var workspaceGPU: NeoGPUWorkspace?
+    private var stoppingGPU = false
     var scene: (() -> Scene)?
     var coverageChanged: ((Bool) -> Void)?
     private(set) var isCoveringNativeRows = false
@@ -102,8 +106,8 @@ final class ExplorerMetalView: NSView {
     }
 
     init?(scroll: NSScrollView) {
-        guard let (device, pipeline) = Self.resources.snapshot(), let queue = device.makeCommandQueue() else { return nil }
-        self.device = device; self.queue = queue; self.pipeline = pipeline; self.scroll = scroll
+        guard let (device, pipeline, gpu) = Self.resources.snapshot(), let queue = device.makeCommandQueue() else { return nil }
+        self.device = device; self.queue = queue; self.pipeline = pipeline; self.gpu = gpu; self.scroll = scroll
         super.init(frame: scroll.contentView.frame)
         wantsLayer = true; layerContentsRedrawPolicy = .onSetNeedsDisplay; isHidden = true
         setAccessibilityElement(false)
@@ -123,15 +127,17 @@ final class ExplorerMetalView: NSView {
     nonisolated static func prepare() { resources.prepare() }
     private final class Resources: @unchecked Sendable {
         private let lock = NSLock()
-        private var cached: (MTLDevice, MTLRenderPipelineState)?
-        func snapshot() -> (MTLDevice, MTLRenderPipelineState)? {
+        private var cached: (MTLDevice, MTLRenderPipelineState, NeoGPURenderer)?
+        func snapshot() -> (MTLDevice, MTLRenderPipelineState, NeoGPURenderer)? {
             lock.lock(); defer { lock.unlock() }; return cached
         }
         func prepare() {
             lock.lock(); defer { lock.unlock() }
             guard cached == nil, let device = MTLCreateSystemDefaultDevice(),
                   let pipeline = ExplorerMetalView.pipeline(device: device) else { return }
-            cached = (device, pipeline)
+            NeoGPUResources.shared.prepare(device: device)
+            guard let gpu = NeoGPUResources.shared.renderer(device: device) else { return }
+            cached = (device, pipeline, gpu)
         }
     }
 
@@ -152,10 +158,11 @@ final class ExplorerMetalView: NSView {
         }
         guard let window, let layer = layer as? CAMetalLayer else { uncover(); return }
         for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification,
-                     NSWindow.didMiniaturizeNotification, NSWindow.didBecomeKeyNotification, NSWindow.didChangeScreenNotification] {
+                     NSWindow.didMiniaturizeNotification, NSWindow.didBecomeKeyNotification, NSWindow.didChangeScreenNotification,
+                     .neoGPUWorkspaceReady] {
             windowObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    if name == NSWindow.didChangeScreenNotification { self?.configureClock() }
+                    if name == NSWindow.didChangeScreenNotification || name == .neoGPUWorkspaceReady { self?.configureClock() }
                     self?.invalidateScene(contentChanged: false)
                 }
             })
@@ -170,12 +177,18 @@ final class ExplorerMetalView: NSView {
         displayDriver?.invalidate(); displayDriver = nil
         legacyClock?.invalidate(); legacyClock = nil
         guard let window, let layer = layer as? CAMetalLayer else { return }
+        if !Self.allowsFrameCapture, let workspace = NeoGPUWorkspace.forWindow(window) {
+            workspaceGPU = workspace; workspace.register(self)
+            return
+        }
         if Self.allowsFrameCapture {
             // Explicit offscreen tests own drawable acquisition. A CAMetalDisplayLink
             // and nextDrawable must never be used together for the same layer.
         } else if #available(macOS 14, *) {
-            displayDriver = MetalDrawableClock(layer: layer, rate: WindowFrameScheduler.rate(for: window.screen?.maximumFramesPerSecond ?? 60)) { [weak self] drawable in
-                self?.draw(drawable: drawable)
+            displayDriver = NeoGPUFrameSource(layer: layer, rate: WindowFrameScheduler.rate(for: window.screen?.maximumFramesPerSecond ?? 60)) { [weak self] drawable in
+                guard let self else { return false }
+                self.draw(drawable: drawable)
+                return self.lastDrawState == "submitted" || self.lastDrawState == "busy"
             }
         } else if #unavailable(macOS 14) {
             legacyClock = NativeDisplayClock(window: window) { [weak self] in
@@ -219,7 +232,7 @@ final class ExplorerMetalView: NSView {
         // A hidden CAMetalLayer receives no display-link drawables. Warm its artwork
         // first, then expose the layer so its first frame can actually be delivered.
         isHidden = false
-        displayDriver?.start(); legacyClock?.start()
+        displayDriver?.start(); legacyClock?.start(); workspaceGPU?.wake()
     }
 
     private func artworkReady(scene: Scene) -> Bool {
@@ -248,6 +261,8 @@ final class ExplorerMetalView: NSView {
     }
 
     func shutdown() {
+        stoppingGPU = true
+        workspaceGPU?.unregister(self)
         generation &+= 1
         artworkRefreshScheduled = false
         resizeRetryScheduled = false
@@ -300,24 +315,19 @@ final class ExplorerMetalView: NSView {
         let changed = y != lastPosition || sceneRevision != lastSceneRevision
         guard let command = queue.makeCommandBuffer() else { uncover(); return }
         let composed = cachedComposition ?? buildComposition(scene: scene, visible: visible, width: width, scale: scale, command: command)
-        guard let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(drawable.texture)) else { uncover(); return }
-        configure(encoder, texture: drawable.texture)
         if let composed {
             if cachedComposition != nil { compositionReuses += 1 }
-            let top = Float((CGFloat(composed.rows.lowerBound) * 24 - y) * scale)
-            let bottom = top + Float(composed.texture.height), right = Float(width)
-            let vertices: [SIMD4<Float>] = [
-                .init(0, top, 0, 0), .init(right, top, 1, 0), .init(0, bottom, 0, 1),
-                .init(right, top, 1, 0), .init(right, bottom, 1, 1), .init(0, bottom, 0, 1)]
-            vertices.withUnsafeBytes { encoder.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
-            var fill = SIMD4<Float>(0, 0, 0, 1)
-            encoder.setFragmentBytes(&fill, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-            encoder.setFragmentTexture(composed.texture, index: 0)
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            let translation = SIMD2<Float>(0, Float((CGFloat(composed.rows.lowerBound) * 24 - y) * scale))
+            do {
+                try gpu.encode(composed.scene, into: drawable.texture, command: command, translation: translation,
+                               clear: MTLClearColor(red: 20/255, green: 20/255, blue: 20/255, alpha: 1))
+            } catch { composition = nil; uncover(); return }
         } else {
+            guard let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(drawable.texture)) else { uncover(); return }
+            configure(encoder, texture: drawable.texture)
             encodeRows(scene: scene, visible: visible, y: y, width: width, scale: scale, encoder: encoder)
+            encoder.endEncoding()
         }
-        encoder.endEncoding()
         if let capture = captureNextFrame, !drawable.texture.isFramebufferOnly {
             captureNextFrame = nil
             capturePixels(drawable.texture, command: command, completion: capture)
@@ -381,6 +391,54 @@ final class ExplorerMetalView: NSView {
         }
     }
 
+    var gpuInputView: NSView? { scroll?.contentView }
+    func gpuSetHosted(_ hosted: Bool) {
+        if hosted {
+            displayDriver?.invalidate(); displayDriver = nil
+            legacyClock?.invalidate(); legacyClock = nil
+        } else {
+            workspaceGPU = nil; layer?.opacity = 1
+            if !stoppingGPU { configureClock(); invalidateScene() }
+        }
+    }
+
+    func gpuPrepare(time: Double, command: MTLCommandBuffer) -> NeoGPUNode? {
+        guard let window, let scroll, let scene = scene?(), bounds.width > 0, bounds.height > 0 else { return nil }
+        let started = frameProfile == nil ? 0 : CACurrentMediaTime()
+        let scale = window.backingScaleFactor, width = Int(ceil(bounds.width * scale))
+        let y = (scroll.contentView.bounds.minY * scale).rounded() / scale
+        let visible = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
+        let cached = reusableComposition(visible: visible, width: width, scale: scale)
+        guard cached != nil || artworkReady(scene: scene) else { uncover(); return nil }
+        guard let composed = cached ?? buildComposition(scene: scene, visible: visible, width: width, scale: scale, command: command) else {
+            uncover(); return nil
+        }
+        if cached != nil { compositionReuses += 1 }
+        let changed = y != lastPosition || sceneRevision != lastSceneRevision
+        dirty = false; lastPosition = y; lastSceneRevision = sceneRevision
+        lastDrawnRange = visible; lastDrawState = "NeoGPU workspace"
+        isHidden = false
+        if let profile = frameProfile {
+            let cpu = CACurrentMediaTime() - started
+            command.addCompletedHandler { buffer in
+                let gpu = max(0, buffer.gpuEndTime - buffer.gpuStartTime)
+                DispatchQueue.main.async { profile(cpu, gpu) }
+            }
+        }
+        return NeoGPUNode(scene: composed.scene, translation: .init(0, Float((CGFloat(composed.rows.lowerBound) * 24 - y) * scale)),
+                          needsAnotherFrame: CACurrentMediaTime() < activeUntil, presented: { [weak self] time in
+            guard let self else { return }
+            self.presentedFrames &+= 1
+            if changed { self.changedFrames &+= 1 }
+            if self.recordsMotionSamples {
+                self.motionSamples.append((time, Double(y), changed))
+                if self.motionSamples.count > 4000 { self.motionSamples.removeFirst(self.motionSamples.count - 4000) }
+            }
+            self.layer?.opacity = 0
+            if !self.isCoveringNativeRows { self.isCoveringNativeRows = true; self.coverageChanged?(true) }
+        })
+    }
+
     private func reusableComposition(visible: Range<Int>, width: Int, scale: CGFloat) -> Composition? {
         guard usesCachedComposition, let composition, composition.revision == sceneRevision,
               composition.texture.width == width, composition.scale == scale,
@@ -423,14 +481,28 @@ final class ExplorerMetalView: NSView {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
             width: width, height: (end - first) * rowHeight, mipmapped: false)
         descriptor.storageMode = .private; descriptor.usage = [.renderTarget, .shaderRead]
-        guard let texture = device.makeTexture(descriptor: descriptor),
-              let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(texture)) else { composition = nil; return nil }
-        configure(encoder, texture: texture)
-        encodeRows(scene: scene, visible: first..<end, y: CGFloat(first) * 24, width: width, scale: scale, encoder: encoder)
-        encoder.endEncoding()
-        let result = Composition(rows: first..<end, revision: sceneRevision, scale: scale, texture: texture)
-        composition = result; compositionBuilds += 1
-        return result
+        guard let texture = device.makeTexture(descriptor: descriptor) else { composition = nil; return nil }
+        var quads: [NeoGPUScene.Quad] = []
+        quads.reserveCapacity(end - first)
+        for index in first..<end {
+            let row = scene.rows[index]
+            guard var art = cache[row.id] else { composition = nil; return nil }
+            useCounter &+= 1; art.used = useCounter; cache[row.id] = art
+            var fill: SIMD4<Float> = (index == scene.selected || row.item.id == scene.active) ? .init(repeating: 35/255) :
+                (index == scene.hovered ? .init(repeating: 33/255) : .init(repeating: 20/255))
+            fill.w = 1
+            quads.append(.init(bounds: .init(0, Float((index - first) * rowHeight), Float(width), Float(rowHeight)),
+                               color: fill, texture: art.texture))
+        }
+        do {
+            let rows = try NeoGPUScene(device: device, revision: sceneRevision, quads: quads)
+            try gpu.encode(rows, into: texture, command: command)
+            let retained = try NeoGPUScene(device: device, revision: sceneRevision, quads: [
+                .init(bounds: .init(0, 0, Float(width), Float(texture.height)), texture: texture)])
+            let result = Composition(rows: first..<end, revision: sceneRevision, scale: scale, texture: texture, scene: retained)
+            composition = result; compositionBuilds += 1
+            return result
+        } catch { composition = nil; return nil }
     }
 
     private func encodeRows(scene: Scene, visible: Range<Int>, y: CGFloat, width: Int, scale: CGFloat,

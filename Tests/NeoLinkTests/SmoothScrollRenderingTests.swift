@@ -7,6 +7,52 @@ import SwiftTerm
 /// Renders with SwiftTerm's Metal renderer and compares frames pixel by pixel.
 final class SmoothScrollRenderingTests: XCTestCase {
     @MainActor
+    func testHostedTerminalSceneCompositesWithoutChangingPixelsOrCommittingTheOwnersBuffer() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        defer { TerminalView.allowsMetalFrameCapture = false }
+        let (window, view) = makeMetalTerminal()
+        defer { window.close() }
+        try view.setUseMetal(true)
+        view.feed(text: "\u{1B}[?25l\u{1B}[2J\u{1B}[HHosted terminal 界 🦎\r\n\u{1B}[31;44mColor\u{1B}[0m")
+        let before = try capture(view)
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+            width: before.width, height: before.height, mipmapped: false)
+        descriptor.storageMode = .private; descriptor.usage = [.renderTarget, .shaderRead]
+        let source = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        descriptor.storageMode = .shared
+        let output = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        let command = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
+        var encoded: UInt64 = 0
+        view.metalUsesExternalDrawables = true
+        view.metalHostTexture = source; view.metalHostCommandBuffer = command
+        view.metalHostFrameEncoded = { encoded = $0 }
+        view.metalNextFrameTag = 456
+        // Suppress queued MTKView redraws while this fixture owns submission.
+        view.metalFrameScheduler = { _ in }
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while encoded == 0, Date() < deadline {
+            view.drawMetalFrameNow()
+            if encoded == 0 { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.005)) }
+        }
+        XCTAssertEqual(encoded, 456)
+        XCTAssertEqual(command.status, .notEnqueued, "Only the workspace may submit its shared buffer")
+        let scene = try NeoGPUScene(device: device, revision: 1, quads: [
+            .init(bounds: .init(0, 0, Float(before.width), Float(before.height)), color: .zero, texture: source)])
+        try NeoGPURenderer(device: device).encode(scene, into: output, command: command)
+        command.commit(); command.waitUntilCompleted()
+        XCTAssertEqual(command.status, .completed)
+        var pixels = [UInt8](repeating: 0, count: before.width * before.height * 4)
+        pixels.withUnsafeMutableBytes { output.getBytes($0.baseAddress!, bytesPerRow: before.width * 4,
+            from: MTLRegionMake2D(0, 0, before.width, before.height), mipmapLevel: 0) }
+        XCTAssertEqual(Data(pixels), before.dataProvider!.data! as Data,
+                       "The custom workspace scene must preserve terminal glyphs, colors and emoji byte for byte")
+        view.metalHostTexture = nil; view.metalHostCommandBuffer = nil; view.metalHostFrameEncoded = nil
+        view.metalUsesExternalDrawables = false
+    }
+
+    @MainActor
     func testDisplayLinkDrawableHandoffMatchesLegacyPixels() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
         _ = NSApplication.shared

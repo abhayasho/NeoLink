@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SwiftTerm
+import Metal
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -50,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.tabbingMode = .disallowed
         window.minSize = NSSize(width: 900, height: 560)
         window.setFrameAutosaveName("NeoLinkMainWindow")
-        window.contentViewController = hosting
+        window.contentViewController = WorkspaceContentController(hosting: hosting, size: initialSize)
         window.delegate = self
         // Benchmarks force an exact content size ("WIDTHxHEIGHT" in points), applied after the
         // autosave name so AppKit's restored frame cannot win. "max" fills the visible screen.
@@ -73,6 +74,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         PhaseTrace.mark("launch.windowShown")
 
         self.window = window
+        if TerminalRenderingPreferences.shared.useGPU {
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let device = MTLCreateSystemDefaultDevice() { NeoGPUResources.shared.prepare(device: device) }
+                DispatchQueue.main.async { [weak window] in window?.installGPUWorkspace() }
+            }
+        }
         InteractionBenchmark.startIfRequested(window: window, tabs: tabsController)
 
         NSApp.setActivationPolicy(.regular)

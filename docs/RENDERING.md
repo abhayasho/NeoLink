@@ -1,5 +1,41 @@
 # Native GPU text rendering
 
+## Shared NeoGPU workspace (1.11.0, build 24)
+
+NeoGPU is a custom Swift/Metal retained scene engine, informed by Zed’s scene ordering and supplied-drawable frame loop. Visible terminal/editor and explorer panes now latch state at one display deadline, share one command buffer, and composite into a single workspace drawable. The independent window animation clock pauses during hosting. This removes a second animation phase and independently presented coding panes. [Architecture, scope and source references](NEOGPU.md).
+
+The engine retains packed instances, batches adjacent compatible primitives without changing paint order, clips each pane in backing pixels, keeps VSync enabled and bounds in-flight GPU work without blocking the main thread. Text remains native-resolution with nearest sampling; no reduced-resolution framebuffer or text rescaling is introduced. Native controls retain input and accessibility. Quick Open/Git overlays temporarily restore independent surfaces. Native chrome, agent conversations, PDFs, Folder List and SFTP remain native; their rendering is not rewritten. CPU text rasterization, terminal parsing and Neovim remain CPU work.
+
+### Same-binary full-screen checks
+
+Four unlocked/frontmost runs used the same release binary on the M2 Max, native macOS full screen at 1728 × 1084 points, 2x backing and 12-point terminal text. Run order was shared, independent, shared, independent. Each motion workload lasts five seconds plus presentation drain. Both shared runs confirmed two hosted panes and zero native explorer fallbacks.
+
+| Metric | Shared 1 | Independent 1 | Shared 2 | Independent 2 |
+|---|---:|---:|---:|---:|
+| Process CPU, percent of one core | 41.1% | 43.4% | 40.9% | 44.4% |
+| Terminal new-frame interval p95 | 8.3 ms | 8.3 ms | 8.3 ms | 8.3 ms |
+| Terminal longest interval | 8.3 ms | 16.7 ms | 33.3 ms | 25 ms |
+| Terminal intervals over 12.5 ms | 0% | 1.4% | 0.7% | 0.7% |
+| Explorer changed-frame interval p95 | 8.3 ms | 8.3 ms | 8.3 ms | 8.3 ms |
+| Explorer longest interval | 8.3 ms | 33.3 ms | 33.3 ms | 33.3 ms |
+| Process footprint during motion | 267.6 MiB | 216 MiB | 268.3 MiB | 217.2 MiB |
+
+Motion CPU was about 5–8% lower in these pairs. One shared run had no held frames; the repeat retained occasional gaps. The added private terminal framebuffer and workspace composition increased measured process footprint by about 51 MiB. Hidden terminal framebuffers are released. Shared-mode GPU timings cover the whole workspace command buffer and must not be quoted as isolated explorer execution times.
+
+Idle results varied in both modes: the second shared run and first independent run had zero clock callbacks, no terminal frames and 5.1% instrumented CPU. The other shared/independent runs had 515/550 callbacks and 29.5%/27.6% CPU despite no changed terminal frames. That intermittent activity was not isolated; the 2 ms responsiveness probe itself adds work. These are not normal idle CPU or energy measurements.
+
+**Real trackpad smoothness remains unverified.** These procedural results do not establish uninterrupted 120 FPS or perceptual parity with Zed. A separate 30-second manual attempt captured zero explorer movement and no terminal scroll samples, so it is excluded as an input-motion acceptance test. User-reported choppiness must be checked in the installed Build 24, not the older Applications copy that was still running during the first comparisons. [Raw reports, rejected manual attempt and binary hash](rendering-build24.json).
+
+137 native tests pass, including retained scene order/clipping/translation, shared terminal pixels compared byte for byte with the independent renderer (colors, CJK and emoji), transparent workspace chrome, oversize-pane scissoring, the SwiftUI host/overlay sibling hierarchy and resize, animation-deadline ownership and native-clock recovery. Neovim runtime checks and eight offline benchmark checks pass. Release UI checks exercised Quick Open, Git review, code scrolling, tab switching, native fallback and GPU re-enabling without session restart. Authenticated remote performance was not measured.
+
+```sh
+NEOLINK_WINDOW=fullscreen NEOLINK_BENCHMARK=render-motion,idle \
+NEOLINK_BENCHMARK_OUTPUT=/tmp/neolink-workspace.json \
+NeoLink.app/Contents/MacOS/NeoLink
+```
+
+Repeat with `NEOLINK_GPUI_WORKSPACE=0` for independent surface presentation. Keep the window frontmost and screen unlocked. A failed early prototype placed the overlay inside NSHostingView: it encoded content but received no presentation callbacks. The final container makes the SwiftUI host and GPU overlay siblings; the new hierarchy regression test protects that correction.
+
 ## Retained GPU composition (1.10.3, build 23)
 
 The custom Metal explorer compositor now retains a block of nearby, fully rendered rows in a private GPU texture. Ordinary scrolling encodes one textured quad rather than rebuilding row geometry, hashing row URLs and binding each row texture on every display callback. Metal performs both the initial row composition and subsequent viewport sampling. The texture stays at native backing-pixel resolution with nearest sampling and integer-pixel placement; it does not scale down text.
