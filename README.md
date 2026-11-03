@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Resources/AppIcon.png" alt="NeoLink axolotl logo" width="180">
+  <img src="assets/banner.png" alt="NeoLink — native macOS coding workspace" width="100%">
 </p>
 
 <h1 align="center">NeoLink</h1>
@@ -45,6 +45,28 @@ Build 24 (1.11.0) introduces **NeoGPU**, a custom retained Metal scene engine. T
 - **Keychain storage.** Enter your SFTP password once. NeoLink saves it in the macOS Keychain and reconnects without asking again.
 - **Understated dark workspace.** A compact navigator, flat tabs, a `#141414` navigator, `#181818` editor and agent surfaces, muted blue/pink syntax, subtle gray borders, and a resizable agent panel keep attention on your code. Connections and Explorer share the left navigation area. The native editor fallback uses the same palette.
 - **Collapsible panels.** Close Connections or Files/SFTP with **×** and reopen them from the header. Your panel visibility is remembered across launches, while open tabs and saved connections stay available.
+
+## Performance and benchmarks
+
+Build 24 was measured on an **M2 Max MacBook Pro with a built-in 120 Hz display**, in native full screen at 1728 × 1084 points, 2× backing resolution and 12-point terminal text. Four runs used the same release binary: NeoGPU shared presentation and independent surface presentation, repeated in alternating order. Each run animated terminal scrollback and the explorer together for five seconds, followed by presentation drain.
+
+| Metric | NeoGPU shared workspace | Independent surfaces (control) |
+| --- | --- | --- |
+| Motion CPU (% of one core), runs 1 / 2 | **41.1% / 40.9%** | 43.4% / 44.4% |
+| Terminal frame interval, p95, both runs | 8.3 ms | 8.3 ms |
+| Terminal intervals over 12.5 ms, runs 1 / 2 | **0% / 0.7%** | 1.4% / 0.7% |
+| Longest terminal frame interval, runs 1 / 2 | 8.3 / 33.3 ms | 16.7 / 25.0 ms |
+| Explorer frame interval, p95, both runs | 8.3 ms | 8.3 ms |
+| Longest explorer frame interval, runs 1 / 2 | 8.3 / 33.3 ms | 33.3 / 33.3 ms |
+| Process memory footprint, runs 1 / 2 | 267.6 / 268.3 MiB | 216.0 / 217.2 MiB |
+
+Frame intervals use the actual presentation time of changed content; p95 is the 95th percentile. CPU is relative to one core, and memory is the measured process footprint.
+
+The shared renderer used **5.3% and 7.9% less motion CPU** in the two pairs, at a cost of about **51 MiB more process memory**. Both paths had the same 8.3 ms p95 frame interval; that alone does not establish uninterrupted 120 FPS. Occasional held frames remain. These are short procedural workloads, and the results do not measure subjective trackpad smoothness, energy use or authenticated SSH/SFTP performance. Idle measurements varied and are not suitable for an idle-CPU claim.
+
+**Is NeoLink faster than Zed or VS Code?** A matched comparison against those applications has not been run, so this project does not claim to outperform either. The measurements above compare two NeoLink rendering paths, not competing editors. Startup, file opening, typing latency, workspace search and real-input scrolling need separate, equivalent workloads before making an overall speed comparison.
+
+[Raw runs and tested binary hash](docs/rendering-build24.json) · [Method, limits and reproduction command](docs/RENDERING.md#shared-neogpu-workspace-1110-build-24) · [Renderer architecture](docs/NEOGPU.md)
 
 ## Requirements
 
@@ -137,7 +159,7 @@ swift test
 python3 scripts/test-editor.py
 ```
 
-The regression suite (126 tests) covers Metal rendering of smooth-scrolled frames compared pixel by pixel, the scroll model, frame scheduling and input-latency attribution, wheel-delta accumulation, persisted text sizing, docked-agent lifecycle, Git staging/unstaging and commits (including an unborn repository), local branch conflicts, stash previews, literal filenames, ACP streaming/permissions/cancellation/timeouts and parallel session isolation, isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials; the rendering tests skip without a Metal GPU. Authenticated SFTP transfers and remote previews still need an integration check against a server.
+The regression suite (137 tests) covers Metal rendering of smooth-scrolled frames compared pixel by pixel, the scroll model, frame scheduling and input-latency attribution, wheel-delta accumulation, persisted text sizing, docked-agent lifecycle, Git staging/unstaging and commits (including an unborn repository), local branch conflicts, stash previews, literal filenames, ACP streaming/permissions/cancellation/timeouts and parallel session isolation, isolated tab state, native screen and scrollback retention, document deduplication, editor undo, PDF page retention, encoding-preserving saves and external-edit conflicts, shell startup and directory reporting, agent argument quoting and project selection, clean-buffer reloads, bookmark recovery after temporary failures, safe local copies and renames, asynchronous navigation, SSH input validation, and remote path parsing. Tests use temporary files and require no SSH server or credentials; the rendering tests skip without a Metal GPU. Authenticated SFTP transfers and remote previews still need an integration check against a server.
 
 To measure scrolling smoothness and typing latency on your machine, run the interaction benchmark described in [docs/RENDERING.md](docs/RENDERING.md#benchmark) on a release build.
 
