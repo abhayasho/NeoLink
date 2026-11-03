@@ -90,7 +90,11 @@ struct SmoothScrollModel {
         let interval = time - lastInput
         if lines != 0 {
             let instantaneous = lines / max(interval, 1.0 / 240)
-            velocity = interval > 0.05 ? lines * 120 : 0.6 * velocity + 0.4 * instantaneous
+            if (velocity > 0 && lines < 0) || (velocity < 0 && lines > 0) {
+                velocity = instantaneous
+            } else {
+                velocity = interval > 0.05 ? lines * 120 : 0.6 * velocity + 0.4 * instantaneous
+            }
         }
         lastInput = time
         if stepping { return followInSteps(lines, at: time) }
@@ -156,8 +160,8 @@ struct SmoothScrollModel {
         let decay = exp(-w * dt)
         let x = (x0 + (v0 + w * x0) * dt) * decay
         settleVelocity = (v0 - w * (v0 + w * x0) * dt) * decay
-        // Stop within half a device pixel, without crossing zero (no reversal).
-        if abs(x) < 0.015 || x.sign != x0.sign {
+        // Stop within subpixel precision without crossing zero (no reversal).
+        if abs(x) < 0.002 || x.sign != x0.sign {
             offset = target
             settling = false
             settleVelocity = 0

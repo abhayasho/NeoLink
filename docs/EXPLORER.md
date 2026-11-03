@@ -52,3 +52,7 @@ Build 19 validation: 117 native tests pass, including parked-fraction Metal pixe
 `ExplorerMetalView` draws cached row textures, selection and hover through Metal over the native table. Artwork uses the existing semantic file icons, Git colors, diagnostic badges and fixed row geometry. CoreText rasterization happens off-thread; row textures are reused as their position changes. The GPU view ignores hit testing and accessibility so the native table retains input and accessible semantics. Native cells stop painting only after a GPU drawable reaches the display, and are restored when artwork is unavailable or the renderer shuts down. Resizing waits for drawables at the correct pixel size rather than stretching an old frame.
 
 Offscreen GPU pixel checks and unlocked release checks cover row presentation, expansion, scrolling, context actions, file opening, renderer toggles and closing/reopening the pane. The drawable rate and changed-scene rate are reported separately; neither proves human visual equivalence with Zed. See [rendering details](RENDERING.md).
+
+## Build 21 clarity and cache completion
+
+Retains the larger 512-row cache and 48-row prefetch margin. Metal now maps cached rows in device pixels, draws SF Symbols at the backing scale, preserves native font descriptors, and batches completion-triggered viewport work over 4 ms. Incomplete visible artwork shows the complete native table immediately rather than presenting missing rows. Tree actions, accessibility, SSH and SFTP remain on their existing paths.

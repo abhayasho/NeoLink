@@ -61,6 +61,38 @@ final class FrameSchedulingTests: XCTestCase {
     }
 
     @MainActor
+    func testDrawableConsumesNewestSurfaceStateWithoutWaitingForWindowClock() {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let clock = ManualFrameClock()
+        var visible = true
+        let frames = WindowFrameScheduler(window: window, clockFactory: { _, _, tick in clock.tick = tick; return clock }, visibility: { visible })
+        defer { frames.invalidate(); window.close() }
+        let surface = NSObject(), other = NSObject(), id = ObjectIdentifier(surface)
+        var requests = 0, order: [Int] = [], unrelated = 0
+        frames.setDrawableDriver(id) { requests += 1 }
+        for value in 0..<100 { frames.enqueue(from: id) { order.append(value) } }
+        frames.enqueue(from: ObjectIdentifier(other)) { unrelated += 1 }
+        XCTAssertTrue(order.isEmpty)
+        XCTAssertEqual(requests, 100)
+        frames.prepareDrawable(id) // Metal callback arrives before the CADisplayLink.
+        XCTAssertEqual(order, Array(0..<100))
+        XCTAssertEqual(unrelated, 0, "A drawable does not advance another surface")
+        clock.fire()
+        XCTAssertEqual(unrelated, 1)
+        XCTAssertEqual(order.count, 100, "The window clock must not apply updates twice")
+        frames.enqueue(from: id) { order.append(100) }
+        frames.setDrawableDriver(id, wake: nil) // GPU/native toggle cannot lose pending work.
+        XCTAssertEqual(order.last, 100)
+        frames.setDrawableDriver(id) { requests += 1 }
+        frames.enqueue(from: id) { order.append(101) }
+        visible = false
+        clock.fire() // Occlusion drains state even though no drawable will arrive.
+        XCTAssertEqual(order.last, 101)
+    }
+
+    @MainActor
     func testBackgroundAndUnavailableClocksDrainWorkWithoutAnimationLoop() async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
@@ -304,6 +336,15 @@ final class SmoothScrollModelTests: XCTestCase {
         }
         XCTAssertGreaterThan(sim.moves.count, movesBefore)
         XCTAssertTrue(sim.moves[movesBefore...].allSatisfy { $0 > 0 }, "After the reversal the grid moves the new way")
+    }
+
+    func testDirectionReversalResetsVelocityWithoutDeadband() {
+        var model = SmoothScrollModel()
+        _ = model.input(-0.4, at: 1.0, range: -10...10)
+        _ = model.input(-0.4, at: 1.0 + frame, range: -10...10)
+        XCTAssertLessThan(model.velocity, 0)
+        _ = model.input(0.4, at: 1.0 + 2 * frame, range: -10...10)
+        XCTAssertGreaterThan(model.velocity, 0, "Reversal must drop opposing velocity immediately to eliminate deadband")
     }
 
     func testRequestsAProgramIgnoresExpireAndProgramScrollsOutsideAGestureSnap() {

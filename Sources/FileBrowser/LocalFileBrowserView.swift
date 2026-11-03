@@ -355,10 +355,9 @@ final class LocalFileBrowserViewModel: ObservableObject {
 struct LocalFileBrowserView: View {
     @EnvironmentObject private var tabsController: TabsController
     @ObservedObject var viewModel: LocalFileBrowserViewModel
-    @ObservedObject var terminalState: TerminalState
+    let directoryReportRevision: Int
     @State private var renameItem: LocalFileItem?
     @State private var renameText = ""
-    @State private var hoveredID: URL?
     @State private var isDropTargeted = false
     @State private var creation: Creation?
     @State private var newName = ""
@@ -421,7 +420,7 @@ struct LocalFileBrowserView: View {
             else if url == nil { tree.clearSelection() }
         }
         .onChange(of: tabsController.explorerDiagnostics) { tree.setDiagnostics($0) }
-        .onChange(of: terminalState.directoryReportRevision) { _ in if treeMode { tree.scheduleRefresh() } }
+        .onChange(of: directoryReportRevision) { _ in if treeMode { tree.scheduleRefresh() } }
         .onChange(of: viewModel.mutationRevision) { _ in if treeMode { tree.reload() } }
         .onChange(of: viewModel.isLoading) { loading in if !loading && treeMode { tree.scheduleRefresh() } }
         .onChange(of: viewModel.searchText) { tree.setFilter($0) }
@@ -619,7 +618,16 @@ struct LocalFileBrowserView: View {
         }()
         return ScrollView {
             LazyVStack(spacing: 2) {
-                ForEach(viewModel.items) { item in row(for: item, selected: item.id == selectedURL) }
+                ForEach(viewModel.items) { item in
+                    LocalFileRowItemView(
+                        item: item,
+                        selected: item.id == selectedURL,
+                        isWorking: viewModel.isWorking,
+                        onOpen: { open(item) },
+                        onDropFiles: { urls in viewModel.copyFiles(from: urls, into: item.url) },
+                        contextActions: AnyView(contextActions(item, entry: nil))
+                    )
+                }
             }
             .padding(.vertical, 2)
         }
@@ -694,61 +702,50 @@ struct LocalFileBrowserView: View {
         return urls
     }
 
-    private func row(for item: LocalFileItem, selected: Bool, entry: ExplorerRow? = nil) -> some View {
-        let stateLabel = entry?.git?.label ?? ""
-        let title = entry?.name ?? item.url.lastPathComponent
-        let diagnosticsLabel = entry.map { $0.diagnostics.count > 0 ? ", \($0.diagnostics.errors) errors, \($0.diagnostics.warnings) warnings" : "" } ?? ""
-        return Button {
-            if let entry, item.isDirectory { tree.toggle(entry) }
-            else if entry?.missing != true { open(item) }
-        } label: { rowLabel(item, selected: selected, entry: entry) }
-        .buttonStyle(.plain)
-        .opacity(entry?.git == .ignored ? 0.55 : 1)
-        .help(item.url.path + (stateLabel.isEmpty ? "" : " — " + stateLabel))
-        .accessibilityLabel(title + (item.isDirectory ? (entry?.expanded == true ? ", expanded folder" : ", folder") : "") + (stateLabel.isEmpty ? "" : ", " + stateLabel) + diagnosticsLabel)
-        .onHover { hoveredID = $0 ? item.id : (hoveredID == item.id ? nil : hoveredID) }
-        .contextMenu { contextActions(item, entry: entry) }
-        .draggable(item.url)
-        .dropDestination(for: URL.self) { urls, _ in
-            guard item.isDirectory, entry?.missing != true, !viewModel.isWorking,
-                  !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return false }
-            viewModel.copyFiles(from: urls, into: item.url); return true
-        }
-    }
+    private struct LocalFileRowItemView: View {
+        let item: LocalFileItem
+        let selected: Bool
+        let isWorking: Bool
+        let onOpen: () -> Void
+        let onDropFiles: ([URL]) -> Void
+        let contextActions: AnyView
+        @State private var isHovered = false
 
-    private func rowLabel(_ item: LocalFileItem, selected: Bool, entry: ExplorerRow?) -> some View {
-        HStack(spacing: 5) {
-            if let entry {
-                Image(systemName: entry.expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .semibold)).foregroundStyle(NeoLinkTheme.textSecondary).frame(width: 10)
-                    .opacity(item.isDirectory ? 1 : 0).accessibilityHidden(true)
+        var body: some View {
+            Button {
+                onOpen()
+            } label: {
+                HStack(spacing: 5) {
+                    SemanticFileIcon(url: item.url, directory: item.isDirectory, expanded: false)
+                    Text(item.url.lastPathComponent)
+                        .font(.system(size: 12))
+                        .foregroundColor(NeoLinkTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 3)
+                    if item.isDirectory {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundColor(NeoLinkTheme.textSecondary.opacity(0.7))
+                    }
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+                .background(selected ? NeoLinkTheme.selection : (isHovered ? NeoLinkTheme.rowHoverWhite : .clear))
             }
-            SemanticFileIcon(url: item.url, directory: item.isDirectory, expanded: entry?.expanded ?? false)
-            Text(entry?.name ?? item.url.lastPathComponent)
-                .font(.system(size: 12))
-                .foregroundColor(entry?.git?.color ?? NeoLinkTheme.textPrimary)
-                .strikethrough(entry?.missing == true && !item.isDirectory)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 3)
-            if let entry, entry.diagnostics.count > 0 {
-                Text("\(entry.diagnostics.count)").font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(entry.diagnostics.errors > 0 ? NeoLinkTheme.error : NeoLinkTheme.warning)
-                    .help("\(entry.diagnostics.errors) errors, \(entry.diagnostics.warnings) warnings in open buffers")
-            }
-            if let state = entry?.git, state != .ignored {
-                Text(state.rawValue).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(state.color).help(state.label)
-            } else if item.isDirectory && entry == nil {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundColor(NeoLinkTheme.textSecondary.opacity(0.7))
+            .buttonStyle(.plain)
+            .help(item.url.path)
+            .accessibilityLabel(item.url.lastPathComponent + (item.isDirectory ? ", folder" : ""))
+            .onHover { isHovered = $0 }
+            .contextMenu { contextActions }
+            .draggable(item.url)
+            .dropDestination(for: URL.self) { urls, _ in
+                guard item.isDirectory, !isWorking, !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return false }
+                onDropFiles(urls)
+                return true
             }
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
-        .padding(.leading, CGFloat(entry?.depth ?? 0) * 12)
-        .contentShape(Rectangle())
-        .background(selected ? NeoLinkTheme.selection : (hoveredID == item.id ? NeoLinkTheme.rowHoverWhite : .clear))
     }
 
     @ViewBuilder

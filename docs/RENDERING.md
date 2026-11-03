@@ -1,5 +1,44 @@
 # Native GPU text rendering
 
+## Text clarity and surface updates (1.10.1, build 21)
+
+This follows the reported Build 20 blur/judder regression and retains the subsequent larger explorer cache, visible-row prefetch priority, scroll-reversal correction and local row-hover changes.
+
+- Terminal glyphs now cache four CoreText raster phases on each axis. The fractional baseline is incorporated into the coverage bitmap; ordinary glyph quads land on integer device pixels instead of linearly filtering an already-antialiased glyph between pixels. Phase quantization is translation-invariant even for negative coordinates. Scaled CJK fitting keeps its existing path. Atlas size limits still apply.
+- Terminal drawables must match the current rounded backing-pixel dimensions. A stale drawable after a resize/display move is refused rather than drawing the new viewport into the old texture. The render viewport uses the actual texture dimensions.
+- On macOS 14+, parsed terminal display updates are consumed by that surface's Metal callback immediately before its draw. They no longer wait for the independent window CADisplayLink and then a second drawable callback. CPU/native rendering and macOS 13 keep the previous window-clock path. Pending updates drain on renderer changes and window occlusion.
+- Explorer artwork is mapped one-to-one in device pixels. SF Symbols are rasterized at the actual backing scale, native font descriptors are retained, and completion-triggered viewport work is batched over 4 ms. Incomplete visible artwork reveals the complete native table rather than presenting blank rows or stale cached text for up to 30 frames. The larger 512-row/32 MiB-or-four-viewports cache and 48-row prefetch margin remain.
+
+The 126-test native regression suite compares every fractional glyph phase against direct CoreText coverage, verifies translation across negative/positive coordinates, and checks surface-local state consumption without a window-clock tick, renderer switching and occlusion. Existing Metal scrolling pixel tests and a stale-size drawable rejection test also pass. Neovim runtime and eight offline benchmark checks pass. This verifies raster correctness; it does not measure a human's perception of motion.
+
+### Release validation and remaining motion variability
+
+All 126 native tests, the real Neovim runtime checks and eight offline benchmark checks pass. Release UI checks exercised shell output/scrollback, text sizing, native/GPU switching, opening a code tab and resizing it. The text tests compare all 16 raster phases against direct CoreText coverage; they establish crisp raster placement, not perceived motion quality.
+
+Two valid final-package runs on the M2 Max, 120 Hz built-in display, 1720 × 832 point window, 2× backing scale and 13-point text gave these results. Both stayed frontmost and unlocked. Each motion scenario lasted five seconds, followed by five seconds idle:
+
+| Surface / metric | Run 1 | Run 2 |
+|---|---:|---:|
+| Terminal new-frame interval, p50 / p95 | 16.7 / 25 ms | 8.3 / 25 ms |
+| Explorer changed-frame interval, p50 / p95 | 16.7 / 33.3 ms | 16.7 / 25 ms |
+| Longest terminal / explorer interval | 33.3 / 58.3 ms | 33.3 / 50 ms |
+| Native explorer fallbacks | 0 | 0 |
+| Main-thread frame work, p95 | 0.7 ms | 0.8 ms |
+| Idle presented frames | 0 | 0 |
+| Process footprint during motion | 162.6 MiB | 163 MiB |
+
+[Raw final-package reports and binary hash](rendering-build21.json) preserve both runs. An earlier development run reached 8.3 ms at p95 on both surfaces, but that was not consistently reproduced. The final runs therefore **do not establish sustained 120 Hz, a speedup over the previous build, or visual parity with Zed**. A matched baseline attempt lost foreground focus and was rejected. WindowServer and the remote inspection service were busy during this session; their contribution has not been isolated, so they are not treated as a proven explanation. This release fixes verified raster/resizing issues and scheduling dependencies, while perceptual smoothness remains an open acceptance check.
+
+### Source research
+
+Reviewed pinned source, independently implementing the changes in Swift:
+
+- [Zed CoreText glyph rasterization](https://github.com/zed-industries/zed/blob/504a7f2cf25b817cda3998cab93473adef15f93c/crates/gpui_apple/src/text_system.rs): caches subpixel variants and leaves antialiasing room around the ink. Zed also performs layout/shaping on the CPU; a GPU UI does not move every operation onto the GPU.
+- [Ghostty surface presentation](https://github.com/ghostty-org/ghostty/blob/18e645ea22a5ef4793a2008275eb6f98e5d039bb/src/renderer/metal/IOSurfaceLayer.zig): rejects asynchronously completed surfaces of the wrong size, avoiding resize artifacts. Its [render thread](https://github.com/ghostty-org/ghostty/blob/18e645ea22a5ef4793a2008275eb6f98e5d039bb/src/renderer/Thread.zig) coalesces wakeups instead of doing work continuously at idle.
+- [Alacritty renderer updates](https://github.com/alacritty/alacritty/blob/aecf0f600fa840a415b55da5cf34fbeaec39ac32/alacritty/src/display/mod.rs): applies pending resize/font-cache changes just before rendering.
+
+The supplied architecture notes were useful directions, not performance evidence. No application intercepts input at the kernel to guarantee the first frame in 8.33 ms; ProMotion remains controlled by macOS. A rope, Tree-sitter or SDF UI shader does not by itself correct an interpolated glyph bitmap or uneven presentation deadlines.
+
 ## Metal explorer and drawable pacing (1.10.0, build 20)
 
 The project tree now has its own Metal drawing surface, fixed beside the native clip view so concurrent native scrolling cannot translate it a second time. CoreText prepares immutable row artwork on a background queue; cached GPU textures are translated and clipped on each frame. Selection and hover are GPU fills, so scrolling and highlighting do not re-rasterize every label. The native table retains keyboard navigation, type selection, context menus, drag/drop and accessibility. It becomes the visible fallback during cache misses or GPU failure. Folder List, SFTP and other AppKit/SwiftUI controls keep their native rendering paths.
@@ -39,10 +78,10 @@ Reproduce without synthetic input: `NEOLINK_WINDOW=1280x800 NEOLINK_BENCHMARK=re
 
 - CoreText shapes/rasterizes glyphs into a cached atlas. Metal draws cell backgrounds, glyphs, selections, and the cursor as GPU primitives.
 - Row geometry is cached per `BufferLine` object, not per screen row. Scrolling moves line references, so a line that only moved is drawn translated by a vertex-shader offset instead of being shaped again. Only rows whose content changed are rebuilt.
-- Each window has one display-link clock (`WindowFrameScheduler`, capped at 120 Hz) that paces terminal state updates and Metal submission for every surface in it. The clock runs only while something changed and stops when idle. An occluded or minimized window drains work without a clock.
+- Each window has a display-link clock (`WindowFrameScheduler`, capped at 120 Hz) for animations and legacy/native updates. On macOS 14+, terminal state updates and GPU submission use that surface's Metal drawable callback. Clocks stop when idle; an occluded or minimized window drains work without animation.
 - Unchanged surfaces are not presented again. Zed repeats the current frame for a second after input so ProMotion stays at 120 Hz; measured here, the repeats queued drawables ahead of the next real frame and added about 9 ms from key press to display.
-- Output answering a key press is submitted as soon as it is parsed (an "immediate frame"), without waiting for the next display callback. All terminal-backed surfaces now keep `CAMetalLayer.displaySyncEnabled = true`, including sparse key echoes. Early submission still prepares the response promptly; presentation waits for a display refresh in composited and full-screen/direct windows alike. VSync prevents unsynchronized presentation; it does not guarantee that every refresh contains a new frame.
-- A surface with three frames waiting for the display defers its next frame instead of requesting a fourth drawable. Requesting one would block the main thread in `nextDrawable`, which stalls input; that happened during 10 ms key repeat when ProMotion lowered the refresh rate.
+- On the legacy path, output answering a key press requests immediate submission after parsing. On macOS 14+, it is consumed by the next supplied Metal drawable, without an intervening window-clock tick. All terminal-backed surfaces keep `CAMetalLayer.displaySyncEnabled = true`, including sparse key echoes. Early submission still prepares the response promptly; presentation waits for a display refresh in composited and full-screen/direct windows alike. VSync prevents unsynchronized presentation; it does not guarantee that every refresh contains a new frame.
+- On the legacy MTKView path, a surface with three frames waiting for the display defers its next frame instead of requesting a fourth drawable. The macOS 14+ path uses the drawable supplied by CAMetalDisplayLink. Requesting one would block the main thread in `nextDrawable`, which stalls input; that happened during 10 ms key repeat when ProMotion lowered the refresh rate.
 - Covered surfaces do not draw. Terminals hidden behind a document tab are hidden NSViews rather than zero-opacity SwiftUI layers.
 - The shader library and pipelines are compiled once per process, on a background queue at launch, and shared by every terminal. Previously each new terminal, including the editor's, compiled them on the main thread.
 - GPU setup happens after a terminal joins a window. SwiftTerm handles drawable lifetimes, font/backing-scale changes, window reparenting, and renderer recovery. Failed initialization leaves the CoreGraphics path available; toggle GPU rendering off and on to retry.

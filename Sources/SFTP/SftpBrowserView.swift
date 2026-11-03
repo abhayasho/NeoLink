@@ -9,7 +9,6 @@ struct SftpBrowserView: View {
 
     @State private var nameEditor: NameEditor?
     @State private var nameText = ""
-    @State private var hoveredID: String?
     @State private var filter = ""
     @State private var deleteItem: SftpItem?
     @State private var confirmingDelete = false
@@ -88,7 +87,17 @@ struct SftpBrowserView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 3) {
-                            ForEach(visibleItems) { item in row(for: item) }
+                            ForEach(visibleItems) { item in
+                                SftpRowItemView(
+                                    item: item,
+                                    isBusy: isBusy,
+                                    onOpen: {
+                                        if item.isDirectory { Task { await viewModel.navigateInto(item, using: connection) } }
+                                        else { open(item) }
+                                    },
+                                    contextActions: AnyView(sftpContextActions(item))
+                                )
+                            }
                         }
                         .padding(.vertical, 2)
                     }
@@ -190,58 +199,68 @@ struct SftpBrowserView: View {
         .accessibilityLabel(title)
     }
 
-    private func row(for item: SftpItem) -> some View {
-        Button {
-            if item.isDirectory { Task { await viewModel.navigateInto(item, using: connection) } }
-            else { open(item) }
-        } label: {
-            HStack(spacing: 9) {
-                Image(systemName: item.isDirectory ? "folder.fill" : "doc")
-                    .font(.system(size: 13))
-                    .foregroundColor(item.isDirectory ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
-                    .frame(width: 17)
-                Text(item.name)
-                    .font(.system(size: 12))
-                    .foregroundColor(NeoLinkTheme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 4)
-                if item.isDirectory {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(NeoLinkTheme.textSecondary.opacity(0.7))
-                } else if let size = item.size {
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(clamping: size), countStyle: .file))
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(NeoLinkTheme.textSecondary)
-                }
-            }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 8)
-            .background(hoveredID == item.id ? NeoLinkTheme.rowHover : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-            .contentShape(Rectangle())
+    @ViewBuilder
+    private func sftpContextActions(_ item: SftpItem) -> some View {
+        if item.isDirectory {
+            Button("Open") { Task { await viewModel.navigateInto(item, using: connection) } }
+            Button("Download folder…") { downloadFolder(item: item) }
+        } else {
+            Button("Open in Tab") { open(item) }
+            Button("Download…") { download(item: item) }
         }
-        .buttonStyle(.plain)
-        .disabled(isBusy)
-        .help(item.path)
-        .onHover { hovering in hoveredID = hovering ? item.id : (hoveredID == item.id ? nil : hoveredID) }
-        .contextMenu {
-            if item.isDirectory {
-                Button("Open") { Task { await viewModel.navigateInto(item, using: connection) } }
-                Button("Download folder…") { downloadFolder(item: item) }
-            } else {
-                Button("Open in Tab") { open(item) }
-                Button("Download…") { download(item: item) }
+        Divider()
+        Button("Rename…") {
+            nameText = item.name
+            nameEditor = NameEditor(item: item)
+        }
+        Button("Delete…", role: .destructive) {
+            deleteItem = item
+            confirmingDelete = true
+        }
+    }
+
+    private struct SftpRowItemView: View {
+        let item: SftpItem
+        let isBusy: Bool
+        let onOpen: () -> Void
+        let contextActions: AnyView
+        @State private var isHovered = false
+
+        var body: some View {
+            Button {
+                onOpen()
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: item.isDirectory ? "folder.fill" : "doc")
+                        .font(.system(size: 13))
+                        .foregroundColor(item.isDirectory ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
+                        .frame(width: 17)
+                    Text(item.name)
+                        .font(.system(size: 12))
+                        .foregroundColor(NeoLinkTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    if item.isDirectory {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundColor(NeoLinkTheme.textSecondary.opacity(0.7))
+                    } else if let size = item.size {
+                        Text(ByteCountFormatter.string(fromByteCount: Int64(clamping: size), countStyle: .file))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(NeoLinkTheme.textSecondary)
+                    }
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+                .background(isHovered ? NeoLinkTheme.rowHover : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
             }
-            Divider()
-            Button("Rename…") {
-                nameText = item.name
-                nameEditor = NameEditor(item: item)
-            }
-            Button("Delete…", role: .destructive) {
-                deleteItem = item
-                confirmingDelete = true
-            }
+            .buttonStyle(.plain)
+            .disabled(isBusy)
+            .help(item.path)
+            .onHover { isHovered = $0 }
+            .contextMenu { contextActions }
         }
     }
 

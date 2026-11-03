@@ -80,7 +80,7 @@ final class TerminalShellIntegrationTests: XCTestCase {
     private func runShell(_ integration: TerminalShellIntegration, home: URL, command: String) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-l", "-i", "-c", command]
+        process.arguments = ["-l", "-i", "+m", "-c", command]
         process.currentDirectoryURL = home
         process.environment = Dictionary(uniqueKeysWithValues: integration.environment(base: [
             "HOME=\(home.path)", "PATH=/usr/bin:/bin", "TERM=xterm-256color",
@@ -90,6 +90,8 @@ final class TerminalShellIntegrationTests: XCTestCase {
             return (String(parts[0]), String(parts[1]))
         })
         let pipe = Pipe()
+        let inPipe = Pipe()
+        process.standardInput = inPipe
         process.standardOutput = pipe
         process.standardError = pipe
         try process.run()

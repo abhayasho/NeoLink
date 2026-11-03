@@ -16,6 +16,7 @@ struct GlyphKey: Hashable {
     let fontName: String
     let size: CGFloat
     let glyph: CGGlyph
+    var phase: GlyphRasterPhase = .zero
 }
 
 struct GlyphEntry {
@@ -425,7 +426,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #else
         let scale = terminalView.backingScaleFactor()
 #endif
-        let drawableSize = CGSize(width: view.bounds.width * scale, height: view.bounds.height * scale)
+        let drawableSize = CGSize(width: max(1, (view.bounds.width * scale).rounded()), height: max(1, (view.bounds.height * scale).rounded()))
         if view.drawableSize != drawableSize { view.drawableSize = drawableSize }
         let cursorStyle = terminalView.terminal.options.cursorStyle
         let shouldBlink = isBlinkStyle(cursorStyle)
@@ -497,6 +498,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             frameCoordinator.refuse(frameToken, reason: .missingDrawable)
             return
         }
+        guard drawable.texture.width == Int(drawableSize.width), drawable.texture.height == Int(drawableSize.height) else {
+            frameCoordinator.refuse(frameToken, reason: .missingDrawable)
+            return
+        }
         guard let passDescriptor else {
             frameCoordinator.refuse(frameToken, reason: .missingRenderPassDescriptor)
             return
@@ -554,8 +559,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
         bufferPool.beginFrame()
         // xy: drawable size; zw: translation applied by the vertex shaders.
-        let viewport = SIMD4<Float>(Float(view.drawableSize.width), Float(view.drawableSize.height), 0, 0)
-        let clip = RowClip(region: drawData.region, drawableSize: view.drawableSize)
+        let pixelSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
+        let viewport = SIMD4<Float>(Float(pixelSize.width), Float(pixelSize.height), 0, 0)
+        let clip = RowClip(region: drawData.region, drawableSize: pixelSize)
 
         if let frame = drawData.frame {
             drawFrameData(frame, encoder: encoder, viewport: viewport)
@@ -1507,12 +1513,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                     let scaledFont = scaledFontFor(font: glyphRun.font, scale: scale)
                     for i in 0..<glyphRun.glyphs.count {
                         let glyph = glyphRun.glyphs[i]
-                        guard let entry = glyphEntry(for: scaledFont, glyph: glyph) else {
-                            continue
-                        }
-                        if entry.size.width <= 0 || entry.size.height <= 0 {
-                            continue
-                        }
                         let ctPos = glyphRun.positions[i]
                         let stringIndex = run.utf16Offset + glyphRun.stringIndices[i]
                         let ordinal = shaped.segment.cellOrdinal(forUTF16: stringIndex)
@@ -1537,8 +1537,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                             : GlyphSlotFit.identity
                         let basePos = CGPoint(x: lineOrigin.x + (cellWidth * CGFloat(glyphColumn)) + intraCluster + fit.dx,
                                               y: lineOrigin.y + yOffset + ctPos.y + fit.dy)
-                        let pxX = basePos.x * scale + entry.bearing.x * fit.scale
-                        let pxY = basePos.y * scale + entry.bearing.y * fit.scale
+                        let baseline = CGPoint(x: basePos.x * scale, y: basePos.y * scale)
+                        let placement = fit.scale == 1 ? GlyphRasterPhase.placement(at: baseline) : (origin: baseline, phase: GlyphRasterPhase.zero)
+                        guard let entry = glyphEntry(for: scaledFont, glyph: glyph, phase: placement.phase) else { continue }
+                        let pxX = placement.origin.x + entry.bearing.x * fit.scale
+                        let pxY = placement.origin.y + entry.bearing.y * fit.scale
 
                         let x0 = pxX
                         let y0 = pxY
@@ -1794,14 +1797,14 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private func glyphEntry(for font: CTFont, glyph: CGGlyph) -> GlyphEntry? {
+    private func glyphEntry(for font: CTFont, glyph: CGGlyph, phase: GlyphRasterPhase = .zero) -> GlyphEntry? {
         let key = GlyphKey(fontName: CTFontCopyPostScriptName(font) as String,
                            size: CTFontGetSize(font),
-                           glyph: glyph)
+                           glyph: glyph, phase: phase)
         if let cached = glyphCache[key] {
             return cached
         }
-        guard let bitmap = rasterizer.rasterize(font: font, glyph: glyph) else {
+        guard let bitmap = rasterizer.rasterize(font: font, glyph: glyph, phase: phase) else {
             return nil
         }
         let atlasKind: GlyphAtlasKind = bitmap.isColor ? .color : .grayscale
@@ -2652,20 +2655,17 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
             for i in 0..<runGlyphsCount {
                 let glyph = runGlyphs[i]
-                guard let entry = glyphEntry(for: scaledFont, glyph: glyph) else {
-                    continue
-                }
-                if entry.size.width <= 0 || entry.size.height <= 0 {
-                    continue
-                }
                 let ctPos = coreTextPositions[i]
                 // Center the glyph under the cursor the same way as normal text so
                 // a full-width (CJK) character doesn't shift when the caret lands on it.
                 let fit = terminalView.glyphSlotFit(font: ctFont, glyph: glyph, columnWidth: max(1, Int(charData.width)))
                 let basePos = CGPoint(x: lineOrigin.x + cellWidth * doublePosition * CGFloat(buffer.x) + fit.dx * doublePosition,
                                       y: lineOrigin.y + yOffset + ctPos.y + fit.dy)
-                let pxX = basePos.x * scale + entry.bearing.x * fit.scale
-                let pxY = basePos.y * scale + entry.bearing.y * fit.scale
+                let baseline = CGPoint(x: basePos.x * scale, y: basePos.y * scale)
+                let placement = fit.scale == 1 ? GlyphRasterPhase.placement(at: baseline) : (origin: baseline, phase: GlyphRasterPhase.zero)
+                guard let entry = glyphEntry(for: scaledFont, glyph: glyph, phase: placement.phase) else { continue }
+                let pxX = placement.origin.x + entry.bearing.x * fit.scale
+                let pxY = placement.origin.y + entry.bearing.y * fit.scale
                 let x0 = Float(pxX)
                 let y0 = Float(pxY)
                 let x1 = x0 + Float(entry.size.width * fit.scale)

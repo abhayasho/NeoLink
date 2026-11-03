@@ -50,7 +50,7 @@ struct FileBrowserPane: View {
                     )
                     .id("\(endpoint.username)@\(endpoint.host):\(endpoint.port)")
                 } else {
-                    LocalFileBrowserView(viewModel: localVM, terminalState: terminalState)
+                    LocalFileBrowserView(viewModel: localVM, directoryReportRevision: terminalState.directoryReportRevision)
                         .task(id: LocalBrowserSyncKey(terminalID: ObjectIdentifier(terminalState), directory: terminalState.currentDirectory)) {
                             syncLocalToTerminalDirectory()
                         }

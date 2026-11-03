@@ -2,20 +2,38 @@
 import CoreGraphics
 import CoreText
 
+/// Fractional placement belongs in CoreText's coverage calculation, not in a
+/// bilinear resample of an already antialiased bitmap. Four phases per axis keep
+/// at most 16 variants per glyph; integer translations reuse the same atlas entry.
+struct GlyphRasterPhase: Hashable {
+    let x: UInt8
+    let y: UInt8
+    static let zero = GlyphRasterPhase(x: 0, y: 0)
+    var offset: CGPoint { CGPoint(x: CGFloat(x) / 4, y: CGFloat(y) / 4) }
+
+    static func placement(at point: CGPoint) -> (origin: CGPoint, phase: GlyphRasterPhase) {
+        let x = floor(point.x * 4 + 0.5) / 4, y = floor(point.y * 4 + 0.5) / 4
+        let origin = CGPoint(x: floor(x), y: floor(y))
+        return (origin, GlyphRasterPhase(x: UInt8((x - origin.x) * 4), y: UInt8((y - origin.y) * 4)))
+    }
+}
+
 final class CoreTextGlyphRasterizer {
     var fontSmoothing: Bool = true
 
-    func rasterize(font: CTFont, glyph: CGGlyph) -> GlyphBitmap? {
+    func rasterize(font: CTFont, glyph: CGGlyph, phase: GlyphRasterPhase = .zero) -> GlyphBitmap? {
         var glyphVar = glyph
         let rect = CTFontGetBoundingRectsForGlyphs(font, .default, &glyphVar, nil, 1)
         if rect.width <= 0 || rect.height <= 0 {
             return nil
         }
 
-        let minX = floor(rect.origin.x)
-        let minY = floor(rect.origin.y)
-        let maxX = ceil(rect.origin.x + rect.size.width)
-        let maxY = ceil(rect.origin.y + rect.size.height)
+        let shift = phase.offset
+        // Leave a pixel around the ink for antialiasing and italic overhangs.
+        let minX = floor(rect.minX + shift.x) - 1
+        let minY = floor(rect.minY + shift.y) - 1
+        let maxX = ceil(rect.maxX + shift.x) + 1
+        let maxY = ceil(rect.maxY + shift.y) + 1
         let width = Int(maxX - minX)
         let height = Int(maxY - minY)
         if width <= 0 || height <= 0 {
@@ -59,7 +77,7 @@ final class CoreTextGlyphRasterizer {
             context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
             context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
 
-            var positions = [CGPoint(x: -minX, y: -minY)]
+            var positions = [CGPoint(x: -minX + shift.x, y: -minY + shift.y)]
             CTFontDrawGlyphs(font, &glyphVar, &positions, 1, context)
             return true
         }

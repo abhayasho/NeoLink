@@ -9,6 +9,9 @@ Only the library target and its resources are included. The package manifest omi
 
 ## NeoLink changes
 
+- **Fractional glyph rasterization** (`CoreTextGlyphRasterizer.swift`, `MetalTerminalRenderer.swift`): cache up to 4×4 CoreText coverage variants per glyph, include phase in the atlas key, add one pixel of antialiasing padding, and draw unscaled glyphs on integer device pixels. Cursor text uses the same placement. This avoids a second antialiasing/filtering step; scaled glyph fitting and atlas bounds remain unchanged.
+- **Resize drawable validation** (`MetalTerminalRenderer.swift`): round drawable dimensions to device pixels, reject supplied textures with stale dimensions, and normalize vertices using the actual texture size.
+
 All changes are macOS and Metal paths; marked `NeoLink` in comments where they are not self-explanatory. With none of the new hooks set, upstream behavior is unchanged except for the renderer's row cache and shared shader resources, which produce identical frames.
 
 - **Frame scheduling** (`Mac/MacTerminalView.swift`, `Apple/AppleTerminalView.swift`): optional `displayUpdateScheduler` and `metalFrameScheduler` callbacks let the host synchronize state updates and Metal submission with its window's display link, replacing the fixed 16.67 ms batch timers.

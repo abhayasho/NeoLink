@@ -59,7 +59,8 @@ final class ExplorerMetalView: NSView {
     var captureNextFrame: ((CGImage) -> Void)?
     private(set) var lastDrawnRange = 0..<0
     var cachedRowCount: Int { cache.count }
-    static let cacheLimit = 256
+    private var artworkRefreshScheduled = false
+    static let cacheLimit = 512
     static var allowsFrameCapture = false
 
     nonisolated static func visibleRows(count: Int, y: CGFloat, height: CGFloat) -> Range<Int> {
@@ -175,10 +176,10 @@ final class ExplorerMetalView: NSView {
         dirty = true
         // Keep ProMotion supplied during interaction, using display-link-provided drawables
         // rather than queuing redundant terminal frames ahead of the next real input.
-        activeUntil = CACurrentMediaTime() + 0.25
+        activeUntil = CACurrentMediaTime() + 1.0
         guard let scroll else { return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        frame = scroll.contentView.frame
+        frame = scroll.backingAlignedRect(scroll.contentView.frame, options: .alignAllEdgesNearest)
         if let layer = layer as? CAMetalLayer {
             let scale = window?.backingScaleFactor ?? 2
             if layer.contentsScale != scale { layer.contentsScale = scale }
@@ -186,8 +187,15 @@ final class ExplorerMetalView: NSView {
             if layer.drawableSize != size { layer.drawableSize = size }
         }
         CATransaction.commit()
-        guard let scene = scene?(), artworkReady(scene: scene) else {
+        guard let scene = scene?() else {
+            uncover(); displayDriver?.stop(); legacyClock?.stop(); return
+        }
+        if !isCoveringNativeRows {
+            guard artworkReady(scene: scene) else {
                 uncover(); displayDriver?.stop(); legacyClock?.stop(); return
+            }
+        } else {
+            _ = artworkReady(scene: scene)
         }
         // A hidden CAMetalLayer receives no display-link drawables. Warm its artwork
         // first, then expose the layer so its first frame can actually be delivered.
@@ -201,7 +209,14 @@ final class ExplorerMetalView: NSView {
         let y = scroll.contentView.bounds.minY
         let visibleRows = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
         let first = visibleRows.lowerBound, end = visibleRows.upperBound
-        for index in max(0, first - 16)..<min(scene.rows.count, max(first, end) + 16) {
+        let prefetchMargin = 48
+        for index in first..<max(first, end) {
+            let row = scene.rows[index]
+            if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
+            schedule(row, width: width, scale: scale)
+        }
+        let prefetch = max(0, first - prefetchMargin)..<min(scene.rows.count, max(first, end) + prefetchMargin)
+        for index in prefetch where index < first || index >= end {
             let row = scene.rows[index]
             if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
             schedule(row, width: width, scale: scale)
@@ -214,6 +229,7 @@ final class ExplorerMetalView: NSView {
 
     func shutdown() {
         generation &+= 1
+        artworkRefreshScheduled = false
         displayDriver?.invalidate(); displayDriver = nil
         legacyClock?.invalidate(); legacyClock = nil
         windowObservers.forEach(NotificationCenter.default.removeObserver); windowObservers.removeAll()
@@ -250,17 +266,26 @@ final class ExplorerMetalView: NSView {
         let visibleRows = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
         let first = visibleRows.lowerBound, end = visibleRows.upperBound
         let visible = visibleRows
-        let prefetch = max(0, first - 16)..<min(scene.rows.count, max(first, end) + 16)
-        for index in prefetch {
+        let prefetchMargin = 48
+        for index in visible {
             let row = scene.rows[index]
             if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
             schedule(row, width: width, scale: scale)
         }
-        guard visible.allSatisfy({ index in
+        let prefetch = max(0, first - prefetchMargin)..<min(scene.rows.count, max(first, end) + prefetchMargin)
+        for index in prefetch where index < first || index >= end {
+            let row = scene.rows[index]
+            if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
+            schedule(row, width: width, scale: scale)
+        }
+        let allVisibleReady = visible.allSatisfy { index in
             let row = scene.rows[index]
             return cache[row.id].map { $0.row == row && $0.width == width && $0.scale == scale } ?? false
-        }) else {
-                lastDrawState = "artwork missing"; uncover(); displayDriver?.stop(); legacyClock?.stop(); return
+        }
+        guard allVisibleReady else {
+            // Never present a partly empty tree or stale text while new artwork loads.
+            // Visible rows have priority over prefetch; batched completions restore Metal.
+            lastDrawState = "artwork missing"; uncover(); displayDriver?.stop(); legacyClock?.stop(); return
         }
         if !dirty, CACurrentMediaTime() > activeUntil {
             lastDrawState = "idle"; displayDriver?.stop(); legacyClock?.stop(); return
@@ -272,16 +297,19 @@ final class ExplorerMetalView: NSView {
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 20/255, green: 20/255, blue: 20/255, alpha: 1)
         guard let command = queue.makeCommandBuffer(), let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { uncover(); return }
         encoder.setRenderPipelineState(pipeline)
-        var viewport = SIMD2<Float>(Float(bounds.width), Float(bounds.height))
+        var viewport = SIMD2<Float>(Float(drawable.texture.width), Float(drawable.texture.height))
         encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         for index in visible {
             let row = scene.rows[index]
             guard var art = cache[row.id] else { continue }
             useCounter &+= 1; art.used = useCounter; cache[row.id] = art
-            let top = CGFloat(index) * 24 - y
+            let topPixel = ((CGFloat(index) * 24 - y) * scale).rounded()
+            let bottomPixel = topPixel + (24 * scale).rounded()
+            let top = topPixel
+            let bottom = bottomPixel
             let vertices: [SIMD4<Float>] = [
-                .init(0, Float(top), 0, 0), .init(Float(bounds.width), Float(top), 1, 0), .init(0, Float(top + 24), 0, 1),
-                .init(Float(bounds.width), Float(top), 1, 0), .init(Float(bounds.width), Float(top + 24), 1, 1), .init(0, Float(top + 24), 0, 1)]
+                .init(0, Float(top), 0, 0), .init(Float(width), Float(top), 1, 0), .init(0, Float(bottom), 0, 1),
+                .init(Float(width), Float(top), 1, 0), .init(Float(width), Float(bottom), 1, 1), .init(0, Float(bottom), 0, 1)]
             vertices.withUnsafeBytes { encoder.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
             var fill: SIMD4<Float> = (index == scene.selected || row.item.id == scene.active) ? .init(repeating: 35/255) :
                 (index == scene.hovered ? .init(repeating: 33/255) : .init(repeating: 20/255))
@@ -348,21 +376,21 @@ final class ExplorerMetalView: NSView {
 
     private func schedule(_ row: ExplorerRow, width: Int, scale: CGFloat) {
         let key = JobKey(id: row.id, width: width, scale: scale, generation: generation)
-        guard jobs.count < 64, !jobs.contains(key) else { return }
+        guard jobs.count < 128, !jobs.contains(key) else { return }
         jobs.insert(key)
         // Resolve AppKit symbols/colors/fonts on the main thread. CoreText rasterization
         // and bitmap allocation run on the worker; there is no per-frame text shaping.
         let look = SemanticFileIcon.appearance(url: row.item.url, directory: row.item.isDirectory, expanded: row.expanded)
-        let symbol = Self.symbol(look.symbol, size: 12)
-        let chevron = row.item.isDirectory ? Self.symbol(row.expanded ? "chevron.down" : "chevron.right", size: 8) : nil
+        let symbol = Self.symbol(look.symbol, size: 12, width: 17, height: 16, scale: scale)
+        let chevron = row.item.isDirectory ? Self.symbol(row.expanded ? "chevron.down" : "chevron.right", size: 8, width: 10, height: 8, scale: scale) : nil
         let text = NSColor(row.git?.color ?? NeoLinkTheme.textPrimary).cgColor
         let iconColor = NSColor(look.color).cgColor
         let secondary = NSColor(NeoLinkTheme.textSecondary).cgColor
         let badgeColor = NSColor(row.git?.color ?? NeoLinkTheme.textSecondary).cgColor
         let diagnosticColor = NSColor(row.diagnostics.errors > 0 ? NeoLinkTheme.error : NeoLinkTheme.warning).cgColor
-        let nameFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 12).fontName as CFString, 12, nil)
-        let smallFont = CTFontCreateWithName(NSFont.monospacedSystemFont(ofSize: 8, weight: .bold).fontName as CFString, 8, nil)
-        let badgeFont = CTFontCreateWithName(NSFont.monospacedSystemFont(ofSize: 10, weight: .medium).fontName as CFString, 10, nil)
+        let nameFont = NSFont.systemFont(ofSize: 12) as CTFont
+        let smallFont = NSFont.monospacedSystemFont(ofSize: 8, weight: .bold) as CTFont
+        let badgeFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium) as CTFont
         worker.async { [weak self] in
             let art = Self.raster(row, width: width, scale: scale, abbreviation: look.abbreviation, symbol: symbol,
                 chevron: chevron, text: text, iconColor: iconColor, secondary: secondary, badgeColor: badgeColor,
@@ -383,23 +411,46 @@ final class ExplorerMetalView: NSView {
                 if self.cache.count > Self.cacheLimit, let oldest = self.cache.min(by: { $0.value.used < $1.value.used })?.key {
                     self.cache.removeValue(forKey: oldest)
                 }
-                let budget = max(24 * 1024 * 1024, width * Int(self.bounds.height * scale) * 8)
+                let budget = max(32 * 1024 * 1024, width * Int(self.bounds.height * scale) * 16)
                 var bytes = self.cache.values.reduce(0) { $0 + $1.texture.width * $1.texture.height * 4 }
                 while bytes > budget, let oldest = self.cache.min(by: { $0.value.used < $1.value.used }) {
                     bytes -= oldest.value.texture.width * oldest.value.texture.height * 4
                     self.cache.removeValue(forKey: oldest.key)
                 }
-                self.invalidateScene(contentChanged: false)
+                self.refreshAfterArtworkBatch()
             }
         }
     }
 
+    private func refreshAfterArtworkBatch() {
+        guard !artworkRefreshScheduled else { return }
+        artworkRefreshScheduled = true
+        let currentGeneration = generation
+        // A directory can finish dozens of rasters together. Re-check the viewport
+        // once for that batch instead of scheduling the entire prefetch range per row.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.004) { [weak self] in
+            guard let self, self.generation == currentGeneration else { return }
+            self.artworkRefreshScheduled = false
+            self.invalidateScene(contentChanged: false)
+        }
+    }
+
     private static var symbols: [String: CGImage] = [:]
-    private static func symbol(_ name: String, size: CGFloat) -> CGImage? {
-        let key = "\(name):\(size)"
+    private static func symbol(_ name: String, size: CGFloat, width: CGFloat, height: CGFloat, scale: CGFloat) -> CGImage? {
+        let key = "\(name):\(size):\(width):\(height):\(scale)"
         if let image = symbols[key] { return image }
-        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: size, weight: .regular))?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        symbols[key] = image; return image
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: size, weight: .regular)),
+              let context = CGContext(data: nil, width: Int(width * scale), height: Int(height * scale), bitsPerComponent: 8,
+                  bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        symbol.draw(in: CGRect(x: 0, y: 0, width: width, height: height), from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let image = context.makeImage() else { return nil }
+        symbols[key] = image
+        return image
     }
 
     nonisolated private static func raster(_ row: ExplorerRow, width: Int, scale: CGFloat, abbreviation: String?, symbol: CGImage?,

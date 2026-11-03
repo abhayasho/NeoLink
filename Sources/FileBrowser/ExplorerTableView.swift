@@ -285,7 +285,7 @@ struct ExplorerTableView: NSViewRepresentable {
             // Recompute hover after membership changes; an old row index can now name another file.
             if oldIDs != newIDs { hoveredRow = nil }
             refreshVisibleCells()
-            if let anchor, let scroll {
+            if oldIDs != newIDs, let anchor, let scroll {
                 var index = newIDs.firstIndex(of: anchor)
                 if index == nil {
                     let survivor = oldIDs.dropFirst(top).first { newIndices[$0] != nil }

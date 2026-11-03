@@ -132,6 +132,8 @@ final class WindowFrameScheduler {
     private var clock: FrameClock?
     private var observers: [NSObjectProtocol] = []
     private var updates: [() -> Void] = []
+    private var drawableUpdates: [ObjectIdentifier: [() -> Void]] = [:]
+    private var drawableDrivers: [ObjectIdentifier: () -> Void] = [:]
     private struct Presentation {
         var outputAt: Double?
         let present: () -> Void
@@ -231,8 +233,8 @@ final class WindowFrameScheduler {
 
     func noteInteraction() {
         let now = now()
-        // Keep the clock running briefly so the next input's frame is not delayed by a restart.
-        activeUntil = max(activeUntil, now + 0.5)
+        // Keep the clock running for 1 second following interaction to request high refresh during a gesture. ProMotion remains OS-controlled.
+        activeUntil = max(activeUntil, now + 1.0)
         for surface in surfaces.values { surface.interaction?() }
         wake()
     }
@@ -264,10 +266,28 @@ final class WindowFrameScheduler {
     }
     func unregister(_ id: ObjectIdentifier) {
         surfaces.removeValue(forKey: id); pendingPresentations.removeValue(forKey: id)
+        setDrawableDriver(id, wake: nil)
+    }
+
+    /// A Metal surface owns its update + presentation deadline. Do not make its
+    /// state wait for the independent window clock before it can use a drawable.
+    func setDrawableDriver(_ id: ObjectIdentifier, wake: (() -> Void)?) {
+        drawableDrivers[id] = wake
+        if wake == nil { drawableUpdates.removeValue(forKey: id)?.forEach { $0() } }
+    }
+
+    func prepareDrawable(_ id: ObjectIdentifier) {
+        let batch = drawableUpdates.removeValue(forKey: id) ?? []
+        batch.forEach { $0() }
     }
 
     /// `surface` is the terminal whose output produced the update.
     func enqueue(from surface: ObjectIdentifier? = nil, _ update: @escaping () -> Void) {
+        if canAnimate, let surface, let request = drawableDrivers[surface] {
+            drawableUpdates[surface, default: []].append(update)
+            request()
+            return
+        }
         updates.append(update)
         activeUntil = max(activeUntil, now() + 0.05)
         wake()
@@ -408,7 +428,14 @@ final class WindowFrameScheduler {
         batch.forEach { $0() }
     }
 
+    private func drainDrawableUpdates() {
+        let batches = drawableUpdates
+        drawableUpdates.removeAll(keepingCapacity: true)
+        for batch in batches.values { batch.forEach { $0() } }
+    }
+
     private func drainWithoutAnimation() {
+        drainDrawableUpdates()
         clock?.stop(); isRunning = false; timing.pause(); presentation.pause()
         drainUpdates()
         runAnimations(at: .infinity)
@@ -477,6 +504,7 @@ final class WindowFrameScheduler {
 
     func invalidate() {
         clock?.invalidate(); clock = nil; isRunning = false
+        drawableDrivers.removeAll(); drainDrawableUpdates()
         drainUpdates(); pendingPresentations.removeAll(); surfaces.removeAll(); animations.removeAll()
         observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()
     }

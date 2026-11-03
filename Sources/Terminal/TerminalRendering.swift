@@ -60,6 +60,8 @@ final class TerminalRendering {
         let kind = view is CodeTerminalView ? "editor" : "shell"
         frames?.unregister(id)
         frames = WindowFrameScheduler.forWindow(view.window)
+        drawableClock?.invalidate(); drawableClock = nil; drawableLayer = nil
+        pendingDraw = nil; pendingOutput = nil
         frames?.register(id) { [weak view] in
             guard let view, Self.isVisible(view), view.isUsingMetalRenderer else { return nil }
             return (view is CodeTerminalView ? "Editor" : "Terminal", view.metalRendererStatus.presentedFrameCount)
@@ -136,10 +138,14 @@ final class TerminalRendering {
             drawableClock = MetalDrawableClock(layer: layer, rate: rate) { [weak self] drawable in
                 self?.drawableCounters["callbacks", default: 0] += 1
                 guard let self, let view = self.view, Self.isVisible(view),
-                      view.metalDisplayLayer === self.drawableLayer, let draw = self.pendingDraw, let frames = self.frames else {
+                      view.metalDisplayLayer === self.drawableLayer, let frames = self.frames else {
                     self?.drawableClock?.stop()
                     return
                 }
+                // Consume all parsed state for this surface immediately before drawing.
+                // The update may schedule/replace pendingDraw with the newest dirty rows.
+                frames.prepareDrawable(ObjectIdentifier(view))
+                guard let draw = self.pendingDraw else { self.drawableClock?.stop(); return }
                 self.pendingDraw = nil
                 let output = self.pendingOutput; self.pendingOutput = nil
                 view.metalExternalDrawable = drawable
@@ -149,6 +155,9 @@ final class TerminalRendering {
                 // Stay warm until an update arrives with no pending draw. Returning
                 // that unused drawable pauses the link without queuing a repeat.
             }
+        }
+        if drawableClock != nil {
+            frames?.setDrawableDriver(ObjectIdentifier(view), wake: { [weak self] in self?.drawableClock?.start() })
         }
         return drawableClock != nil
     }
@@ -166,6 +175,7 @@ final class TerminalRendering {
         guard let view, view.window != nil else { return }
         if retry { attemptedGPU = false; failure = nil }
         if !enabled {
+            frames?.setDrawableDriver(ObjectIdentifier(view), wake: nil)
             drawableClock?.invalidate(); drawableClock = nil; drawableLayer = nil
             pendingDraw = nil; pendingOutput = nil
             view.metalUsesExternalDrawables = false; view.metalExternalDrawable = nil
@@ -181,6 +191,7 @@ final class TerminalRendering {
             try PhaseTrace.measure(view is CodeTerminalView ? "editor.metalSetup" : "shell.metalSetup") {
                 try view.setUseMetal(true)
             }
+            _ = prepareDrawableClock()
         } catch {
             failure = String(describing: error)
             try? view.setUseMetal(false)

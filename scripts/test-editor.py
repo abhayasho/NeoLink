@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
     with (root / 'stderr').open('w+') as log:
         process = subprocess.Popen([nvim, '--headless', '--noplugin', '-u', str(config), '-i', 'NONE', '--listen', str(socket)], env=env, stdout=log, stderr=log)
         def expr(value):
-            result = subprocess.run([nvim, '--server', str(socket), '--remote-expr', value], capture_output=True, text=True, env=env, timeout=12)
+            result = subprocess.run([nvim, '--headless', '--server', str(socket), '--remote-expr', value], capture_output=True, text=True, env=env, timeout=12)
             assert result.returncode == 0, result.stderr
             return result.stdout.strip()
         def lua(value):

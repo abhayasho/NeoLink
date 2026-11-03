@@ -30,6 +30,32 @@ final class SmoothScrollRenderingTests: XCTestCase {
     }
 
     @MainActor
+    func testStaleDrawableAfterResizeIsNotStretchedOrPresented() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        defer { TerminalView.allowsMetalFrameCapture = false }
+        let (window, view) = makeMetalTerminal()
+        defer { window.close() }
+        try view.setUseMetal(true)
+        view.feed(text: "\u{1B}[?25lResize: readable pixels")
+        let before = try capture(view)
+        let layer = try XCTUnwrap(view.metalDisplayLayer)
+        view.metalUsesExternalDrawables = true
+        view.metalExternalDrawable = try XCTUnwrap(layer.nextDrawable())
+        view.setFrameSize(NSSize(width: view.frame.width + 13, height: view.frame.height + 7))
+        view.metalNextFrameTag = 999
+        view.drawMetalFrameNow()
+        XCTAssertEqual(view.metalNextFrameTag, 999, "An old-size texture must never be submitted with new viewport geometry")
+        view.metalExternalDrawable = nil
+        view.metalUsesExternalDrawables = false
+        view.metalNextFrameTag = 0
+        let after = try capture(view)
+        XCTAssertEqual(after.width, before.width + Int(13 * window.backingScaleFactor))
+        XCTAssertEqual(after.height, before.height + Int(7 * window.backingScaleFactor))
+    }
+
+    @MainActor
     func testProgramScrollOffsetShiftsTheRegionAndFillsTheEdgeWithTheRetainedLine() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
         _ = NSApplication.shared
