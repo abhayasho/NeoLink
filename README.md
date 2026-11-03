@@ -11,6 +11,7 @@
   <img src="https://img.shields.io/badge/UI-SwiftUI-0A84FF" alt="SwiftUI">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
   <img src="https://img.shields.io/badge/status-preview-yellow" alt="Preview">
+  <a href="https://github.com/abhayasho/NeoLink/actions/workflows/checks.yml"><img src="https://github.com/abhayasho/NeoLink/actions/workflows/checks.yml/badge.svg" alt="macOS checks"></a>
 </p>
 
 **NeoLink** is a native macOS coding workspace and terminal that puts tabbed local and SSH sessions next to a file browser, so you can work with local and remote files from one window. I wanted a terminal like this for macOS and couldn't find one I liked, so I started building it.
@@ -48,7 +49,7 @@ Build 25 (1.11.1) adds saved continuous-refresh control, actual workspace presen
 
 ## Performance and benchmarks
 
-Build 25's final full-screen release check measured **8.3 ms p95 / 16.7 ms maximum** between presented motion frames on an M2 Max's built-in 120 Hz display. Continuous mode also maintained 8.3 ms idle drawable intervals. It uses more idle GPU/CPU work; turn off **View → Continuous High Refresh** for demand-driven operation. This is a procedural test, not a guarantee of every refresh or human-perceived smoothness. [Build 25 results and power tradeoff](docs/RENDERING.md#continuous-workspace-refresh-1111-build-25).
+Build 25's full-screen release checks measured **8.3 ms motion p95** on an M2 Max's built-in 120 Hz display. The latest five-second installed-app run also had an 8.3 ms maximum; earlier repeats had 16.7–25 ms gaps. Continuous mode also maintained 8.3 ms idle drawable intervals. It uses more idle GPU/CPU work; turn off **View → Continuous High Refresh** for demand-driven operation. This is a procedural test, not a guarantee of every refresh or human-perceived smoothness. [Build 25 results and power tradeoff](docs/RENDERING.md#continuous-workspace-refresh-1111-build-25).
 
 The earlier renderer architecture comparison below is retained as a **Build 24 historical baseline**.
 
