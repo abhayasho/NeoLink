@@ -11,6 +11,7 @@ import SwiftUI
 /// This is a testable change, not a guaranteed cure for scroll jank: a native table can still
 /// hitch, and the benchmark has not isolated the cause. Judge it on the trackpad.
 struct ExplorerTableView: NSViewRepresentable {
+    @ObservedObject private var rendering = TerminalRenderingPreferences.shared
     @ObservedObject var tree: ExplorerTree
     let activeFileURL: URL?
     /// Row actions, kept in the SwiftUI layer so behavior matches the old row exactly.
@@ -60,11 +61,13 @@ struct ExplorerTableView: NSViewRepresentable {
         context.coordinator.table = table
         context.coordinator.observeScrolling(in: scroll)
         context.coordinator.apply(rows: tree.rows, revision: tree.rowsRevision, activeFileURL: activeFileURL)
+        context.coordinator.installMetalSurface()
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.updateRendering(enabled: rendering.useGPU)
         context.coordinator.apply(rows: tree.rows, revision: tree.rowsRevision, activeFileURL: activeFileURL)
         context.coordinator.revealIfNeeded(revision: tree.revealRevision, file: tree.selectedURL)
     }
@@ -98,6 +101,9 @@ struct ExplorerTableView: NSViewRepresentable {
         private var trackingScroll = false
         private(set) var deferringUpdates = false
         private var scrollQuietWork: DispatchWorkItem?
+        private(set) weak var metalSurface: ExplorerMetalView?
+        private var surfaceGeneration = UUID()
+        private var preparingSurface = false
 
         init(_ parent: ExplorerTableView) { self.parent = parent }
 
@@ -113,6 +119,7 @@ struct ExplorerTableView: NSViewRepresentable {
         }
 
         func stopObservingScrolling() {
+            updateRendering(enabled: false)
             // NSTableView also registers its delegate for selection notifications. Remove
             // only our scroll observations, leaving native selection delivery intact.
             if let scroll {
@@ -123,6 +130,48 @@ struct ExplorerTableView: NSViewRepresentable {
             }
             scrollQuietWork?.cancel(); scrollQuietWork = nil
             trackingScroll = false; deferringUpdates = false; deferredSnapshot = nil
+        }
+
+        func updateRendering(enabled: Bool) {
+            if enabled { installMetalSurface() }
+            else {
+                surfaceGeneration = UUID(); preparingSurface = false
+                metalSurface?.shutdown(); metalSurface?.removeFromSuperview(); metalSurface = nil
+            }
+        }
+
+        func installMetalSurface() {
+            guard TerminalRenderingPreferences.shared.useGPU, metalSurface == nil, !preparingSurface else { return }
+            preparingSurface = true
+            let token = UUID(); surfaceGeneration = token
+            DispatchQueue.global(qos: .userInitiated).async {
+                ExplorerMetalView.prepare()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.surfaceGeneration == token else { return }
+                    self.preparingSurface = false
+                    guard let scroll = self.scroll, self.metalSurface == nil, let surface = ExplorerMetalView(scroll: scroll) else { return }
+                    self.metalSurface = surface
+                    surface.scene = { [weak self] in
+                        guard let self else { return .init(rows: [], active: nil, selected: -1, hovered: nil) }
+                        return .init(rows: self.rows, active: self.activeFileURL, selected: self.table?.selectedRow ?? -1, hovered: self.hoveredRow)
+                    }
+                    surface.coverageChanged = { [weak self] _ in self?.refreshNativeCoverage() }
+                    // Keep the GPU viewport fixed while AppKit scrolls the native input table.
+                    scroll.addSubview(surface, positioned: .above, relativeTo: scroll.contentView)
+                    surface.invalidateScene()
+                }
+            }
+        }
+
+        private func refreshNativeCoverage() {
+            guard let table else { return }
+            let visible = table.rows(in: table.visibleRect)
+            guard visible.location != NSNotFound else { return }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            for row in visible.location..<min(rows.count, NSMaxRange(visible)) {
+                table.view(atColumn: 0, row: row, makeIfNecessary: false)?.layer?.opacity = metalSurface?.isCoveringNativeRows == true ? 0 : 1
+            }
+            CATransaction.commit()
         }
 
         @objc func scrollBegan() {
@@ -270,6 +319,8 @@ struct ExplorerTableView: NSViewRepresentable {
                                    selected: row == table.selectedRow, hovered: row == hoveredRow)
                 }
             }
+            refreshNativeCoverage()
+            metalSurface?.invalidateScene()
         }
 
         func revealIfNeeded(revision: Int, file: URL?) {
@@ -306,6 +357,9 @@ struct ExplorerTableView: NSViewRepresentable {
             }()
             let entry = rows[row]
             cell.configure(entry, active: entry.item.id == activeFileURL, selected: row == tableView.selectedRow, hovered: row == hoveredRow)
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            cell.layer?.opacity = metalSurface?.isCoveringNativeRows == true ? 0 : 1
+            CATransaction.commit()
             return cell
         }
 
@@ -345,6 +399,7 @@ struct ExplorerTableView: NSViewRepresentable {
                     cell.setHovered(index == row)   // repaint one row, no reload
                 }
             }
+            metalSurface?.invalidateScene()
         }
 
         // MARK: Context menu

@@ -7,6 +7,29 @@ import SwiftTerm
 /// Renders with SwiftTerm's Metal renderer and compares frames pixel by pixel.
 final class SmoothScrollRenderingTests: XCTestCase {
     @MainActor
+    func testDisplayLinkDrawableHandoffMatchesLegacyPixels() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        defer { TerminalView.allowsMetalFrameCapture = false }
+        let (window, view) = makeMetalTerminal()
+        defer { window.close() }
+        try view.setUseMetal(true)
+        view.feed(text: "\u{1B}[?25l\u{1B}[2J\u{1B}[HMetal handoff 界\r\n\u{1B}[31mColor\u{1B}[0m")
+        let before = try capture(view)
+        let layer = try XCTUnwrap(view.metalDisplayLayer)
+        // This fixture owns acquisition; no CAMetalDisplayLink is attached to it.
+        view.metalUsesExternalDrawables = true
+        view.metalExternalDrawable = try XCTUnwrap(layer.nextDrawable())
+        let after = try capture(view)
+        view.metalExternalDrawable = nil
+        view.metalUsesExternalDrawables = false
+        XCTAssertEqual(after.width, before.width)
+        XCTAssertGreaterThan(rowsMatching(after, before, offset: 0, rows: 0..<before.height), 0.99,
+                             "A supplied drawable must retain all text, color and viewport geometry")
+    }
+
+    @MainActor
     func testProgramScrollOffsetShiftsTheRegionAndFillsTheEdgeWithTheRetainedLine() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
         _ = NSApplication.shared

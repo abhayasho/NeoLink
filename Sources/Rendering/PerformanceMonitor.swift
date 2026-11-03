@@ -12,10 +12,12 @@ final class PerformanceMonitor: NSObject, NSWindowDelegate {
     private var timer: Timer?
     private var previous: [ObjectIdentifier: (name: String, count: UInt64)] = [:]
     private var lastSample = 0.0
+    private var previousChanged: [ObjectIdentifier: UInt64] = [:]
 
     func show(for window: NSWindow?) {
         frames = WindowFrameScheduler.forWindow(window)
         previous = frames?.gpuSamples ?? [:]
+        previousChanged = frames?.gpuChangedSamples ?? [:]
         lastSample = CACurrentMediaTime()
         if panel == nil {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
@@ -51,14 +53,19 @@ final class PerformanceMonitor: NSObject, NSWindowDelegate {
         guard let frames else { text.stringValue = "No workspace window is active."; return }
         let now = CACurrentMediaTime(), elapsed = now - lastSample
         let samples = frames.gpuSamples
+        let changed = frames.gpuChangedSamples
         let rates = samples.sorted { $0.value.name < $1.value.name }.map { id, value -> String in
             guard let old = previous[id], elapsed >= 0.1, value.count >= old.count else { return "\(value.name): sampling…" }
             let rate = Double(value.count - old.count) / elapsed
-            return "\(value.name): \(String(format: "%.1f", rate)) presented GPU frames/s"
+            var label = "\(value.name): \(String(format: "%.1f", rate)) presented GPU frames/s"
+            if let count = changed[id], let old = previousChanged[id], count >= old {
+                label += " · \(String(format: "%.1f", Double(count - old) / elapsed)) scene changes/s"
+            }
+            return label
         }
         text.stringValue = frames.summary + "\n\n" + (rates.isEmpty ? "No visible Metal surface." : rates.joined(separator: "\n"))
-            + "\n\nGPU rates count drawables presented; an unchanged surface presents nothing. Frame work covers scheduled updates and submission."
-        previous = samples; lastSample = now
+            + "\n\nGPU rates count displayed drawables. Explorer can briefly repeat a cached scene to keep ProMotion active; its scene-change rate separates motion from repeats. Frame work covers the window clock; surface Metal callbacks and native work can occur outside it."
+        previous = samples; previousChanged = changed; lastSample = now
     }
 
     func windowWillClose(_ notification: Notification) { timer?.invalidate(); timer = nil; previous = [:] }

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import QuartzCore
 import SwiftTerm
 
 /// One setting covers shells, SSH, agent terminals, and the embedded Neovim surface.
@@ -33,6 +34,12 @@ final class TerminalRendering {
     private var attemptedGPU = false
     private weak var frames: WindowFrameScheduler?
     private(set) var failure: String?
+    private var drawableClock: FrameClock?
+    private weak var drawableLayer: CAMetalLayer?
+    private var drawableRate = 0
+    private var pendingDraw: (() -> Void)?
+    private var pendingOutput: Double?
+    private(set) var drawableCounters: [String: Int] = [:]
 
     init(view: InteractiveTerminalView, preferences: TerminalRenderingPreferences? = nil) {
         self.view = view
@@ -83,7 +90,7 @@ final class TerminalRendering {
                 if let frames = self.frames {
                     let output = self.outputSinceLastFrame
                     self.outputSinceLastFrame = nil
-                    frames.requestPresentation(ObjectIdentifier(view), outputAt: output) { [weak view, weak frames] in
+                    let draw = { [weak view, weak frames] in
                         guard let view, let frames else { return }
                         let tag = frames.presentationTag
                         if tag != 0 {
@@ -99,6 +106,14 @@ final class TerminalRendering {
                             frames.frameDrawn(tag: tag, changed: view.metalLastFrameChanged, scroll: view.scrollTraceSample())
                         }
                     }
+                    if self.prepareDrawableClock() {
+                        self.drawableCounters["requests", default: 0] += 1
+                        self.pendingDraw = draw
+                        self.pendingOutput = self.pendingOutput ?? output
+                        self.drawableClock?.start()
+                    } else {
+                        frames.requestPresentation(ObjectIdentifier(view), outputAt: output, present: draw)
+                    }
                 } else {
                     DispatchQueue.main.async { [weak view] in
                         if let view, Self.isVisible(view) { present() }
@@ -107,6 +122,35 @@ final class TerminalRendering {
             }
         }
         apply(enabled: preferences.useGPU, retry: false)
+    }
+
+    private func prepareDrawableClock() -> Bool {
+        guard #available(macOS 14, *), let view, view.isUsingMetalRenderer,
+              let layer = view.metalDisplayLayer else { return false }
+        let rate = WindowFrameScheduler.rate(for: view.window?.screen?.maximumFramesPerSecond ?? 60)
+        if drawableLayer !== layer || drawableRate != rate {
+            drawableClock?.invalidate()
+            drawableLayer = layer
+            drawableRate = rate
+            view.metalUsesExternalDrawables = true
+            drawableClock = MetalDrawableClock(layer: layer, rate: rate) { [weak self] drawable in
+                self?.drawableCounters["callbacks", default: 0] += 1
+                guard let self, let view = self.view, Self.isVisible(view),
+                      view.metalDisplayLayer === self.drawableLayer, let draw = self.pendingDraw, let frames = self.frames else {
+                    self?.drawableClock?.stop()
+                    return
+                }
+                self.pendingDraw = nil
+                let output = self.pendingOutput; self.pendingOutput = nil
+                view.metalExternalDrawable = drawable
+                frames.presentDrawable(ObjectIdentifier(view), outputAt: output, present: draw)
+                self.drawableCounters[view.metalNextFrameTag == 0 ? "submitted" : "refused", default: 0] += 1
+                view.metalExternalDrawable = nil
+                // Stay warm until an update arrives with no pending draw. Returning
+                // that unused drawable pauses the link without queuing a repeat.
+            }
+        }
+        return drawableClock != nil
     }
 
     nonisolated private static func onMain(_ work: @escaping @MainActor () -> Void) {
@@ -122,6 +166,9 @@ final class TerminalRendering {
         guard let view, view.window != nil else { return }
         if retry { attemptedGPU = false; failure = nil }
         if !enabled {
+            drawableClock?.invalidate(); drawableClock = nil; drawableLayer = nil
+            pendingDraw = nil; pendingOutput = nil
+            view.metalUsesExternalDrawables = false; view.metalExternalDrawable = nil
             try? view.setUseMetal(false)
             attemptedGPU = false
             return

@@ -2542,8 +2542,12 @@ extension TerminalView {
         if terminal.synchronizedOutputActive { return }
         if let schedule = metalFrameScheduler {
             schedule { [weak self, weak metalView] in
-                guard self?.terminal.synchronizedOutputActive != true else { return }
-                metalView?.draw()
+                guard let self, let metalView, !self.terminal.synchronizedOutputActive else { return }
+                if self.metalUsesExternalDrawables {
+                    self.metalRenderer?.draw(in: metalView)
+                } else {
+                    metalView.draw()
+                }
             }
             return
         }

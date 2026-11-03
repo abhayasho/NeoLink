@@ -147,6 +147,8 @@ final class WindowFrameScheduler {
     private var pendingPresentations: [ObjectIdentifier: Presentation] = [:]
     private struct Surface {
         let sample: () -> (name: String, count: UInt64)?
+        let interaction: (() -> Void)?
+        let changedCount: (() -> UInt64)?
     }
     private var surfaces: [ObjectIdentifier: Surface] = [:]
     private var animations: [ObjectIdentifier: (Double) -> Bool] = [:]
@@ -216,7 +218,7 @@ final class WindowFrameScheduler {
         } else if #available(macOS 14.0, *) {
             clock = WindowDisplayClock(window: window, rate: targetRate) { [weak self] in self?.frame() }
         } else {
-            clock = LegacyDisplayClock(window: window) { [weak self] in self?.frame() }
+            clock = NativeDisplayClock(window: window) { [weak self] in self?.frame() }
         }
         isRunning = false
     }
@@ -231,6 +233,7 @@ final class WindowFrameScheduler {
         let now = now()
         // Keep the clock running briefly so the next input's frame is not delayed by a restart.
         activeUntil = max(activeUntil, now + 0.5)
+        for surface in surfaces.values { surface.interaction?() }
         wake()
     }
 
@@ -255,8 +258,9 @@ final class WindowFrameScheduler {
     }
 
     /// Registers a Metal surface for the Performance Monitor's presented-frame counts.
-    func register(_ id: ObjectIdentifier, sample: @escaping () -> (name: String, count: UInt64)?) {
-        surfaces[id] = Surface(sample: sample)
+    func register(_ id: ObjectIdentifier, interaction: (() -> Void)? = nil, changedCount: (() -> UInt64)? = nil,
+                  sample: @escaping () -> (name: String, count: UInt64)?) {
+        surfaces[id] = Surface(sample: sample, interaction: interaction, changedCount: changedCount)
     }
     func unregister(_ id: ObjectIdentifier) {
         surfaces.removeValue(forKey: id); pendingPresentations.removeValue(forKey: id)
@@ -296,6 +300,12 @@ final class WindowFrameScheduler {
         pendingPresentations[id] = Presentation(outputAt: output, present: present)
         activeUntil = max(activeUntil, now() + 0.05)
         wake()
+    }
+
+    /// The display link already acquired a bounded drawable, so there is no pool wait
+    /// to avoid with the legacy three-pending-presentation throttle.
+    func presentDrawable(_ id: ObjectIdentifier, outputAt: Double?, present: @escaping () -> Void) {
+        runContentPresentations([id: Presentation(outputAt: outputAt, present: present)], throttle: false)
     }
 
     /// Runs `step` once per frame, after terminal updates and before presentation, with
@@ -427,7 +437,8 @@ final class WindowFrameScheduler {
         // real one: measured here it added about 9 ms from key press to display and
         // blocked the main thread in nextDrawable.
         runContentPresentations(presentations)
-        window?.displayIfNeeded()
+        // AppKit services native dirty views in its run loop. Forcing a whole-window
+        // pass here also enters MTKView outside its supplied-drawable callback.
         let duration = now() - start
         os_signpost(.end, log: Self.log, name: immediate ? "Window.ImmediateFrame" : "Window.Frame")
         guard !immediate else { return }
@@ -461,6 +472,8 @@ final class WindowFrameScheduler {
     var gpuSamples: [ObjectIdentifier: (name: String, count: UInt64)] {
         surfaces.compactMapValues { $0.sample() }
     }
+
+    var gpuChangedSamples: [ObjectIdentifier: UInt64] { surfaces.compactMapValues { $0.changedCount?() } }
 
     func invalidate() {
         clock?.invalidate(); clock = nil; isRunning = false
@@ -514,7 +527,7 @@ private final class DisplayTarget: NSObject {
 /// Ventura fallback: the realtime display callback only signals a coalescing
 /// dispatch source. AppKit, terminal parsing and drawing stay on the main thread.
 @MainActor
-private final class LegacyDisplayClock: FrameClock {
+final class NativeDisplayClock: FrameClock {
     private var link: CVDisplayLink?
     private var source: DispatchSourceUserDataAdd?
     init?(window: NSWindow, tick: @escaping () -> Void) {

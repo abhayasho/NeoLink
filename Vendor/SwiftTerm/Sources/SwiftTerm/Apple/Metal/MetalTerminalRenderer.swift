@@ -425,7 +425,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #else
         let scale = terminalView.backingScaleFactor()
 #endif
-        view.drawableSize = CGSize(width: view.bounds.width * scale, height: view.bounds.height * scale)
+        let drawableSize = CGSize(width: view.bounds.width * scale, height: view.bounds.height * scale)
+        if view.drawableSize != drawableSize { view.drawableSize = drawableSize }
         let cursorStyle = terminalView.terminal.options.cursorStyle
         let shouldBlink = isBlinkStyle(cursorStyle)
             && !terminalView.terminal.cursorHidden
@@ -452,7 +453,14 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             os_signpost(.begin, log: MetalTerminalRenderer.profileLog, name: "Metal.CurrentDrawable", signpostID: drawableID)
         }
 #endif
+        // NeoLink: consume the display-link drawable without asking MTKView to acquire
+        // another one. Both acquisition APIs must never own the same layer together.
+#if os(macOS)
+        let external = terminalView.metalUsesExternalDrawables
+        let drawable = external ? terminalView.metalExternalDrawable : view.currentDrawable
+#else
         let drawable = view.currentDrawable
+#endif
 #if canImport(os)
         if MetalTerminalRenderer.profileEnabled {
             os_signpost(.end, log: MetalTerminalRenderer.profileLog, name: "Metal.CurrentDrawable", signpostID: drawableID)
@@ -465,7 +473,21 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             os_signpost(.begin, log: MetalTerminalRenderer.profileLog, name: "Metal.RenderPass", signpostID: passID)
         }
 #endif
-        let passDescriptor = view.currentRenderPassDescriptor
+        let passDescriptor: MTLRenderPassDescriptor?
+#if os(macOS)
+        if external, let drawable {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = drawable.texture
+            pass.colorAttachments[0].storeAction = .store
+            passDescriptor = pass
+        } else if external {
+            passDescriptor = nil
+        } else {
+            passDescriptor = view.currentRenderPassDescriptor
+        }
+#else
+        passDescriptor = view.currentRenderPassDescriptor
+#endif
 #if canImport(os)
         if MetalTerminalRenderer.profileEnabled {
             os_signpost(.end, log: MetalTerminalRenderer.profileLog, name: "Metal.RenderPass", signpostID: passID)

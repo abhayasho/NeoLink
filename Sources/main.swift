@@ -13,7 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         PhaseTrace.mark("launch.didFinishLaunching")
         if TerminalRenderingPreferences.shared.useGPU {
             // Shader compilation is shared by every terminal; keep it off the main thread.
-            DispatchQueue.global(qos: .userInitiated).async { TerminalView.prepareMetalRenderer() }
+            DispatchQueue.global(qos: .userInitiated).async {
+                TerminalView.prepareMetalRenderer()
+                ExplorerMetalView.prepare()
+            }
         }
         NSApp.setActivationPolicy(.regular)
         commands.install()

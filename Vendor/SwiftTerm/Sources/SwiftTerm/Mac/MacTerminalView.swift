@@ -212,6 +212,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Optional host scheduling for Metal submission. Coalesce requests by surface
     /// and invoke the latest closure once on the main thread, after state updates.
     public var metalFrameScheduler: ((@escaping () -> Void) -> Void)?
+#if canImport(MetalKit)
+    /// NeoLink: a CAMetalDisplayLink host owns drawable acquisition while attached.
+    /// The renderer must never call MTKView.currentDrawable on that same layer.
+    public var metalUsesExternalDrawables = false
+    public var metalExternalDrawable: CAMetalDrawable?
+    public var metalDisplayLayer: CAMetalLayer? { metalView?.layer as? CAMetalLayer }
+#endif
     /// Host tag for the next submitted Metal frame. The renderer consumes it when it
     /// submits a frame; a refused frame leaves it for the next one.
     public var metalNextFrameTag: UInt64 = 0
@@ -347,8 +354,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// snapshots and tests when the main run loop cannot process an on-demand
     /// `MTKView` draw before the snapshot starts.
     public func drawMetalFrameNow() {
-        guard useMetalRenderer else { return }
-        metalView?.draw()
+        guard useMetalRenderer, let metalView else { return }
+        if metalUsesExternalDrawables { metalRenderer?.draw(in: metalView) }
+        else { metalView.draw() }
     }
 #endif
 

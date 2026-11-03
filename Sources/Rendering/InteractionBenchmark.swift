@@ -48,7 +48,7 @@ final class InteractionBenchmark {
         // Surrounding-UI scenarios need a project. A development build may not resolve the
         // installed app's folder bookmarks; use the checkout and restore the setting at the end.
         let savedProject = UserDefaults.standard.string(forKey: "activeProjectPath")
-        if scenarios.contains(where: { $0.hasPrefix("ui-") }), WorkspaceAccess.shared.projectURL == nil {
+        if scenarios.contains(where: { $0.hasPrefix("ui-") || $0 == "render-motion" }), WorkspaceAccess.shared.projectURL == nil {
             WorkspaceAccess.shared.select(Self.repositoryRoot)
             await sleep(1.0)
         }
@@ -62,6 +62,51 @@ final class InteractionBenchmark {
         }
         for scenario in scenarios {
             switch scenario {
+            case "render-motion":
+                // A repeatable animation workload, not synthesized mouse/keyboard input.
+                // This isolates real drawable delivery from the frequency of input events.
+                guard let shell = await focusShell(), let scroll = Self.explorerScrollView(in: window),
+                      let table = scroll.documentView as? ExplorerNSTableView, let coordinator = table.coordinator else {
+                    fail(scenario, "shell or native explorer unavailable"); continue
+                }
+                if let sources = coordinator.rows.first(where: { $0.name == "Sources" && !$0.expanded }) { coordinator.parent.onToggle(sources) }
+                await sleep(1)
+                guard let surface = Self.find(ExplorerMetalView.self, in: scroll, where: { _ in true }),
+                      await wait(8, { surface.isCoveringNativeRows }) else { fail(scenario, "explorer Metal surface did not present"); continue }
+                let range = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height)
+                guard range > 100 else { fail(scenario, "explorer needs more expanded rows"); continue }
+                shell.feed(text: "\u{1B}[2J\u{1B}[H" + (1...1000).map { "\($0) GPU motion abcdefghijklmnopqrstuvwxyz 0123456789" }.joined(separator: "\r\n"))
+                _ = shell.scrollViewport(towardTop: 100)
+                shell.smoothScrollSource = .scrollback
+                await sleep(0.5)
+                let start = CACurrentMediaTime(), oldFallbacks = surface.nativeFallbacks
+                let oldDrawableCounters = shell.rendering.drawableCounters
+                await measure(scenario, extra: {
+                    let samples = surface.motionSamples.filter { $0.time >= start && $0.changed }
+                    let intervals = zip(samples, samples.dropFirst()).map { $1.time - $0.time }
+                    func ms(_ value: Double) -> Double { (value * 10_000).rounded() / 10 }
+                    return ["inputDriver": "procedural animation, no input injection",
+                            "terminalDrawableCounters": shell.rendering.drawableCounters.merging(oldDrawableCounters) { current, old in current - old },
+                            "explorerChangedFrames": samples.count,
+                            "explorerPresentedIntervalMs": ["p50": ms(PresentationTiming.percentile(intervals, 0.5)),
+                                "p95": ms(PresentationTiming.percentile(intervals, 0.95)), "max": ms(intervals.max() ?? 0)],
+                            "explorerNativeFallbacks": surface.nativeFallbacks - oldFallbacks,
+                            "explorerFrameSamples": samples.map { ["time": $0.time, "y": $0.y] }]
+                }) {
+                    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                        self.window.frames.animate(ObjectIdentifier(self)) { time in
+                            let elapsed = CACurrentMediaTime() - start
+                            guard time.isFinite, elapsed < 5 else { done.resume(); return false }
+                            let phase = (elapsed * 0.8).truncatingRemainder(dividingBy: 2)
+                            let triangle = phase < 1 ? phase : 2 - phase
+                            shell.smoothScrollOffset = CGFloat(triangle * 100 - 50)
+                            scroll.contentView.scroll(to: NSPoint(x: 0, y: range * CGFloat(triangle)))
+                            scroll.reflectScrolledClipView(scroll.contentView)
+                            return true
+                        }
+                    }
+                }
+                shell.smoothScrollOffset = 0
             case "manual-motion":
                 // Passive capture: all input comes from the user or an external UI driver.
                 // Do not focus controls, send keys/wheel events, or alter the project here.
@@ -391,7 +436,7 @@ final class InteractionBenchmark {
         if let extra { result.merge(extra()) { _, new in new } }
         if !problems.isEmpty { result["invalid"] = problems.sorted() }
         results.append(result)
-        print("NeoLink benchmark", name, result.filter { $0.key != "raw" })
+        print("NeoLink benchmark", name, result.filter { $0.key != "raw" && $0.key != "explorerFrameSamples" })
     }
 
     private func fail(_ name: String, _ reason: String) { results.append(["scenario": name, "error": reason]) }

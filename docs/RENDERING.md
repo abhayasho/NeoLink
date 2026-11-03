@@ -1,6 +1,39 @@
 # Native GPU text rendering
 
+## Metal explorer and drawable pacing (1.10.0, build 20)
+
+The project tree now has its own Metal drawing surface, fixed beside the native clip view so concurrent native scrolling cannot translate it a second time. CoreText prepares immutable row artwork on a background queue; cached GPU textures are translated and clipped on each frame. Selection and hover are GPU fills, so scrolling and highlighting do not re-rasterize every label. The native table retains keyboard navigation, type selection, context menus, drag/drop and accessibility. It becomes the visible fallback during cache misses or GPU failure. Folder List, SFTP and other AppKit/SwiftUI controls keep their native rendering paths.
+
+On macOS 14 and later, `CAMetalDisplayLink` supplies explorer drawables with VSync and the system’s default render lead time. This avoids taking another drawable from the main thread while the pool is busy. macOS 13 uses the native display-clock fallback. Window visibility, minimize, display changes and backing-scale changes reconfigure or pause the surface. Shutdown invalidates the display link once and restores native rows. Shader preparation is shared and runs off-thread. Artwork is limited to 256 cached rows with a byte budget of 24 MiB or twice the viewport's pixel footprint, whichever is larger.
+
+Interaction briefly keeps the cached explorer scene presenting for 250 ms. This provides ProMotion activity without adding repeated terminal frames to the terminal's drawable queue. The Performance Monitor separates the explorer's presented drawable rate from its scene-change rate: repeated pictures are not counted as motion. The overall window remains a native SwiftUI/AppKit application; it is not a GPUI integration.
+
+Terminal/editor surfaces also receive display-link-provided drawables on macOS 14+. Their renderer builds a render pass around that supplied texture and bypasses MTKView drawable acquisition while attached. Requests coalesce to the newest pending draw; an empty update pauses the link without queuing an identical frame. The legacy presentation-count throttle is unnecessary for a drawable already acquired by the display link. macOS 13 retains the prior MTKView path.
+
+The window clock still advances terminal state and animations; each surface submits from its own drawable callback. A trial that advanced the whole window from the explorer callback regressed terminal cadence, so it was removed. GPU completion releases the explorer's frame slot directly on the completion thread, so another main-run-loop turn is not required before its next frame. Metal row artwork is kept outside the scrolling clip view to avoid a second translation by native concurrent scrolling.
+
+The implementation was compared with Zed revision `504a7f2cf25b817cda3998cab93473adef15f93c`: its [macOS window callback](https://github.com/zed-industries/zed/blob/504a7f2cf25b817cda3998cab93473adef15f93c/crates/gpui_macos/src/window.rs#L3435) advances GPUI from the Metal drawable callback; its [Metal renderer](https://github.com/zed-industries/zed/blob/504a7f2cf25b817cda3998cab93473adef15f93c/crates/gpui_apple/src/metal_renderer.rs#L595) presents ordinary frames without a synchronous GPU wait and returns frame resources from completion handlers. NeoLink applies these scheduling principles in Swift. It does not embed GPUI or replace the entire native UI with Zed's scene renderer.
+
+`NEOLINK_BENCHMARK=render-motion` is a five-second procedural animation of terminal scrollback and the explorer viewport. It uses no keyboard or wheel injection and records terminal drawable timing, explorer changed-frame timing and native fallbacks. It isolates rendering cadence from the input-event rate. It does not establish natural trackpad feel or human visual equivalence with Zed. `manual-motion` remains available for input-driven comparison.
+
+Validation: 121 native tests pass, including offscreen Metal pixels for explorer selection, badges, fractional edges, native fallback and terminal drawable handoff. Neovim runtime and eight offline benchmark checks pass. Unlocked release UI checks exercised explorer scrolling/selection, file context actions, embedded file opening, GPU/native toggles, shell output/scrollback and closing/reopening the browser. The native control path remains in place; authenticated SFTP and human trackpad comparison against Zed are separate integration/acceptance checks. Native drawing is serviced by AppKit's run loop rather than a forced whole-window display pass every frame.
+
 NeoLink uses a vendored SwiftTerm 1.20.0 Metal renderer for terminal-backed surfaces: local shells, SSH sessions, agent terminals, REPLs, and the shared Neovim editor. GPUI itself is an open-source Rust UI framework and is not embedded; NeoLink keeps its AppKit/SwiftUI architecture and uses the same macOS GPU API, Metal. NeoLink's changes to SwiftTerm are listed in `Vendor/SwiftTerm/UPSTREAM.md`.
+
+## Build 20 release measurement
+
+On an M2 Max with the built-in 120 Hz ProMotion display, unlocked/frontmost release build, 1280 × 832 point window, five seconds of procedural motion:
+
+| Surface | New-frame interval p50 / p95 | Longest interval |
+|---|---|---|
+| Terminal scrollback | 8.3 / 16.7 ms | 33.3 ms |
+| GPU explorer | 8.3 / 16.7 ms | 25 ms |
+
+The terminal recorded 551 new-frame intervals and 7.6% longer than 12.5 ms; the explorer recorded 544 changed frames with no native fallbacks. There were 600 window-clock intervals. These are different counts: 120 callbacks per second does not mean every refresh carried new pixels. The main-thread probe's longest wait during motion was 15.4 ms. The idle scenario recorded zero clock callbacks and zero new terminal frames. Process footprint was about 102 MiB during motion. Full samples and the tested binary hash are in [rendering-build20.json](rendering-build20.json).
+
+These results demonstrate remaining held frames and do not establish locked 120 FPS, all-GPU native controls, or perceptual parity with Zed. A 900-point-wide development run reached 8.3 ms at p95 for both surfaces; the larger-window release result above is the reported limit. Frame-work timing covers window-clock work, with per-surface Metal callbacks outside that scope. Natural trackpad input, larger workspaces, other displays and system load can change the result.
+
+Reproduce without synthetic input: `NEOLINK_WINDOW=1280x800 NEOLINK_BENCHMARK=render-motion,idle NEOLINK_BENCHMARK_OUTPUT=/tmp/neolink-rendering.json NeoLink.app/Contents/MacOS/NeoLink`. Keep the app frontmost and the screen unlocked. The benchmark exits when complete.
 
 ## Drawing and lifecycle
 

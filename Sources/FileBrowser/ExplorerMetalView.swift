@@ -1,0 +1,483 @@
+import AppKit
+@preconcurrency import CoreText
+@preconcurrency import Metal
+import QuartzCore
+
+/// GPU row composition over the native table. The table remains the input/accessibility
+/// surface; immutable row artwork is rasterized once off-thread, cached, and translated by
+/// Metal while scrolling. Missing artwork or a GPU failure reveals the native table.
+@MainActor
+final class ExplorerMetalView: NSView {
+    struct Scene {
+        let rows: [ExplorerRow]
+        let active: URL?
+        let selected: Int
+        let hovered: Int?
+    }
+    private struct Artwork {
+        let row: ExplorerRow
+        let width: Int
+        let scale: CGFloat
+        let texture: MTLTexture
+        var used: UInt64
+    }
+    private struct JobKey: Hashable { let id: URL; let width: Int; let scale: CGFloat; let generation: UInt64 }
+    private struct Raster {
+        let width: Int, height: Int
+        let pixels: Data
+    }
+    private let device: MTLDevice
+    private let queue: MTLCommandQueue
+    private let pipeline: MTLRenderPipelineState
+    private let worker = DispatchQueue(label: "com.neolink.explorer.artwork", qos: .userInitiated)
+    private var cache: [URL: Artwork] = [:]
+    private var jobs: Set<JobKey> = []
+    private var generation: UInt64 = 0
+    private var useCounter: UInt64 = 0
+    private var displayDriver: FrameClock?
+    private var legacyClock: FrameClock?
+    private var activeUntil = 0.0
+    private var dirty = true
+    private let frameSlot = ExplorerFrameSlot()
+    private var lastPosition = CGFloat.nan
+    private var lastSceneRevision: UInt64 = 0
+    private var sceneRevision: UInt64 = 1
+    private var observer: NSObjectProtocol?
+    private var windowObservers: [NSObjectProtocol] = []
+    private weak var scroll: NSScrollView?
+    private weak var frames: WindowFrameScheduler?
+    var scene: (() -> Scene)?
+    var coverageChanged: ((Bool) -> Void)?
+    private(set) var isCoveringNativeRows = false
+    private(set) var presentedFrames: UInt64 = 0
+    private(set) var changedFrames: UInt64 = 0
+    private(set) var nativeFallbacks = 0
+    private(set) var drawCallbacks = 0
+    private(set) var lastDrawState = "waiting"
+    private(set) var motionSamples: [(time: Double, y: Double, changed: Bool)] = []
+    /// Opt-in tests only; normal rendering never copies pixels back to the CPU.
+    var captureNextFrame: ((CGImage) -> Void)?
+    private(set) var lastDrawnRange = 0..<0
+    var cachedRowCount: Int { cache.count }
+    static let cacheLimit = 256
+    static var allowsFrameCapture = false
+
+    nonisolated static func visibleRows(count: Int, y: CGFloat, height: CGFloat) -> Range<Int> {
+        guard count > 0, y.isFinite, height.isFinite, height > 0 else { return 0..<0 }
+        let first = min(count, max(0, Int(floor(y / 24))))
+        return first..<min(count, max(first, Int(ceil((y + height) / 24))))
+    }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { true }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { /* Metal owns the backing store. */ }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func accessibilityIsIgnored() -> Bool { true }
+    override func makeBackingLayer() -> CALayer {
+        let layer = CAMetalLayer()
+        layer.device = device; layer.pixelFormat = .bgra8Unorm
+        layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+        layer.isOpaque = true; layer.framebufferOnly = !Self.allowsFrameCapture
+        layer.displaySyncEnabled = true; layer.presentsWithTransaction = false
+        layer.maximumDrawableCount = 3
+        return layer
+    }
+
+    init?(scroll: NSScrollView) {
+        guard let (device, pipeline) = Self.resources.snapshot(), let queue = device.makeCommandQueue() else { return nil }
+        self.device = device; self.queue = queue; self.pipeline = pipeline; self.scroll = scroll
+        super.init(frame: scroll.contentView.frame)
+        wantsLayer = true; layerContentsRedrawPolicy = .onSetNeedsDisplay; isHidden = true
+        setAccessibilityElement(false)
+        scroll.contentView.postsBoundsChangedNotifications = true
+        observer = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+            object: scroll.contentView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.invalidateScene(contentChanged: false) }
+            }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        windowObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    nonisolated private static let resources = Resources()
+    nonisolated static func prepare() { resources.prepare() }
+    private final class Resources: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cached: (MTLDevice, MTLRenderPipelineState)?
+        func snapshot() -> (MTLDevice, MTLRenderPipelineState)? {
+            lock.lock(); defer { lock.unlock() }; return cached
+        }
+        func prepare() {
+            lock.lock(); defer { lock.unlock() }
+            guard cached == nil, let device = MTLCreateSystemDefaultDevice(),
+                  let pipeline = ExplorerMetalView.pipeline(device: device) else { return }
+            cached = (device, pipeline)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        windowObservers.forEach(NotificationCenter.default.removeObserver); windowObservers.removeAll()
+        displayDriver?.invalidate(); displayDriver = nil
+        legacyClock?.invalidate(); legacyClock = nil
+        frames?.unregister(ObjectIdentifier(self))
+        frames = WindowFrameScheduler.forWindow(window)
+        frames?.register(ObjectIdentifier(self), interaction: { [weak self] in self?.invalidateScene(contentChanged: false) },
+                         changedCount: { [weak self] in self?.changedFrames ?? 0 }) { [weak self] in
+            guard let self, self.isCoveringNativeRows, self.window?.isVisible == true else { return nil }
+            return ("Explorer", self.presentedFrames)
+        }
+        guard let window, let layer = layer as? CAMetalLayer else { uncover(); return }
+        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification,
+                     NSWindow.didMiniaturizeNotification, NSWindow.didBecomeKeyNotification, NSWindow.didChangeScreenNotification] {
+            windowObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if name == NSWindow.didChangeScreenNotification { self?.configureClock() }
+                    self?.invalidateScene(contentChanged: false)
+                }
+            })
+        }
+        layer.contentsScale = window.backingScaleFactor
+        layer.drawableSize = CGSize(width: max(1, ceil(bounds.width * window.backingScaleFactor)), height: max(1, ceil(bounds.height * window.backingScaleFactor)))
+        configureClock()
+        invalidateScene()
+    }
+
+    private func configureClock() {
+        displayDriver?.invalidate(); displayDriver = nil
+        legacyClock?.invalidate(); legacyClock = nil
+        guard let window, let layer = layer as? CAMetalLayer else { return }
+        if Self.allowsFrameCapture {
+            // Explicit offscreen tests own drawable acquisition. A CAMetalDisplayLink
+            // and nextDrawable must never be used together for the same layer.
+        } else if #available(macOS 14, *) {
+            displayDriver = MetalDrawableClock(layer: layer, rate: WindowFrameScheduler.rate(for: window.screen?.maximumFramesPerSecond ?? 60)) { [weak self] drawable in
+                self?.draw(drawable: drawable)
+            }
+        } else if #unavailable(macOS 14) {
+            legacyClock = NativeDisplayClock(window: window) { [weak self] in
+                guard let self, self.frameSlot.isAvailable, let drawable = (self.layer as? CAMetalLayer)?.nextDrawable() else { return }
+                self.draw(drawable: drawable)
+            }
+        }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        invalidateScene()
+    }
+
+    func invalidateScene(contentChanged: Bool = true) {
+        if contentChanged { sceneRevision &+= 1 }
+        dirty = true
+        // Keep ProMotion supplied during interaction, using display-link-provided drawables
+        // rather than queuing redundant terminal frames ahead of the next real input.
+        activeUntil = CACurrentMediaTime() + 0.25
+        guard let scroll else { return }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        frame = scroll.contentView.frame
+        if let layer = layer as? CAMetalLayer {
+            let scale = window?.backingScaleFactor ?? 2
+            if layer.contentsScale != scale { layer.contentsScale = scale }
+            let size = CGSize(width: max(1, ceil(bounds.width * scale)), height: max(1, ceil(bounds.height * scale)))
+            if layer.drawableSize != size { layer.drawableSize = size }
+        }
+        CATransaction.commit()
+        guard let scene = scene?(), artworkReady(scene: scene) else {
+                uncover(); displayDriver?.stop(); legacyClock?.stop(); return
+        }
+        // A hidden CAMetalLayer receives no display-link drawables. Warm its artwork
+        // first, then expose the layer so its first frame can actually be delivered.
+        isHidden = false
+        displayDriver?.start(); legacyClock?.start()
+    }
+
+    private func artworkReady(scene: Scene) -> Bool {
+        guard let scroll, bounds.width > 0, bounds.height > 0 else { return false }
+        let scale = window?.backingScaleFactor ?? 2, width = Int(ceil(bounds.width * scale))
+        let y = scroll.contentView.bounds.minY
+        let visibleRows = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
+        let first = visibleRows.lowerBound, end = visibleRows.upperBound
+        for index in max(0, first - 16)..<min(scene.rows.count, max(first, end) + 16) {
+            let row = scene.rows[index]
+            if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
+            schedule(row, width: width, scale: scale)
+        }
+        return (first..<max(first, end)).allSatisfy { index in
+            let row = scene.rows[index]
+            return cache[row.id].map { $0.row == row && $0.width == width && $0.scale == scale } ?? false
+        }
+    }
+
+    func shutdown() {
+        generation &+= 1
+        displayDriver?.invalidate(); displayDriver = nil
+        legacyClock?.invalidate(); legacyClock = nil
+        windowObservers.forEach(NotificationCenter.default.removeObserver); windowObservers.removeAll()
+        frames?.unregister(ObjectIdentifier(self))
+        uncover(); scene = nil; coverageChanged = nil
+        cache.removeAll(); jobs.removeAll()
+    }
+
+    private func uncover() {
+        if isCoveringNativeRows { nativeFallbacks += 1 }
+        isCoveringNativeRows = false; coverageChanged?(false); isHidden = true
+    }
+
+    /// Offscreen pixel validation also works when the screen is locked. It deliberately
+    /// says nothing about on-screen cadence; the release benchmark checks that separately.
+    func drawOffscreenForTesting() {
+        guard Self.allowsFrameCapture, frameSlot.isAvailable, let drawable = (layer as? CAMetalLayer)?.nextDrawable() else { return }
+        draw(drawable: drawable, allowOffscreen: true)
+    }
+
+    private func draw(drawable: CAMetalDrawable, allowOffscreen: Bool = false) {
+        drawCallbacks += 1
+        lastDrawState = "callback"
+        guard let window, (allowOffscreen || (window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible))),
+              let scroll, let scene = scene?(), bounds.width > 0, bounds.height > 0 else {
+            lastDrawState = "not visible"; displayDriver?.stop(); legacyClock?.stop(); return
+        }
+        guard frameSlot.isAvailable else { lastDrawState = "busy"; return }
+        let scale = window.backingScaleFactor, width = Int(ceil(bounds.width * scale))
+        guard drawable.texture.width == width, drawable.texture.height == Int(ceil(bounds.height * scale)) else {
+            lastDrawState = "resizing"; uncover(); return
+        }
+        let y = (scroll.contentView.bounds.minY * scale).rounded() / scale
+        let visibleRows = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
+        let first = visibleRows.lowerBound, end = visibleRows.upperBound
+        let visible = visibleRows
+        let prefetch = max(0, first - 16)..<min(scene.rows.count, max(first, end) + 16)
+        for index in prefetch {
+            let row = scene.rows[index]
+            if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
+            schedule(row, width: width, scale: scale)
+        }
+        guard visible.allSatisfy({ index in
+            let row = scene.rows[index]
+            return cache[row.id].map { $0.row == row && $0.width == width && $0.scale == scale } ?? false
+        }) else {
+                lastDrawState = "artwork missing"; uncover(); displayDriver?.stop(); legacyClock?.stop(); return
+        }
+        if !dirty, CACurrentMediaTime() > activeUntil {
+            lastDrawState = "idle"; displayDriver?.stop(); legacyClock?.stop(); return
+        }
+        let changed = y != lastPosition || sceneRevision != lastSceneRevision
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 20/255, green: 20/255, blue: 20/255, alpha: 1)
+        guard let command = queue.makeCommandBuffer(), let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { uncover(); return }
+        encoder.setRenderPipelineState(pipeline)
+        var viewport = SIMD2<Float>(Float(bounds.width), Float(bounds.height))
+        encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        for index in visible {
+            let row = scene.rows[index]
+            guard var art = cache[row.id] else { continue }
+            useCounter &+= 1; art.used = useCounter; cache[row.id] = art
+            let top = CGFloat(index) * 24 - y
+            let vertices: [SIMD4<Float>] = [
+                .init(0, Float(top), 0, 0), .init(Float(bounds.width), Float(top), 1, 0), .init(0, Float(top + 24), 0, 1),
+                .init(Float(bounds.width), Float(top), 1, 0), .init(Float(bounds.width), Float(top + 24), 1, 1), .init(0, Float(top + 24), 0, 1)]
+            vertices.withUnsafeBytes { encoder.setVertexBytes($0.baseAddress!, length: $0.count, index: 0) }
+            var fill: SIMD4<Float> = (index == scene.selected || row.item.id == scene.active) ? .init(repeating: 35/255) :
+                (index == scene.hovered ? .init(repeating: 33/255) : .init(repeating: 20/255))
+            fill.w = 1
+            encoder.setFragmentBytes(&fill, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            encoder.setFragmentTexture(art.texture, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+        encoder.endEncoding()
+        if let capture = captureNextFrame, !drawable.texture.isFramebufferOnly {
+            captureNextFrame = nil
+            capturePixels(drawable.texture, command: command, completion: capture)
+        }
+        lastDrawnRange = visible
+        guard frameSlot.acquire() else { return }
+        dirty = false; lastPosition = y; lastSceneRevision = sceneRevision
+        lastDrawState = "submitted"
+        isHidden = false
+        drawable.addPresentedHandler { [weak self] drawable in
+            let time = drawable.presentedTime
+            DispatchQueue.main.async { [weak self] in
+                guard let self, time > 0 else { return }
+                self.presentedFrames &+= 1
+                if changed { self.changedFrames &+= 1 }
+                self.motionSamples.append((time, Double(y), changed))
+                if self.motionSamples.count > 4000 { self.motionSamples.removeFirst(self.motionSamples.count - 4000) }
+                if !self.isHidden, !self.isCoveringNativeRows {
+                    self.isCoveringNativeRows = true; self.coverageChanged?(true)
+                }
+            }
+        }
+        let slot = frameSlot
+        command.addCompletedHandler { [weak self] command in
+            // Release on Metal's completion thread. Waiting for a main-run-loop hop can
+            // make an already completed frame reject the next display-link update.
+            slot.release()
+            guard command.status == .error else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.lastDrawState = command.error?.localizedDescription ?? "completed"
+                if command.status == .error { self.uncover(); self.displayDriver?.stop(); self.legacyClock?.stop() }
+            }
+        }
+        command.present(drawable); command.commit()
+    }
+
+    private func capturePixels(_ texture: MTLTexture, command: MTLCommandBuffer, completion: @escaping (CGImage) -> Void) {
+        let stride = (texture.width * 4 + 255) / 256 * 256
+        guard let buffer = device.makeBuffer(length: stride * texture.height, options: .storageModeShared),
+              let blit = command.makeBlitCommandEncoder() else { return }
+        blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: .init(x: 0, y: 0, z: 0),
+                  sourceSize: .init(width: texture.width, height: texture.height, depth: 1), to: buffer,
+                  destinationOffset: 0, destinationBytesPerRow: stride, destinationBytesPerImage: stride * texture.height)
+        blit.endEncoding()
+        command.addCompletedHandler { _ in
+            let data = Data(bytes: buffer.contents(), count: stride * texture.height)
+            guard let provider = CGDataProvider(data: data as CFData), let image = CGImage(width: texture.width, height: texture.height,
+                bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: stride, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else { return }
+            DispatchQueue.main.async { completion(image) }
+        }
+    }
+
+    private func schedule(_ row: ExplorerRow, width: Int, scale: CGFloat) {
+        let key = JobKey(id: row.id, width: width, scale: scale, generation: generation)
+        guard jobs.count < 64, !jobs.contains(key) else { return }
+        jobs.insert(key)
+        // Resolve AppKit symbols/colors/fonts on the main thread. CoreText rasterization
+        // and bitmap allocation run on the worker; there is no per-frame text shaping.
+        let look = SemanticFileIcon.appearance(url: row.item.url, directory: row.item.isDirectory, expanded: row.expanded)
+        let symbol = Self.symbol(look.symbol, size: 12)
+        let chevron = row.item.isDirectory ? Self.symbol(row.expanded ? "chevron.down" : "chevron.right", size: 8) : nil
+        let text = NSColor(row.git?.color ?? NeoLinkTheme.textPrimary).cgColor
+        let iconColor = NSColor(look.color).cgColor
+        let secondary = NSColor(NeoLinkTheme.textSecondary).cgColor
+        let badgeColor = NSColor(row.git?.color ?? NeoLinkTheme.textSecondary).cgColor
+        let diagnosticColor = NSColor(row.diagnostics.errors > 0 ? NeoLinkTheme.error : NeoLinkTheme.warning).cgColor
+        let nameFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 12).fontName as CFString, 12, nil)
+        let smallFont = CTFontCreateWithName(NSFont.monospacedSystemFont(ofSize: 8, weight: .bold).fontName as CFString, 8, nil)
+        let badgeFont = CTFontCreateWithName(NSFont.monospacedSystemFont(ofSize: 10, weight: .medium).fontName as CFString, 10, nil)
+        worker.async { [weak self] in
+            let art = Self.raster(row, width: width, scale: scale, abbreviation: look.abbreviation, symbol: symbol,
+                chevron: chevron, text: text, iconColor: iconColor, secondary: secondary, badgeColor: badgeColor,
+                diagnosticColor: diagnosticColor, nameFont: nameFont, smallFont: smallFont, badgeFont: badgeFont)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.jobs.remove(key)
+                guard key.generation == self.generation, let art else { return }
+                let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: art.width, height: art.height, mipmapped: false)
+                descriptor.usage = .shaderRead; descriptor.storageMode = .shared
+                guard let texture = self.device.makeTexture(descriptor: descriptor) else { self.uncover(); return }
+                art.pixels.withUnsafeBytes { pixels in
+                    texture.replace(region: MTLRegionMake2D(0, 0, art.width, art.height), mipmapLevel: 0,
+                                    withBytes: pixels.baseAddress!, bytesPerRow: art.width * 4)
+                }
+                self.useCounter &+= 1
+                self.cache[row.id] = Artwork(row: row, width: width, scale: scale, texture: texture, used: self.useCounter)
+                if self.cache.count > Self.cacheLimit, let oldest = self.cache.min(by: { $0.value.used < $1.value.used })?.key {
+                    self.cache.removeValue(forKey: oldest)
+                }
+                let budget = max(24 * 1024 * 1024, width * Int(self.bounds.height * scale) * 8)
+                var bytes = self.cache.values.reduce(0) { $0 + $1.texture.width * $1.texture.height * 4 }
+                while bytes > budget, let oldest = self.cache.min(by: { $0.value.used < $1.value.used }) {
+                    bytes -= oldest.value.texture.width * oldest.value.texture.height * 4
+                    self.cache.removeValue(forKey: oldest.key)
+                }
+                self.invalidateScene(contentChanged: false)
+            }
+        }
+    }
+
+    private static var symbols: [String: CGImage] = [:]
+    private static func symbol(_ name: String, size: CGFloat) -> CGImage? {
+        let key = "\(name):\(size)"
+        if let image = symbols[key] { return image }
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: size, weight: .regular))?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        symbols[key] = image; return image
+    }
+
+    nonisolated private static func raster(_ row: ExplorerRow, width: Int, scale: CGFloat, abbreviation: String?, symbol: CGImage?,
+        chevron: CGImage?, text: CGColor, iconColor: CGColor, secondary: CGColor, badgeColor: CGColor, diagnosticColor: CGColor,
+        nameFont: CTFont, smallFont: CTFont, badgeFont: CTFont) -> Raster? {
+        let height = Int(24 * scale)
+        guard width > 0, height > 0, let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        if row.git == .ignored { context.setAlpha(0.55) }
+        func line(_ string: String, font: CTFont, color: CGColor, x: CGFloat, width: CGFloat, centered: Bool = false) {
+            guard width > 0 else { return }
+            let attributes: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): font,
+                                                           NSAttributedString.Key(kCTForegroundColorAttributeName as String): color]
+            let full = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attributes))
+            let token = CTLineCreateWithAttributedString(NSAttributedString(string: "…", attributes: attributes))
+            let fitted = CTLineCreateTruncatedLine(full, Double(width), .middle, token) ?? full
+            let extent = CGFloat(CTLineGetTypographicBounds(fitted, nil, nil, nil))
+            context.saveGState()
+            context.clip(to: CGRect(x: x, y: 0, width: width, height: 24))
+            context.textPosition = CGPoint(x: x + (centered ? max(0, (width - extent) / 2) : 0), y: CTFontGetSize(font) == 12 ? 7 : 8)
+            CTLineDraw(fitted, context)
+            context.restoreGState()
+        }
+        func icon(_ image: CGImage?, rect: CGRect, color: CGColor) {
+            guard let image else { return }
+            context.saveGState(); context.clip(to: rect, mask: image)
+            context.setFillColor(color); context.fill(rect); context.restoreGState()
+        }
+        let inset = 8 + CGFloat(row.depth) * 12
+        icon(chevron, rect: CGRect(x: inset, y: 8, width: 10, height: 8), color: secondary)
+        if let abbreviation { line(abbreviation, font: smallFont, color: iconColor, x: inset + 15, width: 17, centered: true) }
+        else { icon(symbol, rect: CGRect(x: inset + 15, y: 4, width: 17, height: 16), color: iconColor) }
+        var right = CGFloat(width) / scale - 8
+        for (value, color) in [(row.git == nil || row.git == .ignored ? "" : row.git!.rawValue, badgeColor),
+                               (row.diagnostics.count == 0 ? "" : String(row.diagnostics.count), diagnosticColor)] where !value.isEmpty {
+            let extent = CGFloat(value.count) * 7
+            right -= extent; line(value, font: badgeFont, color: color, x: right, width: extent); right -= 7
+        }
+        line(row.name, font: nameFont, color: text, x: inset + 37, width: max(0, right - inset - 37))
+        guard let data = context.data else { return nil }
+        return Raster(width: width, height: height, pixels: Data(bytes: data, count: width * height * 4))
+    }
+
+    nonisolated private static func pipeline(device: MTLDevice) -> MTLRenderPipelineState? {
+        let source = """
+        #include <metal_stdlib>
+        using namespace metal;
+        struct V { float4 position [[position]]; float2 uv; };
+        vertex V explorer_vertex(uint i [[vertex_id]], constant float4 *v [[buffer(0)]], constant float2 &size [[buffer(1)]]) {
+            V out; out.position = float4(v[i].x / size.x * 2 - 1, 1 - v[i].y / size.y * 2, 0, 1); out.uv = v[i].zw; return out;
+        }
+        fragment float4 explorer_fragment(V in [[stage_in]], texture2d<float> art [[texture(0)]], constant float4 &fill [[buffer(0)]]) {
+            constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::nearest);
+            float4 ink = art.sample(s, in.uv); return ink + fill * (1 - ink.a);
+        }
+        """
+        guard let library = try? device.makeLibrary(source: source, options: nil) else { return nil }
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = library.makeFunction(name: "explorer_vertex")
+        descriptor.fragmentFunction = library.makeFunction(name: "explorer_fragment")
+        descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        return try? device.makeRenderPipelineState(descriptor: descriptor)
+    }
+}
+
+/// The command's private vertex bytes and immutable textures need no main-thread cleanup.
+/// The next display callback can proceed as soon as Metal completes the previous command.
+final class ExplorerFrameSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var busy = false
+    var isAvailable: Bool { lock.lock(); defer { lock.unlock() }; return !busy }
+    func acquire() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !busy else { return false }
+        busy = true
+        return true
+    }
+    func release() { lock.lock(); busy = false; lock.unlock() }
+}
