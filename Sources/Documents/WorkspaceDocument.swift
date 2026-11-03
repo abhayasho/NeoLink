@@ -94,6 +94,7 @@ final class WorkspaceDocument: NSObject, ObservableObject, Identifiable, NSTextV
                             throw NSError(domain: "NeoLink", code: 1, userInfo: [NSLocalizedDescriptionKey: "This file exceeds the 128 MB editor limit."])
                         }
                     }.value
+                    PhaseTrace.mark("open.fileChecked")
                     guard let self, !self.isClosed else { return }
                     if !(await neovim.request(["method":"open", "path":url.path])) { self.error = neovim.error }
                 } catch { self?.error = error.localizedDescription }

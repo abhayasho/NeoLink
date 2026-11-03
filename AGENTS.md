@@ -8,8 +8,10 @@ NeoLink is a native macOS (13+) SwiftUI/AppKit coding workspace: tabbed terminal
 - One executable module: everything under `Sources/` is the `NeoLink` target. The directory split (`Terminal/`, `Documents/`, etc.) is organizational only, so cross-folder `internal` access is normal. No `@main`; `Sources/main.swift` starts `NSApplication` directly.
 
 ## Verify
-- `swift test` — 92 native tests, temporary files only; no SSH server or credentials needed. `SmoothScrollRenderingTests` renders with Metal and compares pixels (skips without a GPU).
+- `swift test` — native regression tests, temporary files only; no SSH server or credentials needed. `SmoothScrollRenderingTests` renders with Metal and compares pixels (skips without a GPU).
 - `python3 scripts/test-editor.py` — real Neovim runtime regression; requires `nvim` on `PATH`. Uses `Resources/Editor/neolink.lua` and checks buffers, saves, external conflicts, UTF-16/CRLF, large-file mode, optional Pyright LSP.
+- `python3 scripts/test-benchmark.py` — offline build-failure/scroll-validity checks; does not launch the GUI.
+- The project tree is a native reusable-row `NSTableView` (`Sources/FileBrowser/ExplorerTableView.swift`). Hover and decorations update cells locally; refresh preserves the visible snapshot. Folder List and SFTP retain their own views.
 - ACP tests launch the offline fixture `scripts/fixtures/acp-agent.py` via `python3`.
 - No CI, linter, or formatter config exists in the repo; those two commands are the verification path.
 - Rendering/latency changes: run the interaction benchmark (`NEOLINK_BENCHMARK=...`, see `docs/RENDERING.md`) on a release build with the window frontmost and the screen unlocked; an occluded window pauses its clock and invalidates the run.

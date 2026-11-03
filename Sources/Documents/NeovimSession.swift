@@ -57,6 +57,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
 
     func start() {
         guard !isStarted, let executable else { return }
+        PhaseTrace.mark("editor.start")
         do {
             // Unix-domain socket paths have a short length limit on macOS.
             let directory = URL(fileURLWithPath: "/tmp").appendingPathComponent("neolink-\(UUID().uuidString)")
@@ -70,7 +71,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
                 watcher.resume()
                 self.watcher = watcher
             }
-            let terminal = CodeTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+            let terminal = PhaseTrace.measure("editor.viewCreation") { CodeTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500)) }
             terminal.session = self
             terminal.onActivate = { [weak self] in self?.onEditorFocus?() }
             terminal.processDelegate = self
@@ -85,20 +86,25 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
             let state = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("NeoLink/EditorState", isDirectory: true)
             try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
             environment["XDG_STATE_HOME"] = state.path
-            terminal.startProcess(executable: executable,
-                args: ["--noplugin", "-u", Self.configurationURL.path, "-i", "NONE", "--listen", directory.appendingPathComponent("editor.sock").path],
-                environment: environment.map { "\($0.key)=\($0.value)" },
-                currentDirectory: WorkspaceAccess.shared.projectURL?.path ?? FileManager.default.homeDirectoryForCurrentUser.path)
+            PhaseTrace.measure("editor.spawn") {
+                terminal.startProcess(executable: executable,
+                    args: ["--noplugin", "-u", Self.configurationURL.path, "-i", "NONE", "--listen", directory.appendingPathComponent("editor.sock").path],
+                    environment: environment.map { "\($0.key)=\($0.value)" },
+                    currentDirectory: WorkspaceAccess.shared.projectURL?.path ?? FileManager.default.homeDirectoryForCurrentUser.path)
+            }
             isStarted = true
             startup = Task { [weak self] in
-                for _ in 0..<200 {
+                // status.json appears when Neovim has loaded neolink.lua (about 120 ms). A
+                // 5 ms poll notices it within a frame; each check is one stat.
+                for _ in 0..<1_000 {
                     guard !Task.isCancelled else { return }
                     if FileManager.default.fileExists(atPath: directory.appendingPathComponent("status.json").path) {
+                        PhaseTrace.mark("editor.neovimReady")
                         self?.readPublishedState()
                         self?.isReady = true
                         return
                     }
-                    try? await Task.sleep(nanoseconds: 25_000_000)
+                    try? await Task.sleep(nanoseconds: 5_000_000)
                 }
                 self?.error = "Neovim did not finish starting. Close and reopen NeoLink to retry."
             }
@@ -148,7 +154,10 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
                 let data = try JSONSerialization.data(withJSONObject: message)
                 let json = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "'", with: "''")
                 let expression = "luaeval('NeoLink.dispatch(_A)', '\(json)')"
+                let opening = message["method"] as? String == "open"
+                if opening { PhaseTrace.mark("editor.openRequest.begin") }
                 let result = try await CommandRunner.run(executable, ["--server", directory.appendingPathComponent("editor.sock").path, "--remote-expr", expression], timeout: 8)
+                if opening { PhaseTrace.mark("editor.openRequest.end") }
                 struct Response: Decodable { let ok: Bool; let error: String; let state: NeovimSnapshot }
                 guard result.status == 0 else { throw NSError(domain: "Neovim", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: String(decoding: result.output, as: UTF8.self)]) }
                 let response = try JSONDecoder().decode(Response.self, from: result.output)
@@ -231,13 +240,17 @@ final class NeovimHostView: NSView {
             // Avoid AppKit's key-view search while SwiftUI is updating (see TerminalHostView).
             window.makeFirstResponder(nil)
         }
-        if terminal?.isHidden != !active { terminal?.isHidden = !active }
+        if terminal?.isHidden != !active {
+            terminal?.isHidden = !active
+            if active { PhaseTrace.mark("editor.shown") }
+        }
         needsLayout = true
         if active, terminal != nil, mounting || self.selection != selection {
             self.selection = selection
             DispatchQueue.main.async { [weak self] in
                 guard let self, let terminal = self.terminal, !terminal.isHidden else { return }
                 self.window?.makeFirstResponder(terminal)
+                PhaseTrace.mark("editor.focused")
             }
         } else if !active { self.selection = nil }
     }

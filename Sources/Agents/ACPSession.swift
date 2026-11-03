@@ -45,6 +45,8 @@ final class ACPSession: ObservableObject, Identifiable {
     private var generation = UUID()
     private var task: Task<Void, Never>?
     private var responseID: UUID?
+    /// The agent message receiving streamed text during this turn, if any.
+    var streamingMessageID: UUID? { isBusy ? responseID : nil }
     private var messageID: String?
     private var receivedCharacters = 0
     private var cancelling = false

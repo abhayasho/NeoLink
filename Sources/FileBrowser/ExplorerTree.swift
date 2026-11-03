@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-struct ExplorerRow: Identifiable, Sendable {
+struct ExplorerRow: Identifiable, Equatable, Sendable {
     /// Identity belongs to the first folder in a compact chain, independent of its label.
     let id: URL
     let item: LocalFileItem
@@ -38,6 +38,7 @@ actor ExplorerDirectoryLoader {
 @MainActor
 final class ExplorerTree: ObservableObject {
     @Published private(set) var rows: [ExplorerRow] = []
+    private(set) var rowsRevision = 0
     @Published private(set) var isLoading = false
     @Published private(set) var limited = false
     @Published private(set) var revealRevision = 0
@@ -49,6 +50,7 @@ final class ExplorerTree: ObservableObject {
     private(set) var children: [URL: [LocalFileItem]] = [:]
     private var loads: [URL: Task<Void, Never>] = [:]
     private var failed: Set<URL> = []
+    private var stale: Set<URL> = []
     private var generation = UUID()
     private var gitTask: Task<Void, Never>?
     private var gitGeneration = UUID()
@@ -73,7 +75,12 @@ final class ExplorerTree: ObservableObject {
         let changedRoot = self.root != root
         let needsReload = changedRoot || self.hidden != hidden || self.compact != compact
         self.hidden = hidden; self.compact = compact; self.hideIgnored = hideIgnored
-        if changedRoot { self.root = root; expanded = []; selectedURL = nil; git = nil; pendingReveal = false; observeRoot() }
+        if changedRoot {
+            self.root = root; expanded = []; selectedURL = nil; git = nil; pendingReveal = false
+            children = [:]; stale = []
+            if !rows.isEmpty { rowsRevision += 1; rows = [] }
+            observeRoot()
+        }
         if needsReload { reload() } else { rebuild() }
     }
     func setActive(_ active: Bool) {
@@ -102,8 +109,10 @@ final class ExplorerTree: ObservableObject {
     func reload() {
         generation = UUID()
         loads.values.forEach { $0.cancel() }; loads = [:]
-        children = [:]; failed = []; limited = false; error = nil
-        pendingReveal = selectedURL != nil
+        // Keep the last visible snapshot while revalidating cached listings. A refresh
+        // must not publish an empty tree or re-center the active file during scrolling.
+        stale = Set(children.keys)
+        failed = []; limited = false; error = nil
         rebuild(); refreshGit()
     }
     func refreshGit() {
@@ -153,25 +162,28 @@ final class ExplorerTree: ObservableObject {
         guard let root else { return }
         projectionTask?.cancel()
         let revision = UUID(); projectionRevision = revision
-        let children = children, expanded = expanded, failed = failed, git = git
+        let children = children, expanded = expanded, failed = failed, git = git, stale = stale
         let hidden = hidden, compact = compact, hideIgnored = hideIgnored, query = query
         let diagnostics = diagnostics, selectedURL = selectedURL
         isLoading = true
         let worker = Task.detached(priority: .userInitiated) {
             try ExplorerProjection.build(root: root, children: children, expanded: expanded, failed: failed,
                 git: git, hidden: hidden, compact: compact, hideIgnored: hideIgnored, query: query,
-                diagnostics: diagnostics, selectedURL: selectedURL)
+                diagnostics: diagnostics, selectedURL: selectedURL, stale: stale)
         }
         projectionTask = Task { [weak self] in
             do {
                 let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 try Task.checkCancellation()
                 guard let self, self.projectionRevision == revision else { return }
-                self.rows = result.rows
+                if self.rows != result.rows {
+                    self.rowsRevision += 1
+                    self.rows = result.rows
+                }
                 self.limited = self.limited || result.limited
                 for directory in result.virtualDirectories { self.children[directory] = self.children[directory] ?? [] }
                 for directory in result.needed where self.loads.count < 2 && self.loads[directory] == nil {
-                    if self.children.count >= 128 { self.limited = true; continue }
+                    if self.children[directory] == nil && self.children.count >= 128 { self.limited = true; continue }
                     self.startLoad(directory)
                 }
                 self.isLoading = !self.loads.isEmpty
@@ -191,11 +203,12 @@ final class ExplorerTree: ObservableObject {
                 guard let self, self.generation == token else { return }
                 self.loads.removeValue(forKey: directory)
                 self.children.merge(loaded.children) { _, new in new }
+                self.stale.subtract(loaded.children.keys)
                 self.limited = self.limited || loaded.limited
                 self.rebuild()
             } catch is CancellationError {} catch {
                 guard let self, self.generation == token else { return }
-                self.loads.removeValue(forKey: directory); self.failed.insert(directory)
+                self.loads.removeValue(forKey: directory); self.failed.insert(directory); self.stale.remove(directory)
                 self.error = "\(directory.lastPathComponent): \(error.localizedDescription)"; self.rebuild()
             }
         }
@@ -212,7 +225,7 @@ struct ExplorerProjection: Sendable {
 
     static func build(root: URL, children: [URL: [LocalFileItem]], expanded: Set<URL>, failed: Set<URL>,
                       git: ExplorerGitSnapshot?, hidden: Bool, compact: Bool, hideIgnored: Bool,
-                      query: String, diagnostics: [String: ExplorerDiagnostics], selectedURL: URL?) throws -> Self {
+                      query: String, diagnostics: [String: ExplorerDiagnostics], selectedURL: URL?, stale: Set<URL> = []) throws -> Self {
         var limited = false, virtualDirectories: Set<URL> = []
         let diagnostics = Dictionary(diagnostics.map { (URL(fileURLWithPath: $0.key).standardizedFileURL.path, $0.value) }, uniquingKeysWith: +)
         var folderDiagnostics: [String: ExplorerDiagnostics] = [:]
@@ -227,8 +240,12 @@ struct ExplorerProjection: Sendable {
             }
         }
         var result: [ExplorerRow] = [], needed: [URL] = []
+        var requested: Set<URL> = []
         let filter = query.trimmingCharacters(in: .whitespacesAndNewlines)
         func entries(in directory: URL) -> [LocalFileItem] {
+            if stale.contains(directory), !failed.contains(directory), requested.insert(directory).inserted {
+                needed.append(directory)
+            }
             var source = children[directory] ?? []
             let known = Set(source.map(\.id))
             let deleted = (git?.deletedChildren(in: directory) ?? []).filter {
@@ -245,7 +262,9 @@ struct ExplorerProjection: Sendable {
         }
         func walk(_ directory: URL, depth: Int) throws {
             guard depth < 32, result.count < 5_000 else { limited = true; return }
-            if children[directory] == nil, !failed.contains(directory) { needed.append(directory) }
+            if children[directory] == nil, !virtualDirectories.contains(directory), !failed.contains(directory), requested.insert(directory).inserted {
+                needed.append(directory)
+            }
             let known = Set((children[directory] ?? []).map(\.id))
             for original in entries(in: directory) {
                 try Task.checkCancellation()

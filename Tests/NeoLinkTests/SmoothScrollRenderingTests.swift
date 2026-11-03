@@ -86,6 +86,100 @@ final class SmoothScrollRenderingTests: XCTestCase {
     }
 
     @MainActor
+    func testLinesThatEnteredAndLeftTheRegionBetweenFramesAreDrawnAtTheEdge() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        defer { TerminalView.allowsMetalFrameCapture = false }
+        let content = "\u{1B}[?1049h\u{1B}[2J\u{1B}[H" + (1...40).map { "\($0) lazy dog \(String(repeating: "%", count: $0 % 17))" }.joined(separator: "\r\n") + "\u{1B}[?25l"
+        // The program scrolls up two lines and writes them; a reversal then scrolls them out
+        // again, all before the next frame, so the renderer never drew those two lines.
+        let insertTwo = "\u{1B}[H\u{1B}[2L\u{1B}[1;1Hnew first line\u{1B}[2;1Hnew second line"
+        let (window, view) = makeMetalTerminal()
+        defer { window.close() }
+        let (referenceWindow, reference) = makeMetalTerminal()
+        defer { referenceWindow.close() }
+        try view.setUseMetal(true)
+        try reference.setUseMetal(true)
+        view.feed(text: content)
+        reference.feed(text: content + insertTwo)
+        _ = try capture(view)
+        let expected = try capture(reference)
+
+        view.feed(text: insertTwo + "\u{1B}[H\u{1B}[2M")
+        let cell = try XCTUnwrap(view.cellSizeInPixels(source: view.getTerminal())).height
+        let scale = window.backingScaleFactor
+        XCTAssertEqual(view.smoothScrollRange.upperBound, CGFloat(2 * cell) / scale, "Both lines are retained")
+        view.smoothScrollSource = .program
+        // Drawn two lines lower: the screen as it was with the two lines on top.
+        view.smoothScrollOffset = CGFloat(2 * cell) / scale
+        let whole = try capture(view)
+        let region = 0..<(view.getTerminal().rows - 2) * cell
+        XCTAssertGreaterThan(rowsMatching(whole, expected, offset: 0, rows: region), 0.99)
+        // A line and a half lower: the same screen moved up half a line, the edge included.
+        let half = cell / 2
+        view.smoothScrollOffset = CGFloat(2 * cell - half) / scale
+        let fractional = try capture(view)
+        XCTAssertGreaterThan(rowsMatching(fractional, expected, offset: half, rows: 0..<(region.upperBound - half)), 0.99)
+        XCTAssertEqual(view.metalLastDrawnScrollOffset, CGFloat(2 * cell - half) / scale, accuracy: 1 / scale)
+        view.smoothScrollOffset = 0
+    }
+
+    @MainActor
+    func testFramesWaitForTheEndOfASynchronizedUpdate() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        let (window, view) = makeMetalTerminal()
+        defer { window.close() }
+        try view.setUseMetal(true)
+        view.feed(text: "\u{1B}[?1049h\u{1B}[2J\u{1B}[H" + (1...40).map { "line \($0)" }.joined(separator: "\r\n"))
+        view.feed(text: "\u{1B}[H\u{1B}[M") // One retained line, so an offset is drawable.
+        view.drawMetalFrameNow()
+        var scheduled: [() -> Void] = []
+        view.metalFrameScheduler = { scheduled.append($0) }
+        defer { view.metalFrameScheduler = nil }
+        let scale = window.backingScaleFactor
+        let cell = CGFloat(try XCTUnwrap(view.cellSizeInPixels(source: view.getTerminal())).height) / scale
+        view.smoothScrollSource = .program
+
+        // A redraw requested while a program's update is open is not scheduled.
+        view.feed(text: "\u{1B}[?2026h")
+        view.smoothScrollOffset = cell / 2
+        XCTAssertTrue(scheduled.isEmpty)
+        view.feed(text: "\u{1B}[?2026l")
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        scheduled.removeAll()
+
+        // A frame requested before an update began does not draw while the update is open.
+        view.smoothScrollOffset = cell / 4
+        XCTAssertEqual(scheduled.count, 1)
+        view.feed(text: "\u{1B}[?2026h\u{1B}[5;1Hhalf-written")
+        let before = view.metalLastDrawnScrollOffset
+        scheduled.forEach { $0() }; scheduled.removeAll()
+        XCTAssertEqual(view.metalLastDrawnScrollOffset, before, "Nothing drawn mid-update")
+
+        // The update's end brings a frame.
+        view.feed(text: " update\u{1B}[?2026l")
+        let deadline = Date(timeIntervalSinceNow: 1)
+        while scheduled.isEmpty && Date() < deadline { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01)) }
+        XCTAssertFalse(scheduled.isEmpty)
+        scheduled.forEach { $0() }
+        XCTAssertEqual(view.metalLastDrawnScrollOffset, cell / 4, accuracy: 1 / scale)
+        view.smoothScrollOffset = 0
+    }
+
+    @MainActor
+    private func makeMetalTerminal() -> (NSWindow, TerminalView) {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 320), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let view = TerminalView(frame: window.contentView!.bounds)
+        window.contentView!.addSubview(view)
+        window.orderFrontRegardless()
+        return (window, view)
+    }
+
+    @MainActor
     private func capture(_ view: TerminalView) throws -> CGImage {
         let done = expectation(description: "frame")
         var image: CGImage?

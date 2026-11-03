@@ -120,9 +120,9 @@ final class InputLatencySchedulingTests: XCTestCase {
         let surface = NSObject(), id = ObjectIdentifier(surface)
         var tag: UInt64 = 0, bypass = false, presentations = 0
         frames.noteInteraction()
-        frames.noteKeyInput(timestamp: time)
+        frames.noteKeyInput(timestamp: time, surface: id)
         time += 0.001
-        frames.enqueue {
+        frames.enqueue(from: id) {
             frames.requestPresentation(id, outputAt: time) {
                 presentations += 1; tag = frames.presentationTag; bypass = frames.presentationMayBypassVsync
             }
@@ -137,9 +137,41 @@ final class InputLatencySchedulingTests: XCTestCase {
 
         // A second frame within 1.5 refresh intervals keeps vsync, so neither is dropped.
         frames.requestPresentation(id, outputAt: time) { bypass = frames.presentationMayBypassVsync }
-        frames.noteKeyInput(timestamp: time)
+        frames.noteKeyInput(timestamp: time, surface: id)
         clock.fire()
         XCTAssertFalse(bypass)
+    }
+
+    @MainActor
+    func testOnlyTheFocusedSurfacesOutputAnswersAKeyPressAndExpiredPressesAreCounted() async throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let clock = ManualFrameClock()
+        var time = 50.0
+        let frames = WindowFrameScheduler(window: window, clockFactory: { _, _, tick in clock.tick = tick; return clock },
+                                          visibility: { true }, now: { time })
+        defer { frames.invalidate() }
+        let editor = NSObject(), agent = NSObject()
+        let editorID = ObjectIdentifier(editor), agentID = ObjectIdentifier(agent)
+        var agentTag: UInt64 = 0, immediate = 0
+        frames.noteInteraction()
+        frames.noteKeyInput(timestamp: time, surface: editorID)
+        // An agent terminal streams output in the same window: it must not answer the key.
+        frames.enqueue(from: agentID) {
+            frames.requestPresentation(agentID, outputAt: time) { agentTag = frames.presentationTag; immediate += 1 }
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(immediate, 0, "Unrelated output does not get an immediate frame")
+        clock.fire()
+        frames.framePresented(tag: agentTag, presentedTime: time + 0.02)
+        XCTAssertEqual(frames.presentation.answeredInputs, 0)
+        XCTAssertTrue(frames.presentation.inputLatencies.isEmpty)
+        // The editor never answers; after 0.5 s the press is reported as unmatched.
+        time += 0.6
+        frames.noteKeyInput(timestamp: time, surface: editorID)
+        XCTAssertEqual(frames.presentation.unmatchedInputs, 1)
     }
 
     @MainActor
@@ -161,44 +193,179 @@ final class InputLatencySchedulingTests: XCTestCase {
     }
 }
 
-final class SmoothScrollModelTests: XCTestCase {
-    func testGridMovesAheadOfTheTrackpadAndTheRendererDrawsTheRemainder() {
-        var model = SmoothScrollModel()
-        // Scrolling down (toward the bottom) by 0.3 lines asks the grid for one whole line.
-        XCTAssertEqual(model.input(-0.3, at: 1.0, range: 0...0), -1)
-        XCTAssertEqual(model.offset, -0.3, accuracy: 1e-9)
-        // The program scrolled; one retained line is now available above the region.
-        model.gridMoved(-1, at: 1.002, range: 0...1)
-        XCTAssertEqual(model.offset, 0.7, accuracy: 1e-9, "Drawn 0.7 lines lower than the moved grid: 0.3 lines below the start")
-        XCTAssertEqual(model.pending, 0)
-        XCTAssertEqual(model.input(-0.5, at: 1.010, range: 0...1), 0, "Still inside the requested line")
-        XCTAssertEqual(model.input(-0.4, at: 1.020, range: 0...1), -1)
+/// Drives `SmoothScrollModel` with a program that answers every request at once, one wheel
+/// report at a time like Neovim: by scrolling a full-width region, or (with `margins`) a
+/// region inside left and right margins.
+private struct ScrollSimulation {
+    var model = SmoothScrollModel()
+    var margins = false
+    /// Lines toward the top: of trackpad input, and of the grid once every request applies.
+    private(set) var input = 0.0, grid = 0.0
+    private(set) var moves: [Int] = []
+    /// Where the content is drawn, in the same units as `input`.
+    var drawn: Double { grid + model.offset }
+    static let range = -50.0...50.0
+
+    mutating func scroll(_ lines: Double, at time: Double, phase: SmoothScrollModel.Phase = .changed) {
+        input += lines
+        answer(model.input(lines, at: time, phase: phase, range: Self.range), at: time)
     }
 
-    func testOffsetEasesOutAfterInputStops() {
-        var model = SmoothScrollModel()
-        _ = model.input(0.4, at: 1.0, range: -1...0)
-        model.gridMoved(1, at: 1.001, range: -1...0)
-        XCTAssertEqual(model.offset, -0.6, accuracy: 1e-9)
-        XCTAssertTrue(model.step(at: 1.02, interval: 1.0 / 120, range: -1...0), "No easing while input continues")
-        XCTAssertEqual(model.offset, -0.6, accuracy: 1e-9)
-        var time = 1.06, frames = 0
-        while model.step(at: time, interval: 1.0 / 120, range: -1...0) { time += 1.0 / 120; frames += 1 }
-        XCTAssertEqual(model.offset, 0)
-        XCTAssertLessThan(frames, 30, "Settles within a quarter second at 120 Hz")
+    /// One frame of the window clock; returns whether the model keeps animating.
+    @discardableResult
+    mutating func frame(at time: Double) -> Bool {
+        let (active, move) = model.step(at: time, interval: 1.0 / 120, range: Self.range)
+        answer(move, at: time)
+        return active
+    }
+
+    private mutating func answer(_ move: Int, at time: Double) {
+        guard move != 0 else { return }
+        moves.append(move)
+        grid += Double(move)
+        for _ in 0..<abs(move) {
+            if margins {
+                model.gridStepped(move.signum(), at: time + 0.001)
+            } else {
+                model.gridMoved(move.signum(), at: time + 0.001, range: Self.range)
+            }
+        }
+    }
+}
+
+final class SmoothScrollModelTests: XCTestCase {
+    private let frame = 1.0 / 120
+
+    func testGridMovesAheadOfTheTrackpadAndTheRendererDrawsTheRemainder() {
+        var sim = ScrollSimulation()
+        for event in 0..<60 {
+            sim.scroll(-0.25, at: 1 + Double(event) * frame) // Toward the bottom, 30 lines per second.
+            XCTAssertEqual(sim.drawn, sim.input, accuracy: 1e-9, "The content follows the fingers exactly")
+            XCTAssertGreaterThanOrEqual(sim.model.offset, sim.model.lookahead - 1e-9,
+                                        "The grid stays a speed-dependent margin ahead (event \(event))")
+        }
+        XCTAssertTrue(sim.moves.allSatisfy { $0 < 0 }, "Requests go only in the direction of travel")
+        XCTAssertGreaterThan(sim.model.lookahead, 1, "30 lines per second keeps more than a line in hand")
+    }
+
+    func testLiftGlidesOnInTheDirectionOfTravelAndLandsOnALine() {
+        var sim = ScrollSimulation()
+        var time = 1.0
+        for _ in 0..<30 { sim.scroll(-0.25, at: time); time += frame }
+        let lifted = sim.input
+        sim.scroll(0, at: time, phase: .ended)
+        // Momentum may still follow: nothing moves for the first 30 ms.
+        for _ in 0..<3 { time += frame; sim.frame(at: time); XCTAssertEqual(sim.drawn, lifted, accuracy: 1e-9) }
+        var previous = sim.drawn, frames = 0
+        repeat {
+            time += frame; frames += 1
+            let active = sim.frame(at: time)
+            XCTAssertLessThanOrEqual(sim.drawn, previous + 1e-9, "Never moves back against the gesture")
+            XCTAssertGreaterThan(sim.drawn, lifted - 1, "Glides less than a line past the fingers")
+            previous = sim.drawn
+            if !active { break }
+        } while frames < 120
+        XCTAssertLessThan(frames, 40, "At rest within a third of a second")
+        XCTAssertEqual(sim.model.offset, 0)
+        XCTAssertEqual(sim.model.pending, 0)
+        XCTAssertEqual(sim.drawn, sim.grid, "Lands on a whole line")
+    }
+
+    func testMomentumContinuesTheGestureAndItsEndSettles() {
+        var sim = ScrollSimulation()
+        var time = 1.0
+        for _ in 0..<10 { sim.scroll(0.3, at: time); sim.frame(at: time + 0.004); time += frame }
+        sim.scroll(0, at: time, phase: .ended)
+        for event in 0..<60 {
+            time += frame
+            sim.scroll(0.3 * pow(0.95, Double(event)), at: time, phase: .momentum)
+            sim.frame(at: time + 0.004)
+            XCTAssertFalse(sim.model.settling)
+            XCTAssertEqual(sim.drawn, sim.input, accuracy: 1e-9, "Momentum is followed like the fingers")
+        }
+        time += frame
+        sim.scroll(0, at: time, phase: .momentumEnded)
+        var previous = sim.drawn, frames = 0
+        while sim.frame(at: time) && frames < 120 {
+            XCTAssertGreaterThanOrEqual(sim.drawn, previous - 1e-9, "Settles toward the top, the direction of travel")
+            previous = sim.drawn; time += frame; frames += 1
+        }
+        XCTAssertEqual(sim.model.offset, 0)
+        XCTAssertEqual(sim.drawn, sim.grid)
+    }
+
+    func testDirectionReversalsKeepFollowingTheFingers() {
+        var sim = ScrollSimulation()
+        var time = 1.0
+        for _ in 0..<20 { sim.scroll(-0.4, at: time); time += frame }
+        let movesBefore = sim.moves.count
+        for _ in 0..<20 {
+            sim.scroll(0.4, at: time); time += frame
+            XCTAssertEqual(sim.drawn, sim.input, accuracy: 1e-9)
+        }
+        XCTAssertGreaterThan(sim.moves.count, movesBefore)
+        XCTAssertTrue(sim.moves[movesBefore...].allSatisfy { $0 > 0 }, "After the reversal the grid moves the new way")
     }
 
     func testRequestsAProgramIgnoresExpireAndProgramScrollsOutsideAGestureSnap() {
         var model = SmoothScrollModel()
-        // At the top of a file the program never scrolls up; the offset stays bounded.
-        XCTAssertEqual(model.input(0.5, at: 1.0, range: 0...0), 1)
-        XCTAssertLessThanOrEqual(model.offset, 1)
-        _ = model.step(at: 1.2, interval: 1.0 / 120, range: 0...0)
+        // At the top of a file the program never scrolls up and writes nothing.
+        let requested = model.input(0.5, at: 1.0, range: 0...0)
+        XCTAssertGreaterThan(requested, 0)
+        XCTAssertEqual(model.pending, requested)
+        var time = 1.2, frames = 0
+        while model.step(at: time, interval: frame, range: 0...0).active && frames < 60 { time += frame; frames += 1 }
         XCTAssertEqual(model.pending, 0)
-        XCTAssertEqual(model.offset, 0)
+        XCTAssertEqual(model.offset, 0, "Bounded by the lines that can be drawn")
+        XCTAssertFalse(model.stepping, "Silence means the request was ignored, not answered by a redraw")
         // A keyboard-driven scroll long after the gesture is shown as is.
         model.gridMoved(3, at: 5.0, range: -3...0)
         XCTAssertEqual(model.offset, 0)
+    }
+
+    func testScrollsWithinMarginsAreFollowedInWholeLinesWithoutOverscrolling() {
+        var sim = ScrollSimulation()
+        sim.margins = true // One window of a side-by-side split.
+        var time = 1.0
+        for _ in 0..<40 {
+            sim.scroll(-0.3, at: time); time += frame
+            XCTAssertEqual(sim.model.offset, 0, "A region inside margins is never drawn offset")
+        }
+        XCTAssertTrue(sim.model.stepping)
+        XCTAssertEqual(sim.grid, sim.input, accuracy: 0.5 + 1e-9, "Ends within half a line of the fingers")
+        XCTAssertTrue(sim.moves.allSatisfy { $0 < 0 }, "No request against the fingers")
+        // The next gesture steps from its start: one line per line of input.
+        while sim.frame(at: time), time < 5 { time += frame }
+        time += 1
+        sim.model.beginGesture()
+        let start = (input: sim.input, grid: sim.grid)
+        for _ in 0..<40 {
+            sim.scroll(-0.3, at: time); time += frame
+            XCTAssertEqual(sim.grid - start.grid, sim.input - start.input, accuracy: 0.5 + 1e-9)
+        }
+        // Once the program answers with a full-width region again, gestures are smooth.
+        sim.margins = false
+        sim.scroll(-1.5, at: time)
+        while sim.frame(at: time), time < 10 { time += frame }
+        sim.model.beginGesture()
+        XCTAssertFalse(sim.model.stepping)
+    }
+
+    func testAProgramThatRedrawsIsFollowedInWholeLines() {
+        var model = SmoothScrollModel()
+        var input = -0.3, requested = model.input(-0.3, at: 1.0, range: 0...0)
+        XCTAssertLessThan(requested, 0)
+        model.noteOutput(40_000) // A full-screen redraw, with no region scroll.
+        var time = 1.15
+        for _ in 0..<30 {
+            input -= 0.3
+            requested += model.input(-0.3, at: time, range: 0...0)
+            XCTAssertEqual(model.offset, 0)
+            time += frame
+        }
+        XCTAssertTrue(model.stepping)
+        XCTAssertTrue(model.answersInSteps)
+        XCTAssertEqual(Double(requested), input, accuracy: 0.5 + 1e-9, "One line requested per line of input")
     }
 }
 
@@ -214,5 +381,22 @@ final class ProgramScrollObservationTests: XCTestCase {
         view.feed(text: "\u{1B}[3S\u{1B}[T")       // Scroll up three, down one.
         view.feed(text: "\u{1B}[5;1H\u{1B}[M")     // Deleting below the top edits text; not a scroll.
         XCTAssertEqual(reported, [1, -2, 3, -1])
+    }
+
+    @MainActor
+    func testScrollsWithinLeftAndRightMarginsAreReportedSeparately() {
+        let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
+        var fullWidth: [Int] = [], withinMargins: [Int] = []
+        view.programScrolled = { fullWidth.append($0) }
+        view.programScrolledWithinMargins = { withinMargins.append($0) }
+        view.feed(text: "\u{1B}[?1049h\u{1B}[2J\u{1B}[H" + (1...20).map { "line \($0)" }.joined(separator: "\r\n"))
+        // Like Neovim scrolling the left window of a vertical split.
+        view.feed(text: "\u{1B}[?69h\u{1B}[1;20s\u{1B}[1;10r\u{1B}[1;1H\u{1B}[M")
+        view.feed(text: "\u{1B}[1;1H\u{1B}[2L")
+        view.feed(text: "\u{1B}[S\u{1B}[T")
+        view.feed(text: "\u{1B}[3;1H\u{1B}[M")     // Below the region's top: an edit, not a scroll.
+        view.feed(text: "\u{1B}[s\u{1B}[r\u{1B}[?69l\u{1B}[H\u{1B}[M")
+        XCTAssertEqual(withinMargins, [1, -2, 1, -1])
+        XCTAssertEqual(fullWidth, [1], "Only the full-width scroll after margins are reset")
     }
 }

@@ -1,7 +1,34 @@
 import XCTest
+import Combine
 @testable import NeoLink
 
 final class ExplorerTests: XCTestCase {
+    @MainActor
+    func testRefreshKeepsVisibleRowsAndDoesNotRepeatEditorReveal() async throws {
+        let root = try directory()
+        try write("src/main.swift", in: root)
+        let tree = ExplorerTree()
+        tree.configure(root: root, hidden: false, compact: true, hideIgnored: false)
+        try await wait { !tree.isLoading }
+        let file = root.appendingPathComponent("src/main.swift")
+        tree.reveal(file)
+        try await wait { !tree.isLoading && tree.rowID(for: file) != nil }
+        let reveal = tree.revealRevision, revision = tree.rowsRevision
+        var snapshots: [[ExplorerRow]] = []
+        let observation = tree.$rows.sink { snapshots.append($0) }
+        defer { observation.cancel() }
+        tree.reload()
+        XCTAssertTrue(tree.rows.contains { $0.item.url == file })
+        try await wait { !tree.isLoading }
+        XCTAssertTrue(snapshots.allSatisfy { !$0.isEmpty })
+        XCTAssertEqual(tree.revealRevision, reveal)
+        XCTAssertEqual(tree.rowsRevision, revision, "Unchanged refresh must not republish the row model")
+        try write("src/added.swift", in: root)
+        tree.reload()
+        try await wait { !tree.isLoading && tree.rows.contains { $0.name == "added.swift" } }
+        XCTAssertTrue(snapshots.allSatisfy { !$0.isEmpty })
+        XCTAssertEqual(tree.revealRevision, reveal)
+    }
     private func directory() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLink-explorer-\(UUID().uuidString)").resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

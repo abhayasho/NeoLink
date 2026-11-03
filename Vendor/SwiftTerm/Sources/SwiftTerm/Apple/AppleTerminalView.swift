@@ -2536,8 +2536,15 @@ extension TerminalView {
     func requestMetalDisplay() {
         guard let metalView else { return }
 #if os(macOS)
+        // NeoLink: a host or smooth-scroll redraw must not show a program's half-written
+        // synchronized update (DEC 2026), whether it began before this request or before the
+        // frame that serves it; the update's end triggers a display.
+        if terminal.synchronizedOutputActive { return }
         if let schedule = metalFrameScheduler {
-            schedule { [weak metalView] in metalView?.draw() }
+            schedule { [weak self, weak metalView] in
+                guard self?.terminal.synchronizedOutputActive != true else { return }
+                metalView?.draw()
+            }
             return
         }
 #endif

@@ -5,19 +5,34 @@ struct SemanticFileIcon: View {
     var directory = false
     var expanded = false
     var body: some View {
+        let look = Self.appearance(url: url, directory: directory, expanded: expanded)
         Group {
-            if directory { Image(systemName: expanded ? "folder.fill" : "folder") }
-            else if let abbreviation { Text(abbreviation).font(.system(size: 8, weight: .bold, design: .monospaced)) }
-            else { Image(systemName: symbol).font(.system(size: 12)) }
+            if let text = look.abbreviation { Text(text).font(.system(size: 8, weight: .bold, design: .monospaced)) }
+            else { Image(systemName: look.symbol).font(.system(size: 12)) }
         }
-        .foregroundStyle(color).frame(width: 17, height: 17)
+        .foregroundStyle(look.color).frame(width: 17, height: 17)
         .accessibilityHidden(true)
     }
-    private var abbreviation: String? {
+
+    /// The icon's resolved look, shared by this SwiftUI view and the AppKit explorer cell so both
+    /// draw identically. `abbreviation` (e.g. "Sw") takes precedence over `symbol` when present.
+    struct Look { let symbol: String; let abbreviation: String?; let color: Color }
+    static func appearance(url: URL, directory: Bool, expanded: Bool) -> Look {
+        if directory {
+            return Look(symbol: expanded ? "folder.fill" : "folder", abbreviation: nil, color: NeoLinkTheme.textSecondary)
+        }
+        return Look(symbol: symbol(for: url), abbreviation: abbreviation(for: url), color: color(for: url))
+    }
+
+    private var abbreviation: String? { Self.abbreviation(for: url) }
+    private var symbol: String { Self.symbol(for: url) }
+    private var color: Color { Self.color(for: url) }
+
+    private static func abbreviation(for url: URL) -> String? {
         if ["Dockerfile", "Containerfile"].contains(url.lastPathComponent) { return "◈" }
         return ["swift":"Sw", "py":"Py", "pyi":"Py", "js":"JS", "jsx":"JS", "ts":"TS", "tsx":"TS", "rs":"Rs", "go":"Go", "java":"J", "kt":"Kt", "rb":"Rb", "c":"C", "h":"H", "cpp":"C+", "hpp":"H+", "cs":"C#", "lua":"Lu", "sh":"$", "bash":"$", "zsh":"$", "html":"<>", "css":"#", "scss":"#", "json":"{}", "jsonc":"{}", "yaml":"Y", "yml":"Y", "toml":"T"] [url.pathExtension.lowercased()]
     }
-    private var symbol: String {
+    private static func symbol(for url: URL) -> String {
         if url.lastPathComponent == ".editorconfig" || url.lastPathComponent.hasPrefix(".git") || url.lastPathComponent.hasPrefix(".env") { return "gearshape" }
         switch url.pathExtension.lowercased() {
         case "md", "mdx": return "text.alignleft"
@@ -27,8 +42,7 @@ struct SemanticFileIcon: View {
         default: return "doc.text"
         }
     }
-    private var color: Color {
-        if directory { return NeoLinkTheme.textSecondary }
+    private static func color(for url: URL) -> Color {
         switch url.pathExtension.lowercased() {
         case "swift", "rs", "html": return NeoLinkTheme.syntaxOrange
         case "js", "jsx", "sh", "bash", "zsh": return NeoLinkTheme.syntaxYellow

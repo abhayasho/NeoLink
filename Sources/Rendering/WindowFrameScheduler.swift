@@ -12,8 +12,8 @@ final class WorkspaceWindow: NSWindow {
         switch event.type {
         case .keyDown:
             // Menu shortcuts and text fields are not terminal input and produce no output to wait for.
-            if !event.modifierFlags.contains(.command), firstResponder is InteractiveTerminalView {
-                frames.noteKeyInput(timestamp: event.timestamp)
+            if !event.modifierFlags.contains(.command), let terminal = firstResponder as? InteractiveTerminalView {
+                frames.noteKeyInput(timestamp: event.timestamp, surface: ObjectIdentifier(terminal))
             }
             frames.noteInteraction()
         case .leftMouseDown, .rightMouseDown, .otherMouseDown,
@@ -58,20 +58,41 @@ struct PresentationTiming {
     /// Latency stages for answered key presses: event → main thread, → program output
     /// read, → frame submitted, → frame shown.
     private(set) var stages: [String: [Double]] = [:]
+    /// Drawables that reached the display, those identical to the surface's previous frame,
+    /// and those the compositor never showed.
+    private(set) var presentedFrames = 0
+    private(set) var unchangedFrames = 0
+    private(set) var discardedFrames = 0
+    /// Key presses answered by output of the surface that had focus, and those that expired
+    /// unanswered (no output from that surface within 0.5 s).
+    private(set) var answeredInputs = 0
+    private(set) var unmatchedInputs = 0
+    /// Per displayed frame of a scrolling surface: when it was shown, where the input had
+    /// moved the content, and where the frame drew it (lines toward the top).
+    private(set) var scrollSamples: [ScrollSample] = []
     private var lastContent: [ObjectIdentifier: Double] = [:]
-    static let capacity = 2_000
+    static let capacity = 4_000
     static let stageNames = ["dispatch", "program", "schedule", "display"]
 
     struct Input { let timestamp: Double; let received: Double }
+    struct ScrollSample { let presented: Double; let input: Double; let drawn: Double }
 
-    mutating func recordContent(_ surface: ObjectIdentifier, presentedAt time: Double, inputs: [Input] = [],
-                                outputAt: Double? = nil, submittedAt: Double? = nil) {
-        guard time > 0 else { return }
-        if let last = lastContent[surface], time > last, time - last < 0.25 {
-            contentIntervals.append(time - last)
+    mutating func recordFrame(_ surface: ObjectIdentifier, presentedAt time: Double, changed: Bool = true,
+                              inputs: [Input] = [], outputAt: Double? = nil, submittedAt: Double? = nil,
+                              scroll: (input: Double, drawn: Double)? = nil) {
+        guard time > 0 else { discardedFrames += 1; return }
+        presentedFrames += 1
+        if changed {
+            if let last = lastContent[surface], time > last, time - last < 0.25 {
+                contentIntervals.append(time - last)
+            }
+            lastContent[surface] = time
+        } else {
+            unchangedFrames += 1
         }
-        lastContent[surface] = time
+        if let scroll { scrollSamples.append(ScrollSample(presented: time, input: scroll.input, drawn: scroll.drawn)) }
         for input in inputs where time >= input.timestamp {
+            answeredInputs += 1
             inputLatencies.append(time - input.timestamp)
             guard let outputAt, let submittedAt else { continue }
             let output = max(outputAt, input.received)
@@ -82,12 +103,21 @@ struct PresentationTiming {
         }
         if contentIntervals.count > Self.capacity { contentIntervals.removeFirst(contentIntervals.count - Self.capacity) }
         if inputLatencies.count > Self.capacity { inputLatencies.removeFirst(inputLatencies.count - Self.capacity) }
+        if scrollSamples.count > Self.capacity { scrollSamples.removeFirst(scrollSamples.count - Self.capacity) }
         for name in Self.stageNames {
             if let count = stages[name]?.count, count > Self.capacity { stages[name]?.removeFirst(count - Self.capacity) }
         }
     }
+    mutating func recordUnmatched(_ count: Int) { unmatchedInputs += count }
     mutating func pause() { lastContent.removeAll() }
     mutating func reset() { self = PresentationTiming() }
+
+    /// Refreshes with no new content while content was changing: intervals beyond 1.5 refreshes,
+    /// counted as the refreshes they spanned minus one.
+    func missedRefreshes(rate: Int) -> Int {
+        let period = 1 / Double(rate)
+        return contentIntervals.reduce(0) { $0 + ($1 > 1.5 * period ? Int(($1 / period).rounded()) - 1 : 0) }
+    }
 
     static func percentile(_ values: [Double], _ p: Double) -> Double {
         guard !values.isEmpty else { return 0 }
@@ -111,6 +141,8 @@ final class WindowFrameScheduler {
         var inputs: [PresentationTiming.Input]
         var outputAt: Double?
         let submittedAt: Double
+        var changed = true
+        var scroll: (input: Double, drawn: Double)?
     }
     private var pendingPresentations: [ObjectIdentifier: Presentation] = [:]
     private struct Surface {
@@ -127,8 +159,9 @@ final class WindowFrameScheduler {
     private(set) var isRunning = false
     private(set) var timing = FrameTiming()
     private(set) var presentation = PresentationTiming()
-    /// Key events not yet answered by displayed terminal output (event timestamps).
-    private var pendingInputs: [PresentationTiming.Input] = []
+    /// Key events not yet answered, per terminal surface that had focus when they arrived.
+    /// Only that surface's output answers them; output from another terminal or agent does not.
+    private var pendingInputs: [ObjectIdentifier: [PresentationTiming.Input]] = [:]
     private var taggedFrames: [UInt64: TaggedFrame] = [:]
     private var nextTag: UInt64 = 1
     /// Nonzero only while a content presentation closure runs. A surface copies it
@@ -208,16 +241,22 @@ final class WindowFrameScheduler {
 
     /// Records a key press for input-to-display latency. `timestamp` uses the
     /// `NSEvent.timestamp` time base, which matches `CACurrentMediaTime`.
-    func noteKeyInput(timestamp: Double) {
+    func noteKeyInput(timestamp: Double, surface: ObjectIdentifier) {
         expireInputs()
-        if pendingInputs.count < 64 { pendingInputs.append(.init(timestamp: timestamp, received: now())) }
+        if pendingInputs[surface, default: []].count < 64 {
+            pendingInputs[surface, default: []].append(.init(timestamp: timestamp, received: now()))
+        }
     }
 
     /// A key press that produced no output within half a second is not waiting for it, and
-    /// later unrelated output must not count as its answer.
+    /// later unrelated output must not count as its answer. Expired presses are counted.
     private func expireInputs() {
         let time = now()
-        pendingInputs.removeAll { time - $0.received > 0.5 }
+        for (surface, inputs) in pendingInputs {
+            let kept = inputs.filter { time - $0.received <= 0.5 }
+            if kept.count != inputs.count { presentation.recordUnmatched(inputs.count - kept.count) }
+            pendingInputs[surface] = kept.isEmpty ? nil : kept
+        }
     }
 
     /// Registers a Metal surface for the Performance Monitor's presented-frame counts.
@@ -228,14 +267,15 @@ final class WindowFrameScheduler {
         surfaces.removeValue(forKey: id); pendingPresentations.removeValue(forKey: id); lastContentPresentation.removeValue(forKey: id)
     }
 
-    func enqueue(_ update: @escaping () -> Void) {
+    /// `surface` is the terminal whose output produced the update.
+    func enqueue(from surface: ObjectIdentifier? = nil, _ update: @escaping () -> Void) {
         updates.append(update)
         activeUntil = max(activeUntil, now() + 0.05)
         wake()
         // Output answering a key press is drawn as soon as it is parsed instead of at the
         // next display callback, up to a refresh interval sooner.
         expireInputs()
-        if !pendingInputs.isEmpty { scheduleImmediateFrame() }
+        if let surface, pendingInputs[surface] != nil { scheduleImmediateFrame() }
     }
 
     private var immediateScheduled = false
@@ -278,12 +318,23 @@ final class WindowFrameScheduler {
         if !animations.isEmpty { activeUntil = max(activeUntil, now() + 0.05) }
     }
 
-    /// Called when a surface's tagged frame was shown (`presentedTime`, host time).
+    /// Called when a surface's tagged frame was shown (`presentedTime`, host time; 0 if discarded).
     func framePresented(tag: UInt64, presentedTime: Double) {
         guard let frame = taggedFrames.removeValue(forKey: tag) else { return }
-        presentation.recordContent(frame.surface, presentedAt: presentedTime, inputs: frame.inputs,
-                                   outputAt: frame.outputAt, submittedAt: frame.submittedAt)
+        presentation.recordFrame(frame.surface, presentedAt: presentedTime, changed: frame.changed, inputs: frame.inputs,
+                                 outputAt: frame.outputAt, submittedAt: frame.submittedAt, scroll: frame.scroll)
     }
+
+    /// After a surface encoded the frame tagged `tag`: whether it differed from the previous
+    /// frame, and for a scrolling surface the input and drawn positions in lines.
+    func frameDrawn(tag: UInt64, changed: Bool, scroll: (input: Double, drawn: Double)?) {
+        taggedFrames[tag]?.changed = changed
+        taggedFrames[tag]?.scroll = scroll
+        frameDrawnObserver?(tag, changed, scroll)
+    }
+
+    /// Benchmark hook: every drawn frame's tag, change flag and scroll positions.
+    var frameDrawnObserver: ((UInt64, Bool, (input: Double, drawn: Double)?) -> Void)?
 
     /// A refused frame keeps its tag on the surface; the next tag inherits its inputs.
     func mergeTag(_ old: UInt64, into new: UInt64) {
@@ -315,7 +366,7 @@ final class WindowFrameScheduler {
             }
             let tag = nextTag; nextTag &+= 1
             var inputs: [PresentationTiming.Input] = []
-            if item.outputAt != nil { inputs = pendingInputs; pendingInputs.removeAll(keepingCapacity: true) }
+            if item.outputAt != nil, let waiting = pendingInputs.removeValue(forKey: id) { inputs = waiting }
             let time = now()
             taggedFrames[tag] = TaggedFrame(surface: id, inputs: inputs, outputAt: item.outputAt, submittedAt: time)
             presentationTag = tag
@@ -408,7 +459,9 @@ final class WindowFrameScheduler {
         Frame work, p95: \(String(format: "%.2f", timing.p95WorkMilliseconds)) ms
 
         Key press → frame on screen: \(latency)
+        Key presses without output from the focused terminal: \(presentation.unmatchedInputs)
         Interval between new terminal frames on screen: \(cadence)
+        Frames shown: \(presentation.presentedFrames) · identical to the previous: \(presentation.unchangedFrames)
 
         Both use the time each frame reached the display (MTLDrawable.presentedTime). Key latency starts at the event's timestamp and excludes keyboard and panel hardware. Frame intervals reflect how often content changed, so they are long while typing and 8.3 ms during smooth scrolling at 120 Hz. Idle windows pause their clock.
         """

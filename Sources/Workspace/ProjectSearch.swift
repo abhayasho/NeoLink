@@ -92,7 +92,10 @@ struct ProjectSearchSheet: View {
     let root: URL
     let searchContents: Bool
     let open: (URL, Int?) -> Void
+    /// Dismiss. Defaults to the SwiftUI sheet dismiss; an overlay host passes its own closer.
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    private func close() { if let onClose { onClose() } else { dismiss() } }
     @State private var query = ""
     @State private var files: [String] = []
     @State private var matches: [ProjectMatch] = []
@@ -106,7 +109,7 @@ struct ProjectSearchSheet: View {
                 Label(searchContents ? "Find in Files" : "Quick Open", systemImage: "magnifyingglass").font(.headline)
                 Spacer()
                 Text(root.lastPathComponent).foregroundColor(NeoLinkTheme.textSecondary)
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Done") { close() }.keyboardShortcut(.cancelAction)
             }
             TextField(searchContents ? "Search project contents…" : "Find a file by name or path…", text: $query)
                 .textFieldStyle(.roundedBorder).focused($focused)
@@ -164,5 +167,5 @@ struct ProjectSearchSheet: View {
             } catch is CancellationError {} catch { self.error = error.localizedDescription; loading = false }
         }
     }
-    private func choose(_ match: ProjectMatch) { open(root.appendingPathComponent(match.path), match.line); dismiss() }
+    private func choose(_ match: ProjectMatch) { open(root.appendingPathComponent(match.path), match.line); close() }
 }

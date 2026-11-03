@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let commands = WorkspaceCommands()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        PhaseTrace.mark("launch.didFinishLaunching")
         if TerminalRenderingPreferences.shared.useGPU {
             // Shader compilation is shared by every terminal; keep it off the main thread.
             DispatchQueue.global(qos: .userInitiated).async { TerminalView.prepareMetalRenderer() }
@@ -21,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if #available(macOS 13.3, *) {
             hosting.safeAreaRegions = []
         }
+        PhaseTrace.mark("launch.contentCreated")
 
         let initialSize = NSSize(width: 1280, height: 800)
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -47,7 +49,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.setFrameAutosaveName("NeoLinkMainWindow")
         window.contentViewController = hosting
         window.delegate = self
+        // Benchmarks force an exact content size ("WIDTHxHEIGHT" in points), applied after the
+        // autosave name so AppKit's restored frame cannot win. "max" fills the visible screen.
+        if let spec = ProcessInfo.processInfo.environment["NEOLINK_WINDOW"] {
+            let visible = window.screen?.visibleFrame ?? screenFrame
+            var size = NSSize(width: 1280, height: 800)
+            if spec == "max" {
+                size = visible.size
+            } else {
+                let parts = spec.split(separator: "x").compactMap { Double($0) }
+                if parts.count == 2 { size = NSSize(width: parts[0], height: parts[1]) }
+            }
+            let frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+            let origin = NSPoint(x: visible.minX + (visible.width - frame.width) / 2,
+                                 y: visible.maxY - frame.height)
+            window.setFrame(NSRect(origin: origin, size: frame.size), display: false)
+        }
+        PhaseTrace.mark("launch.windowCreated")
         window.makeKeyAndOrderFront(nil)
+        PhaseTrace.mark("launch.windowShown")
 
         self.window = window
         InteractionBenchmark.startIfRequested(window: window, tabs: tabsController)
@@ -80,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 }
 
 MainActor.assumeIsolated {
+    PhaseTrace.mark("launch.main")
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate

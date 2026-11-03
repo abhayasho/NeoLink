@@ -50,6 +50,40 @@ struct ContentView: View {
             workspaceFooter
         }
         .background(NeoLinkTheme.background)
+        // Quick Open / Find in Files and Git review are in-window overlays, not AppKit sheets.
+        // A sheet's slide-in animation runs a nested run loop that froze the main thread for
+        // about 330 ms on open; an overlay appears on the next frame.
+        .overlay { paletteOverlay }
+    }
+
+    @ViewBuilder
+    private var paletteOverlay: some View {
+        if search != nil || gitReview != nil {
+            ZStack {
+                // Dimmed backdrop; clicking it closes the overlay.
+                Color.black.opacity(0.35).ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { search = nil; gitReview = nil }
+                if let value = search {
+                    ProjectSearchSheet(root: value.root, searchContents: value.contents, open: { url, line in
+                        tabsController.openFile(url)
+                        if let line, let document = tabsController.selectedTab?.document {
+                            Task { await document.navigate(toLine: line) }
+                        }
+                    }, onClose: { search = nil })
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(radius: 30)
+                } else if let value = gitReview {
+                    GitChangesView(directory: value.root, open: { tabsController.openFile($0) }, prepareMutation: {
+                        if tabsController.tabs.contains(where: { $0.document?.usesNeovim == true }), !(await tabsController.codeSession.refresh()) { return false }
+                        return !tabsController.tabs.contains(where: { $0.document?.isModified == true || $0.document?.isSaving == true }) && tabsController.codeSession.snapshot?.unnamedModified != true
+                    }, didMutate: tabsController.refreshAgentEdits, onClose: { gitReview = nil })
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(radius: 30)
+                }
+            }
+            .transition(.opacity)
+        }
     }
 
     private var presentedWorkspace: some View {
@@ -63,14 +97,6 @@ struct ContentView: View {
         .font(NeoLinkTheme.font)
         .background(NeoLinkTheme.background)
         .ignoresSafeArea(.container, edges: .top)
-        .sheet(item: $search) { value in
-            ProjectSearchSheet(root: value.root, searchContents: value.contents) { url, line in
-                tabsController.openFile(url)
-                if let line, let document = tabsController.selectedTab?.document {
-                    Task { await document.navigate(toLine: line) }
-                }
-            }
-        }
         .sheet(item: $sessionToEdit) { session in
             SessionEditSheet(
                 session: session,
@@ -88,12 +114,6 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAgentLauncher) {
             AgentLauncherView(controller: tabsController, directory: access.projectURL)
-        }
-        .sheet(item: $gitReview) { value in
-            GitChangesView(directory: value.root, open: tabsController.openFile, prepareMutation: {
-                if tabsController.tabs.contains(where: { $0.document?.usesNeovim == true }), !(await tabsController.codeSession.refresh()) { return false }
-                return !tabsController.tabs.contains(where: { $0.document?.isModified == true || $0.document?.isSaving == true }) && tabsController.codeSession.snapshot?.unnamedModified != true
-            }, didMutate: tabsController.refreshAgentEdits)
         }
         .alert("Project access", isPresented: Binding(get: { access.error != nil }, set: { if !$0 { access.error = nil } })) {
             Button("OK") { access.error = nil }

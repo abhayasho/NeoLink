@@ -62,12 +62,14 @@ final class TerminalState: NSObject, ObservableObject, LocalProcessTerminalViewD
         case .localShell:
             let integration = try? TerminalShellIntegration()
             shellIntegration = integration
+            MainActor.assumeIsolated { PhaseTrace.mark("shell.spawn.begin") } // Called from makeNSView.
             view.startProcess(
                 executable: "/bin/zsh",
                 args: configuration.startupCommand.map { ["-l", "-i", "-c", $0] } ?? ["-l"],
                 environment: integration?.environment(base: environment) ?? environment,
                 currentDirectory: currentDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
             )
+            MainActor.assumeIsolated { PhaseTrace.mark("shell.spawn.end") }
         case .ssh(let host, let username, let port):
             var args: [String] = []
             if port != 22 { args.append(contentsOf: ["-p", String(port)]) }

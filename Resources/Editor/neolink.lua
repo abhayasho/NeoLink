@@ -9,7 +9,10 @@ vim.o.mousescroll = 'ver:1,hor:1'
 vim.o.hidden = true
 vim.o.showmode = false
 vim.o.showtabline = 0
-vim.o.laststatus = 0
+-- A global status line keeps Neovim's window off the screen's last row. Without one
+-- (laststatus=0/1), Neovim redraws the whole window for every upward scroll instead of
+-- inserting lines: about 20x the output, and NeoLink cannot follow it smoothly.
+vim.o.laststatus = 3
 vim.o.cmdheight = 0
 vim.o.fillchars = 'eob: '
 vim.o.foldcolumn = '1'
@@ -34,7 +37,7 @@ vim.o.exrc = false
 vim.o.autoread = false
 vim.o.clipboard = 'unnamedplus'
 vim.o.completeopt = 'menu,menuone,noselect,popup'
-vim.o.statusline = '  %f %m%r %= %y  %l:%c  %p%% '
+vim.o.statusline = '  %f%m%r %= %l:%c  '
 vim.g.loaded_netrwPlugin = 1
 vim.g.loaded_remote_plugins = 1
 vim.g.loaded_python3_provider = 0

@@ -97,6 +97,11 @@ extension TerminalView {
             self.programScrolled?(lines)
         }
         terminal.screenErasedObserver = { [weak self] in self?.retainedScrollLines.discard() }
+        terminal.marginScrollObserver = { [weak self] lines in
+            // Rows around the region changed in part; earlier retained lines no longer border it.
+            self?.retainedScrollLines.discard()
+            self?.programScrolledWithinMargins?(lines)
+        }
     }
 
     /// Lines moved on screen by a viewport scroll keep their cached Metal geometry.

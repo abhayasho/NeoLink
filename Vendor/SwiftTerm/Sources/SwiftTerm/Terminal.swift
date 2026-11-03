@@ -340,6 +340,9 @@ open class Terminal {
     var regionScrollObserver: ((_ top: Int, _ bottom: Int, _ lines: Int, _ removed: [BufferLine]) -> Void)?
     /// Called when the whole screen is erased, so lines retained by `regionScrollObserver` are stale.
     var screenErasedObserver: (() -> Void)?
+    /// A scroll region restricted to left and right margins (DECLRMM) moved by whole lines, for
+    /// example one window of a side-by-side split. `lines` > 0 moves the content up.
+    var marginScrollObserver: ((_ lines: Int) -> Void)?
 
     private func regionLines(from start: Int, count: Int) -> [BufferLine]? {
         guard regionScrollObserver != nil, !marginMode, count > 0 else { return nil }
@@ -351,6 +354,8 @@ open class Terminal {
         guard let removed, let regionScrollObserver else { return }
         regionScrollObserver(buffer.scrollTop, buffer.scrollBottom, lines, removed)
     }
+
+    private func notifyMarginScroll(lines: Int) { marginScrollObserver?(lines) }
     
     // Selection services attached to this terminal.  Held weakly: the views own
     // them.  They are notified when lines are shifted in place so they can
@@ -3418,6 +3423,7 @@ open class Terminal {
                 }
 
                 selectionsInvalidateForColumnRestrictedScroll (top: row, bottom: row + rowCount, left: buffer.marginLeft, right: buffer.marginRight)
+                if buffer.y == buffer.scrollTop { notifyMarginScroll(lines: -p) }
             }
         } else {
             let inserted = p
@@ -5907,6 +5913,7 @@ open class Terminal {
             }
 
             selectionsInvalidateForColumnRestrictedScroll (top: row, bottom: row + rowCount, left: buffer.marginLeft, right: buffer.marginRight)
+            notifyMarginScroll(lines: -p)
         } else {
             let count = min(p, buffer.scrollBottom - buffer.scrollTop + 1)
             let moved = regionLines(from: buffer.yBase + buffer.scrollBottom - count + 1, count: count)
@@ -5953,6 +5960,7 @@ open class Terminal {
             }
 
             selectionsInvalidateForColumnRestrictedScroll (top: row, bottom: row + rowCount, left: buffer.marginLeft, right: buffer.marginRight)
+            notifyMarginScroll(lines: p)
         } else {
             let count = min(p, buffer.scrollBottom - buffer.scrollTop + 1)
             let moved = regionLines(from: buffer.yBase + buffer.scrollTop, count: count)
@@ -6071,6 +6079,7 @@ open class Terminal {
                 }
 
                 selectionsInvalidateForColumnRestrictedScroll (top: row, bottom: row + rowCount, left: buffer.marginLeft, right: buffer.marginRight)
+                if buffer.y == buffer.scrollTop { notifyMarginScroll(lines: p) }
             }
         } else {
             if buffer.y >= buffer.scrollTop && buffer.y <= buffer.scrollBottom {

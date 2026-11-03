@@ -50,6 +50,7 @@ final class TerminalRendering {
     func attachToWindow() {
         guard let view else { return }
         let id = ObjectIdentifier(view)
+        let kind = view is CodeTerminalView ? "editor" : "shell"
         frames?.unregister(id)
         frames = WindowFrameScheduler.forWindow(view.window)
         frames?.register(id) { [weak view] in
@@ -57,6 +58,13 @@ final class TerminalRendering {
             return (view is CodeTerminalView ? "Editor" : "Terminal", view.metalRendererStatus.presentedFrameCount)
         }
         view.metalFramePresented = { [weak self] tag, presentedTime in
+            MainActor.assumeIsolated {
+                // The display's timestamp; 0 when the system did not report one.
+                let time = presentedTime > 0 ? presentedTime : CACurrentMediaTime()
+                PhaseTrace.mark(kind + ".firstFramePresented", at: time)
+                // The editor draws once while still hidden; its first frame a user sees comes after it is shown.
+                if let shown = PhaseTrace.moments[kind + ".shown"], time > shown { PhaseTrace.mark(kind + ".firstFrameAfterShown", at: time) }
+            }
             guard tag != 0 else { return }
             MainActor.assumeIsolated { self?.frames?.framePresented(tag: tag, presentedTime: presentedTime) }
         }
@@ -66,7 +74,7 @@ final class TerminalRendering {
                     DispatchQueue.main.async { update() }
                     return
                 }
-                frames.enqueue(update)
+                frames.enqueue(from: ObjectIdentifier(view), update)
             }
         }
         view.metalFrameScheduler = { [weak self] present in
@@ -84,6 +92,10 @@ final class TerminalRendering {
                         }
                         view.metalPresentsImmediately = frames.presentationMayBypassVsync
                         present()
+                        // The renderer consumed the tag only if it submitted the frame.
+                        if tag != 0, view.metalNextFrameTag == 0 {
+                            frames.frameDrawn(tag: tag, changed: view.metalLastFrameChanged, scroll: view.scrollTraceSample())
+                        }
                     }
                 } else {
                     DispatchQueue.main.async { [weak view] in
@@ -117,7 +129,9 @@ final class TerminalRendering {
         // Keep unchanged row geometry cached for editing and ordinary terminal output.
         view.metalBufferingMode = .perRowPersistent
         do {
-            try view.setUseMetal(true)
+            try PhaseTrace.measure(view is CodeTerminalView ? "editor.metalSetup" : "shell.metalSetup") {
+                try view.setUseMetal(true)
+            }
         } catch {
             failure = String(describing: error)
             try? view.setUseMetal(false)

@@ -23,4 +23,10 @@ All changes are macOS and Metal paths; marked `NeoLink` in comments where they a
 - **Drawable acquisition**: `draw(in:)` builds draw data before taking the drawable.
 - **Resource lookup**: `candidateBundles()` also checks the directory containing a bundle, where a SwiftPM test bundle finds `SwiftTerm_SwiftTerm.bundle`.
 
+Additional retained work after the initial rendering snapshot:
+
+- `LocalProcess.swift` uses a 2 ms main-queue parsing time slice. The budget is checked between chunks, not a hard upper bound on an individual parse or input latency; backpressure remains in place.
+- Margin-restricted region-scroll reporting lets the host invalidate interpolation for side-by-side terminal windows without moving neighboring text.
+- Renderer capture/scroll-state reporting and drawable submission tags support the developer's geometry and pixel-analysis harness. Glyph/content capture is opt-in, and benchmark measurement remains distinct from real trackpad visual acceptance.
+
 Keep this snapshot and its license in source control. Do not patch SwiftPM's transient `.build/checkouts` directory. When updating, diff against the tag, reapply the changes above, and run `swift test` (it includes Metal pixel comparisons of smooth-scrolled frames), `scripts/test-editor.py`, and the benchmark in `docs/RENDERING.md`.

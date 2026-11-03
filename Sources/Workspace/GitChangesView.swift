@@ -5,7 +5,10 @@ struct GitChangesView: View {
     let open: (URL) -> Void
     var prepareMutation: () async -> Bool = { true }
     var didMutate: () -> Void = {}
+    /// Dismiss. Defaults to the SwiftUI sheet dismiss; an overlay host passes its own closer.
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    private func close() { if let onClose { onClose() } else { dismiss() } }
     @State private var snapshot: GitChanges.Snapshot?
     @State private var selected: GitChange?
     @State private var selectedStash: String?
@@ -77,7 +80,7 @@ struct GitChangesView: View {
                 }.fixedSize().disabled(busy)
             }
             Button { revision += 1 } label: { Image(systemName: "arrow.clockwise") }.help("Refresh changes").disabled(busy)
-            Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(mutating)
+            Button("Done") { close() }.keyboardShortcut(.cancelAction).disabled(mutating)
         }.padding(14)
     }
 
@@ -118,7 +121,7 @@ struct GitChangesView: View {
                 if selected.staged { Button("Unstage") { mutate { try await GitChanges.unstage(selected, at: $0) } }.disabled(busy) }
                 Button("Open") {
                     guard let root = snapshot?.root else { return }
-                    open(root.appendingPathComponent(selected.path)); dismiss()
+                    open(root.appendingPathComponent(selected.path)); close()
                 }.disabled(mutating || selected.index == "D" || selected.worktree == "D")
             } else { Text("Select a changed file") }
         }.font(.caption).padding(10)

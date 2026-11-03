@@ -29,6 +29,16 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     private var fontObservation: AnyCancellable?
     private var wheelMonitor: Any?
     private lazy var smoothScroll = SmoothScrollDriver(view: self)
+    /// For measurement: lines the input and the last drawn frame moved the content since the
+    /// first smooth-scroll gesture, or nil if this terminal never smooth-scrolled.
+    func scrollTraceSample() -> (input: Double, drawn: Double)? {
+        smoothScroll.traceSample(drawnOffset: metalLastDrawnScrollOffset)
+    }
+
+    /// For measurement: lines requested from a full-screen program and lines it scrolled.
+    var smoothScrollRequests: (requests: [(time: Double, lines: Int)], moves: [(time: Double, lines: Int)]) {
+        (smoothScroll.requests, smoothScroll.moves)
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         if newSize != frame.size { smoothScroll.reset() }
@@ -36,9 +46,17 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     }
 
     /// Native scrollback scrolls pixel by pixel with a trackpad; other input keeps SwiftTerm's line steps.
+    /// Precise vertical scrolling, including the zero-delta events that end a gesture or its momentum.
+    private func isSmoothVerticalScroll(_ event: NSEvent) -> Bool {
+        guard event.hasPreciseScrollingDeltas, smoothScroll.isAvailable else { return false }
+        if event.scrollingDeltaY == 0 {
+            return event.scrollingDeltaX == 0 && SmoothScrollDriver.phase(of: event) != .changed
+        }
+        return abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+    }
+
     private func smoothScrollback(_ event: NSEvent) -> Bool {
-        guard !isDisplayingAlternateScreen, event.hasPreciseScrollingDeltas, event.scrollingDeltaY != 0,
-              abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX), smoothScroll.isAvailable else { return false }
+        guard !isDisplayingAlternateScreen, isSmoothVerticalScroll(event) else { return false }
         smoothScroll.scroll(event, source: .scrollback) { [weak self] lines in self?.scrollViewport(towardTop: lines) ?? 0 }
         return true
     }
@@ -50,6 +68,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         rendering.noteOutput()
+        smoothScroll.noteOutput(slice.count)
         super.dataReceived(slice: slice)
     }
 
@@ -89,8 +108,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
         let cell = CGSize(width: CGFloat(pixels.width) / scale, height: CGFloat(pixels.height) / scale)
         // Trackpad scrolling in a full-screen program follows the fingers pixel by pixel:
         // the program scrolls whole lines ahead and the renderer draws the remainder.
-        let smooth = event.hasPreciseScrollingDeltas && isDisplayingAlternateScreen && smoothScroll.isAvailable
-            && event.scrollingDeltaY != 0 && abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+        let smooth = isDisplayingAlternateScreen && isSmoothVerticalScroll(event)
         let steps = wheel.consume(x: event.scrollingDeltaX, y: smooth ? 0 : event.scrollingDeltaY,
                                   precise: event.hasPreciseScrollingDeltas, cell: cell,
                                   newGesture: event.phase == .began)
@@ -105,8 +123,13 @@ class InteractiveTerminalView: LocalProcessTerminalView {
             }
         }
         if smooth {
-            smoothScroll.scroll(event, source: .program) { lines in
-                report(lines > 0 ? 64 : 65, count: min(80, abs(lines)))
+            // Later requests (settling) report at the same cell.
+            smoothScroll.scroll(event, source: .program) { [weak self] lines in
+                guard let terminal = self?.getTerminal() else { return nil }
+                for _ in 0..<min(80, abs(lines)) {
+                    terminal.sendEvent(buttonFlags: lines > 0 ? 64 : 65, x: col, y: row,
+                                       pixelX: max(0, Int(point.x)), pixelY: max(0, Int(topY)))
+                }
                 return nil
             }
         } else {

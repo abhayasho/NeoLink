@@ -88,7 +88,9 @@ public class LocalProcess {
 
     private let usesMainQueue: Bool
     private let pendingChunkFlushThreshold = 32
-    private let pendingTimeSliceNs: UInt64 = 4_000_000
+    // NeoLink: yield between output chunks after a 2 ms parsing time slice (upstream: 4 ms).
+    // A single chunk can exceed the budget; this is not a hard input-latency bound.
+    private let pendingTimeSliceNs: UInt64 = 2_000_000
     private var pendingChunks: [[UInt8]] = []
     private var pendingChunkIndex: Int = 0
     private var pendingScheduled = false

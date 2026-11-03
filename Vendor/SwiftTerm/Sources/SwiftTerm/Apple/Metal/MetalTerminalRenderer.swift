@@ -252,6 +252,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private let imageTextureCache = NSMapTable<AnyObject, MTLTexture>(keyOptions: .weakMemory, valueOptions: .strongMemory)
     private var kittyTextureCache: [UInt32: (signature: KittyImageSignature, texture: MTLTexture)] = [:]
     private var rowCache: [ObjectIdentifier: RowCacheEntry] = [:]
+    private var lastFrameSignature = 0
     private var cacheBufferingMode: MetalBufferingMode?
     private var cacheSignature: CacheSignature?
     private var atlasInvalidatedDuringBuild = false
@@ -666,6 +667,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         if let capture = terminalView.metalFrameCapture, !drawable.texture.isFramebufferOnly {
             terminalView.metalFrameCapture = nil
             captureFrame(drawable.texture, commandBuffer: commandBuffer, completion: capture)
+        } else if let capture = terminalView.metalFrameCaptureEveryFrame, !drawable.texture.isFramebufferOnly {
+            captureFrame(drawable.texture, commandBuffer: commandBuffer) { capture($0, frameTag) }
         }
         drawable.addPresentedHandler { [weak self] presented in
             self?.recordPresentedFrame(tag: frameTag, presentedTime: presented.presentedTime)
@@ -872,7 +875,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
         // The cache is keyed by BufferLine identity: scrolls move line references, so a
         // line that moved rows keeps its geometry and is drawn translated. A line without
-        // a buffer row (retained after leaving the screen) can only come from the cache.
+        // a buffer row (retained after leaving the screen) is built where it is shown; a
+        // program may scroll several lines out between two frames, so it may never have
+        // been drawn.
         func cachedEntry(for line: BufferLine, row: Int?, visibleRow: Int, dirty: Bool) -> RowCacheEntry? {
             let key = ObjectIdentifier(line)
             drawnLines.insert(key)
@@ -892,8 +897,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 cachedRows += 1
                 return cached
             }
-            guard let row else { return nil }
-            let data = buildRowDrawData(row: row,
+            let buildRow = row ?? visibleRow + visibleDisp
+            let data = buildRowDrawData(row: buildRow,
+                                        detachedLine: row == nil ? line : nil,
                                         buffer: buffer,
                                         yDisp: visibleDisp,
                                         cellWidth: cellWidth,
@@ -904,7 +910,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                         virtualPlacementsByImageId: virtualPlacementsByImageId)
             let built = RowCacheEntry(lineRef: line, generation: line.generation,
                                       bidiParagraphRevision: bidiRevision ?? 0,
-                                      builtRow: row - visibleDisp,
+                                      builtRow: buildRow - visibleDisp,
                                       data: data,
                                       buffers: bufferingMode == .perRowPersistent ? makeRowBuffers(from: data) : nil)
             rowCache[key] = built
@@ -972,6 +978,24 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             place(entry, visibleRow: visibleRow, clipped: inRegion, extraOffset: inRegion ? regionOffset : 0)
         }
 
+#if os(macOS)
+        // Frame identity for measurement: a frame that rebuilt nothing and placed the same
+        // rows at the same offsets as the previous one shows no new content.
+        var frameHasher = Hasher()
+        for row in rows {
+            frameHasher.combine(row.buffers.backgroundBuffer.map { ObjectIdentifier($0) })
+            frameHasher.combine(row.buffers.glyphGrayBuffer.map { ObjectIdentifier($0) })
+            frameHasher.combine(row.buffers.glyphColorBuffer.map { ObjectIdentifier($0) })
+            frameHasher.combine(row.offsetY.bitPattern)
+            frameHasher.combine(row.clipped)
+        }
+        frameHasher.combine(regionOffset.bitPattern)
+        frameHasher.combine(buffer.x); frameHasher.combine(buffer.y); frameHasher.combine(buffer.yBase); frameHasher.combine(terminalView.terminal.cursorHidden)
+        let frameSignature = frameHasher.finalize()
+        terminalView.metalLastFrameChanged = rebuiltRows > 0 || frameSignature != lastFrameSignature
+        lastFrameSignature = frameSignature
+        terminalView.metalLastDrawnScrollOffset = CGFloat(-regionOffset) / scale
+#endif
         var keep = drawnLines
 #if os(macOS)
         for line in terminalView.retainedScrollLines.above.suffix(buffer.rows) { keep.insert(ObjectIdentifier(line)) }
@@ -1046,7 +1070,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         #endif
     }
 
+    /// `detachedLine` draws a line no longer in the buffer (it left a program's scroll region)
+    /// at visible position `row - yDisp`; selection and bidi lookups by row find nothing for it.
     private func buildRowDrawData(row: Int,
+                                  detachedLine: BufferLine? = nil,
                                   buffer: Buffer,
                                   yDisp: Int,
                                   cellWidth: CGFloat,
@@ -1066,7 +1093,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                overImageDraws: [],
                                otherImageDraws: [])
         }
-        if row < 0 || row >= buffer.lines.count {
+        if detachedLine == nil, row < 0 || row >= buffer.lines.count {
             return RowDrawData(backgroundCells: [],
                                powerlineJoinCells: [],
                                glyphCellsGray: [],
@@ -1088,7 +1115,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         var overImageDraws: [ImageDraw] = []
         var otherImageDraws: [ImageDraw] = []
 
-        let line = buffer.lines[row]
+        let line = detachedLine ?? buffer.lines[row]
         let renderMode = line.renderMode
         let lineOffset = cellHeight * CGFloat(row - yDisp + 1)
         let lineOrigin = CGPoint(x: 0, y: terminalView.bounds.height - lineOffset)

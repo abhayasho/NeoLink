@@ -31,7 +31,20 @@ struct ACPConversationView: View {
                         ForEach(session.messages) { message in
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(message.role).font(.system(size: 10, weight: .semibold)).foregroundStyle(NeoLinkTheme.textSecondary)
-                                Text(message.text).font(.system(size: 12)).textSelection(.enabled)
+                                if message.id == session.streamingMessageID {
+                                    // While text streams in, each paragraph is its own Text, so a chunk
+                                    // lays out only the last paragraph instead of the whole reply
+                                    // (tens of milliseconds per frame for long replies). The finished
+                                    // reply is one selectable Text again, with the same line layout.
+                                    let paragraphs = message.text.components(separatedBy: "\n\n")
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
+                                            Text(index < paragraphs.count - 1 ? paragraph + "\n" : paragraph).font(.system(size: 12))
+                                        }
+                                    }
+                                } else {
+                                    Text(message.text).font(.system(size: 12)).textSelection(.enabled)
+                                }
                             }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
                         }
                         if !session.plan.isEmpty {

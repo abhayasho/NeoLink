@@ -533,34 +533,80 @@ struct LocalFileBrowserView: View {
     }
 
     private var treeList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(tree.rows) { entry in
-                        row(for: entry.item, selected: entry.item.id == activeFileURL?.standardizedFileURL, entry: entry)
-                            .id(entry.id)
-                    }
-                }.padding(.vertical, 2)
-            }
-            .onChange(of: tree.revealRevision) { _ in
-                if let id = tree.rowID(for: tree.selectedURL) { proxy.scrollTo(id, anchor: .center) }
-            }
-            .overlay {
-                if tree.rows.isEmpty {
-                    VStack(spacing: 8) {
-                        if tree.isLoading { ProgressView().controlSize(.small) }
-                        Text(tree.isLoading ? "Loading folder…" : (tree.error ?? (viewModel.searchText.isEmpty ? "This folder is empty" : "No matches in expanded folders")))
-                        if !viewModel.searchText.isEmpty { Button("Search entire project  ⌘P") { NotificationCenter.default.post(name: .neoLinkQuickOpen, object: nil) } }
-                    }.font(.system(size: 11)).foregroundStyle(NeoLinkTheme.textSecondary).padding(10)
-                }
-            }
-            .dropDestination(for: URL.self) { urls, _ in
+        // The project tree is a native NSTableView (see ExplorerTableView). It recycles row
+        // views, repaints only changed rows, and keeps scroll position and selection across the
+        // background refreshes that stream in from Git, diagnostics and the file-system watcher.
+        ExplorerTableView(
+            tree: tree,
+            activeFileURL: activeFileURL?.standardizedFileURL,
+            onToggle: { tree.toggle($0) },
+            onOpen: { open($0) },
+            contextMenu: { entry in contextMenu(for: entry) },
+            canAcceptDrop: { target, urls in
+                !viewModel.isWorking && !urls.isEmpty && urls.allSatisfy(\.isFileURL) && target?.missing != true
+            },
+            onDrop: { target, urls in
                 guard !viewModel.isWorking, !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return false }
-                viewModel.copyToCurrentDirectory(from: urls); return true
-            } isTargeted: { isDropTargeted = $0 }
-            .background(isDropTargeted ? NeoLinkTheme.selection : Color.clear)
+                if let target, target.item.isDirectory, target.missing != true {
+                    viewModel.copyFiles(from: urls, into: target.item.url)
+                } else {
+                    viewModel.copyToCurrentDirectory(from: urls)
+                }
+                return true
+            }
+        )
+        .overlay {
+            if tree.rows.isEmpty {
+                VStack(spacing: 8) {
+                    if tree.isLoading { ProgressView().controlSize(.small) }
+                    Text(tree.isLoading ? "Loading folder…" : (tree.error ?? (viewModel.searchText.isEmpty ? "This folder is empty" : "No matches in expanded folders")))
+                    if !viewModel.searchText.isEmpty { Button("Search entire project  ⌘P") { NotificationCenter.default.post(name: .neoLinkQuickOpen, object: nil) } }
+                }.font(.system(size: 11)).foregroundStyle(NeoLinkTheme.textSecondary).padding(10)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Builds the right-click menu for a tree row as an AppKit `NSMenu`, calling the same
+    /// handlers the SwiftUI row used. Kept next to the row logic so the two stay in step.
+    private func contextMenu(for entry: ExplorerRow) -> NSMenu {
+        let item = entry.item
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func add(_ title: String, enabled: Bool = true, _ action: @escaping () -> Void) {
+            let menuItem = NSMenuItem(title: title, action: #selector(MenuActionTarget.run(_:)), keyEquivalent: "")
+            let target = MenuActionTarget(action)
+            menuItem.target = target
+            menuItem.representedObject = target  // retains the target for the menu's lifetime
+            menuItem.isEnabled = enabled
+            menu.addItem(menuItem)
+        }
+        if entry.missing {
+            add("Review Deletion in Source Control") { NotificationCenter.default.post(name: .neoLinkShowGit, object: tree.git?.root) }
+            return menu
+        }
+        add(item.isDirectory ? "Browse This Folder" : "Open in Tab") { open(item) }
+        if item.isDirectory {
+            add("New File Here…") { beginCreate(in: item.url, isDirectory: false) }
+            add("New Folder Here…") { beginCreate(in: item.url, isDirectory: true) }
+        } else {
+            add("Open in Default App") { NSWorkspace.shared.open(item.url) }
+        }
+        add("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+        add("Open in Integrated Terminal") { tabsController.openTerminal(in: item.isDirectory ? item.url : item.url.deletingLastPathComponent()) }
+        add("Reveal Active File", enabled: activeFileURL != nil) { revealActiveFile() }
+        menu.addItem(.separator())
+        add("Copy Path") { copyPath(item.url.path) }
+        add("Copy Relative Path") { copyPath(ExplorerGitSnapshot.relativePath(item.url, in: WorkspaceAccess.shared.projectURL ?? viewModel.currentURL) ?? item.url.path) }
+        menu.addItem(.separator())
+        add("Copy") { viewModel.copy(item: item) }
+        if viewModel.copiedURL != nil {
+            add("Paste Here", enabled: !viewModel.isWorking) { viewModel.paste(into: item.isDirectory ? item.url : item.url.deletingLastPathComponent()) }
+        }
+        add("Rename…", enabled: !viewModel.isWorking) { renameText = item.url.lastPathComponent; renameItem = item }
+        menu.addItem(.separator())
+        add("Move to Trash", enabled: !viewModel.isWorking) { viewModel.delete(item: item) }
+        return menu
     }
 
     private var fileList: some View {

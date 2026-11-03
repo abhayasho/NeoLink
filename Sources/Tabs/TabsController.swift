@@ -222,8 +222,13 @@ final class TabsController: ObservableObject {
     }
 
     func openFile(_ url: URL) {
+        PhaseTrace.mark("open.begin")
         let engine = codeSession.executable != nil && NeovimSession.supports(url) ? codeSession : nil
+        // Start the editor engine first, so Neovim boots while SwiftUI builds the new tab
+        // (about 40 ms on the main thread) instead of after it. Later opens reuse it.
+        engine?.start()
         openDocument(WorkspaceDocument(url: url, browserTabID: browserTab?.id, neovim: engine))
+        PhaseTrace.mark("open.end")
     }
 
     private func syncEditor(_ snapshot: NeovimSnapshot) {

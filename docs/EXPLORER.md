@@ -30,3 +30,13 @@ Git output and ignore behavior are based on the official [git-status](https://gi
 ## Validation
 
 Version 1.7 passed 80 native tests and the Neovim runtime regression checks. Explorer tests cover lazy loads, compaction, reveal, hidden active files, diagnostics aggregation, rapid root changes, symlink cycles, fuzzy matching, ignore rules/negations, tracked files matching ignore patterns, and deleted placeholders. Existing local-copy, per-terminal browser, SSH-input, and remote-browser regressions remain covered. Installed-app checks verified tree expansion, Git decorations, fuzzy Quick Open with automatic reveal, terminal folder routing, and switching between Tree and Folder List. Live authenticated SFTP transfer testing still requires a reachable server.
+
+## Native table update (1.9.0, build 18)
+
+The Project Tree now uses a view-based AppKit `NSTableView` over the same asynchronous, flattened tree model. Cells have fixed 24-point layouts, cached symbols and separate Git/diagnostic badges; they contain no SwiftUI hosting views. Hover changes repaint the affected cells. A row revision prevents unrelated SwiftUI updates from recomputing table membership. Small membership changes use insertion/removal operations, while large root/filter replacements use one bounded reload. Decoration changes reconfigure visible cells without reloading the table.
+
+Selection follows row identity. Up/Down and type selection use native table navigation; Left/Right navigate parents/children or collapse/expand folders, and Return opens the selected file. A refresh keeps cached listings visible while revalidating them, preserves the top visible row and its fractional offset when possible, and does not repeat editor auto-reveal. Explicit editor selection still reveals the file. Drag validation is read-only; copying occurs only when a drop is accepted.
+
+Regression coverage includes selection/viewport preservation after insertion, cell reuse and error-versus-warning changes, simultaneous badges, folder navigation, drag validation, and refreshes without empty snapshots or repeated reveal. The full native suite and Neovim runtime checks remain required. These checks establish behavior, not visual equivalence with Zed. Real trackpad comparison remains necessary for perceived smoothness, momentum and text stability.
+
+Build 18 validation: 110 native tests, eight offline benchmark checks, and the real Neovim runtime regression script pass. Installed-app checks covered actual explorer scrolling, keyboard expansion/navigation, context-menu file opening, refresh at the bottom of a scrolled tree, and Quick Open with active-file reveal. Manual trackpad comparison with Zed and authenticated SFTP transfers were not part of these checks.

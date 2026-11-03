@@ -224,10 +224,19 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     public static var allowsMetalFrameCapture = false
     /// Receives a copy of the next submitted Metal frame (requires `allowsMetalFrameCapture`).
     public var metalFrameCapture: ((CGImage?) -> Void)?
+    /// Receives a copy of every submitted Metal frame with its `metalNextFrameTag`, for
+    /// consecutive-frame analysis (requires `allowsMetalFrameCapture`). Costs a GPU copy per frame.
+    public var metalFrameCaptureEveryFrame: ((CGImage?, UInt64) -> Void)?
     /// Presents the next frame without waiting for vsync (`CAMetalLayer.displaySyncEnabled`).
     /// A composited window does not tear; the host must keep such frames at least a refresh
     /// interval apart, or the compositor replaces one before it is shown.
     public var metalPresentsImmediately = false
+    /// Whether the last Metal frame differed from the one before it (rows rebuilt, moved, the
+    /// cursor, or the smooth-scroll offset). For measuring redundant presentations.
+    public internal(set) var metalLastFrameChanged = true
+    /// The smooth-scroll offset the last Metal frame actually drew, in points, after clamping
+    /// to the lines available at the region edge.
+    public internal(set) var metalLastDrawnScrollOffset: CGFloat = 0
     /// Smooth scrolling with the Metal renderer: points by which rows of the scroll region are
     /// drawn lower (positive) or higher (negative) than the grid. Lines that recently left the
     /// region fill the exposed edge, up to `smoothScrollRange`. Return it to 0 to show the grid.
@@ -239,6 +248,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Called after the program moved a full-width scroll region by whole lines
     /// (positive: content up), on the thread that feeds the terminal.
     public var programScrolled: ((_ lines: Int) -> Void)?
+    /// Called after the program moved a region restricted to left and right margins (one
+    /// window of a side-by-side split) by whole lines. Such a region cannot be drawn at a
+    /// fractional offset; the host can only follow it in whole lines.
+    public var programScrolledWithinMargins: ((_ lines: Int) -> Void)?
     var retainedScrollLines = RetainedScrollLines()
     /// Lines whose rows moved without changing content since the last Metal frame.
     var metalMovedLines = Set<ObjectIdentifier>()
@@ -1207,9 +1220,19 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     open func scrolled(source terminal: Terminal, yDisp: Int) {
         //selectionView.notifyScrolled(source: terminal)
-        updateScroller()
-        terminalDelegate?.scrolled(source: self, position: scrollPosition)
+        // NeoLink: output scrolls the screen once per line feed. Updating the scroller and
+        // notifying the delegate once per main-queue turn (after the chunk being parsed)
+        // shows the same state and removed about a third of the parse time of a flood.
+        guard !scrollerUpdatePending else { return }
+        scrollerUpdatePending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.scrollerUpdatePending = false
+            self.updateScroller()
+            self.terminalDelegate?.scrolled(source: self, position: self.scrollPosition)
+        }
     }
+    private var scrollerUpdatePending = false
     
     open func linefeed(source: Terminal) {
         // Preserve manual selection while output is streaming when mouse reporting is disabled.

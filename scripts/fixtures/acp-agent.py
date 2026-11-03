@@ -50,6 +50,15 @@ for line in sys.stdin:
             print('not json', flush=True)
         elif prompt == 'cancel':
             send(dict(id='cancel-permission', method='session/request_permission', params=dict(sessionId=session, toolCall=dict(toolCallId='wait', title='Waiting permission'), options=[dict(optionId='allow', name='Allow once', kind='allow_once')])))
+        elif prompt == 'stream':
+            # A long answer in small chunks, about as fast as a model streams tokens (benchmark).
+            import time
+            for index in range(600):
+                text(f'Token {index} of a streamed answer with **markdown** and `code`. ')
+                if index % 40 == 39:
+                    text('\n\n')
+                time.sleep(0.004)
+            send(dict(id=prompt_id, result=dict(stopReason='end_turn')))
         else:
             text('Hello ')
             text('世界. ')
