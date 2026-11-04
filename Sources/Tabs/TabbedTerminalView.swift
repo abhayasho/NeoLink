@@ -121,12 +121,16 @@ private struct WorkspaceTabButton: View {
                 HStack(spacing: 8) {
                     Image(systemName: icon)
                         .foregroundColor(isSelected ? NeoLinkTheme.accent : NeoLinkTheme.textSecondary)
+                        .frame(width: 14)
                     Text(presentation.title)
+                        .font(.system(size: 12, weight: .regular))
+                        .fixedSize(horizontal: true, vertical: false)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundColor(isSelected ? NeoLinkTheme.textPrimary : NeoLinkTheme.textSecondary)
                     if !presentation.context.isEmpty {
                         Text(presentation.context).font(.system(size: 11)).foregroundColor(NeoLinkTheme.textSecondary)
+                            .fixedSize(horizontal: true, vertical: false)
                             .lineLimit(1).truncationMode(.middle).frame(maxWidth: 100)
                     }
                     Spacer(minLength: 0)

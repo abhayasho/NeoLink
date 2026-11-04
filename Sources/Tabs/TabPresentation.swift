@@ -7,7 +7,7 @@ struct TabPresentation: Equatable {
     let width: CGFloat
     static let minimumWidth: CGFloat = 120
     static let maximumWidth: CGFloat = 320
-    static let chromeWidth: CGFloat = 80 // icon, gaps, reserved dirty indicator, close
+    static let chromeWidth: CGFloat = 96 // icon, gaps, reserved dirty indicator, close
 
     static func measure(_ text: String) -> CGFloat {
         ceil((text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width)
