@@ -30144,7 +30144,7 @@
     "editorRuntime": "pass, including Python diagnostics/definition and private-PTY service-error/duplicate-name regression",
     "offlineBenchmarkTests": 8,
     "packaging": "resources and strict ad-hoc signature verified; no notarization claim",
-    "ci": "https://github.com/abhayasho/NeoLink/actions/runs/41762482174",
+    "ci": "https://github.com/abhayasho/NeoLink/actions/runs/41778129038",
     "realUI": "Installed final app: both same-basename TypeScript fixtures opened; screenshot showed correct two/one text and parent labels; rapid file/shell switching settled on one. Missing TypeScript SDK notice remained dismissible and did not block navigation. Long explorer filenames, small/large/reversed driver scrolls, refresh and sidebar resizing exercised. Twelve-tab overflow revealed the first tab at the left edge and retained a visible tab position; temporary terminals/fixtures closed without edits.",
     "realInputLimits": "External UI-driver actions establish correctness, not natural trackpad feel, hardware event-to-photon latency, momentum-phase coverage or pixel identity at each physical refresh. Hover visual cost is procedural. Final manual trace could not be correlated to those UI actions, so it is excluded from latency evidence. Native anchor/overflow/pixel tests cover additional invariants. No authenticated SSH/SFTP or macOS13 device check.",
     "remaining": "Resize stalls, held motion frames and correct-buffer presentation delay remain. No uninterrupted 120fps or parity claim.",
