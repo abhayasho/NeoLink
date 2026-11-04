@@ -3448,5 +3448,11 @@
       "windowPoints": "1728x1084"
     }
   },
-  "limits": "Procedural rendering validation and native UI-driver correctness, not natural physical trackpad acceptance, uninterrupted 120 FPS, or a matched performance A/B. This run used 13pt and existing agent-panel settings; historical Build27 performance runs used 12pt. No authenticated SSH/SFTP or macOS13-device check. No performance speedup claimed."
+  "limits": "Procedural rendering validation and native UI-driver correctness, not natural physical trackpad acceptance, uninterrupted 120 FPS, or a matched performance A/B. This run used 13pt and existing agent-panel settings; historical Build27 performance runs used 12pt. No authenticated SSH/SFTP or macOS13-device check. No performance speedup claimed.",
+  "ci": "https://github.com/abhayasho/NeoLink/actions/runs/41781483999",
+  "publicRelease": {
+    "url": "https://github.com/abhayasho/NeoLink/releases/tag/v1.11.4",
+    "zipSHA256": "a991c67b862c6d00649b35ee87a2054cde3a9da1c87fafe60a848af2064b5e73",
+    "verified": "Public latest ZIP checksum, extracted resources/signature and executable hash match the installed release."
+  }
 }

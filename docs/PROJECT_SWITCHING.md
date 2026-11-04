@@ -19,3 +19,5 @@ Cached text artwork remains reusable by row identity. Hover/selection still pres
 - A frontmost, unlocked full-screen release check completed motion, 60 highlights and 24 tab selections with no selection failures or presentation timeouts. Highlights rebuilt zero text strips. Motion's changed-content interval was 8.3 ms median, 16.7 ms p95 and 33.3 ms maximum, with no explorer native fallbacks. These are validation results, not evidence of uninterrupted 120 FPS or a speedup over the prior release: the run used 13-point text and the existing agent panel, unlike historical 12-point runs.
 
 [Raw release report, setup and executable hash](project-switch-build28.json). Automated rendering tests establish correctness; they do not establish natural trackpad smoothness or uninterrupted 120 FPS.
+
+[Clean macOS CI passed](https://github.com/abhayasho/NeoLink/actions/runs/41781483999), including packaging and installer checks. The public latest-release ZIP was downloaded, its checksum and signature verified, and its executable matched the installed/tested Build 28 binary.
