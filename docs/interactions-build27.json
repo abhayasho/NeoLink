@@ -30147,6 +30147,14 @@
     "ci": "https://github.com/abhayasho/NeoLink/actions/runs/41762482174",
     "realUI": "Installed final app: both same-basename TypeScript fixtures opened; screenshot showed correct two/one text and parent labels; rapid file/shell switching settled on one. Missing TypeScript SDK notice remained dismissible and did not block navigation. Long explorer filenames, small/large/reversed driver scrolls, refresh and sidebar resizing exercised. Twelve-tab overflow revealed the first tab at the left edge and retained a visible tab position; temporary terminals/fixtures closed without edits.",
     "realInputLimits": "External UI-driver actions establish correctness, not natural trackpad feel, hardware event-to-photon latency, momentum-phase coverage or pixel identity at each physical refresh. Hover visual cost is procedural. Final manual trace could not be correlated to those UI actions, so it is excluded from latency evidence. Native anchor/overflow/pixel tests cover additional invariants. No authenticated SSH/SFTP or macOS13 device check.",
-    "remaining": "Resize stalls, held motion frames and correct-buffer presentation delay remain. No uninterrupted 120fps or parity claim."
+    "remaining": "Resize stalls, held motion frames and correct-buffer presentation delay remain. No uninterrupted 120fps or parity claim.",
+    "installation": {
+      "release": "https://github.com/abhayasho/NeoLink/releases/tag/v1.11.3",
+      "asset": "NeoLink-macos-arm64.zip",
+      "assetSHA256": "35ee523c93c4d4432a83d1af4b926cb364e875c2b10d28da01d3921859c98484",
+      "offline": "Fresh install/update, backup, checksum rejection, running-app protection, platform guards, failed-swap rollback and symlink rejection passed against the actual packaged app.",
+      "public": "Downloaded installer matched the repository; public latest-release installation to a temporary directory and the exact README curl command to /Applications both succeeded. Installed executable hash matched final benchmark binary. Installed app opened through native UI.",
+      "distributionLimits": "Apple silicon only; ad-hoc signed, no notarization. Coding runtimes remain optional separate installs."
+    }
   }
 }
