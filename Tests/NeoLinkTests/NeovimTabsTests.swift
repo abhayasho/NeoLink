@@ -125,6 +125,37 @@ final class NeovimTabsTests: XCTestCase {
     }
 
     @MainActor
+    func testServiceErrorIsPublishedOnceAndDoesNotBlockAnotherFile() async throws {
+        guard let executable = CommandRunner.executable("nvim") else { throw XCTSkip("Neovim is optional") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLink-notice-\(UUID().uuidString)").resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let wrapper = root.appendingPathComponent("editor")
+        let script = "#!/bin/sh\nexec '" + executable.replacingOccurrences(of: "'", with: "'\\''") + "' --cmd 'lua vim.defer_fn(function() error(\"service notice probe\") end,400)' \"$@\"\n"
+        try Data(script.utf8).write(to: wrapper)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+        let first = root.appendingPathComponent("first.txt"), second = root.appendingPathComponent("second.txt")
+        try Data("first\n".utf8).write(to: first); try Data("second\n".utf8).write(to: second)
+        let session = NeovimSession(executable: wrapper.path)
+        var selected: String? = first.path
+        session.selectedPath = { selected }
+        defer { session.shutdown(); try? FileManager.default.removeItem(at: root) }
+        session.prepareSelection(selected)
+        let opened = await session.request(["method": "open", "path": first.path])
+        XCTAssertTrue(opened)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        let refreshed = await session.refresh()
+        XCTAssertTrue(refreshed)
+        XCTAssertTrue(session.error?.contains("service notice probe") == true)
+        XCTAssertTrue(session.isReady)
+        session.error = nil
+        selected = second.path; session.prepareSelection(selected)
+        let switched = await session.request(["method": "open", "path": second.path])
+        XCTAssertTrue(switched)
+        XCTAssertEqual(session.snapshot?.active, second.path)
+        XCTAssertNil(session.error, "An unchanged notice must not reopen a dismissed banner")
+    }
+
+    @MainActor
     private func settle(_ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(8)
         while !condition(), Date() < deadline { try await Task.sleep(nanoseconds: 5_000_000) }
