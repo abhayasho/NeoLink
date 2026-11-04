@@ -32,6 +32,7 @@ struct NeoGPUNode {
     let scene: NeoGPUScene
     var translation: SIMD2<Float> = .zero
     var needsAnotherFrame = false
+    var traceSelection: UInt64 = 0
     let presented: (Double) -> Void
 }
 
@@ -259,6 +260,9 @@ final class NeoGPUWorkspace: NSView {
         command.addCompletedHandler { [weak self] buffer in
             slot.release()
             if buffer.status == .error { DispatchQueue.main.async { self?.fail() } }
+        }
+        if SelectionTrace.enabled {
+            for token in Set(nodes.map { $0.0.traceSelection }).filter({ $0 > 0 }) { SelectionTrace.mark(token, "frame.submitted") }
         }
         command.present(drawable); command.commit()
         // Repeat only at the owning display-link deadline. Retained pane textures

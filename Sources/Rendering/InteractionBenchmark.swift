@@ -293,13 +293,14 @@ final class InteractionBenchmark {
                     fail(scenario, "second editor did not open"); continue
                 }
                 await sleep(0.8)
+                SelectionTrace.reset()
                 var latencies: [Double] = [], visible: [Double] = [], timeouts = 0
                 var failures: [[String: Any]] = []
                 await measure(scenario, extra: {
                     ["switchToFocusedMs": Self.summary(latencies), "switches": latencies.count,
                      "switchToContentPresentedMs": Self.summary(visible), "presentedSwitches": visible.count,
                      "presentationTimeouts": timeouts, "failures": failures,
-                     "inputDriver": "procedural selection, not pointer input"]
+                     "inputDriver": "procedural selection, not pointer input", "selectionTrace": SelectionTrace.report]
                 }) {
                     let order = [shellTab, firstEditor, secondEditor, firstEditor]
                     for index in 0..<24 {
@@ -1114,7 +1115,7 @@ final class InteractionBenchmark {
     private static func summary(_ values: [Double]) -> [String: Double] {
         let p = PresentationTiming.percentile
         func ms(_ value: Double) -> Double { (value * 10_000).rounded() / 10 }
-        return ["p50": ms(p(values, 0.5)), "p95": ms(p(values, 0.95)), "max": ms(values.max() ?? 0)]
+        return ["p50": ms(p(values, 0.5)), "p95": ms(p(values, 0.95)), "p99": ms(p(values, 0.99)), "max": ms(values.max() ?? 0)]
     }
 
     /// The source checkout this build came from (benchmarks use its fixtures and files).

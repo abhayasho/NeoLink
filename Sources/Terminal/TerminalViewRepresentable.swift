@@ -366,6 +366,7 @@ final class TerminalHostView: NSView {
         focusedTabID = id
         DispatchQueue.main.async { [weak self, weak view] in
             guard let self, self.selectedTabID == id, let view, let window = self.window else { return }
+            SelectionTrace.mark(SelectionTrace.current, "shell.focus")
             window.makeFirstResponder(view)
         }
     }

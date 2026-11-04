@@ -67,7 +67,8 @@ final class ExplorerMetalTests: XCTestCase {
         // Compare the retained GPU composition against independent per-row encoding,
         // including fractional edges, reversals and decorations. The extra pass must
         // not blur glyphs or change colors by even one byte.
-        for position: CGFloat in [5.5, 29, 7, 24 * 20 + 5] {
+        let positions: [CGFloat] = [5.5, 29, 7, 485, 9603.5, 245.5, 485]
+        for position in positions {
             scroll.contentView.scroll(to: .init(x: 0, y: position))
             scroll.reflectScrolledClipView(scroll.contentView)
             let composed = try capture(surface, contentChanged: false)

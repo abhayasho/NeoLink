@@ -160,6 +160,7 @@ function M.open(path, line, activate)
       M.baseline[b]=signature(path)
     end
     api.nvim_set_current_buf(b)
+    if M.trace then M.trace.bufferActivated=uv.hrtime()/1e9 end
     if line and line>0 then api.nvim_win_set_cursor(0,{math.min(line,api.nvim_buf_line_count(b)),0}) end
     vim.cmd('startinsert')
   end
@@ -212,8 +213,10 @@ function M.action(action)
   M.publish()
 end
 function M.dispatch(json)
+  M.trace=nil
   local ok,err=pcall(function()
     local request=vim.json.decode(json)
+    M.trace=request.trace and {dispatch=uv.hrtime()/1e9} or nil
     if request.method=='open' then
       M.open(request.path,request.line,request.activate)
       if request.activate~=false and request.selection then
@@ -221,6 +224,7 @@ function M.dispatch(json)
         -- exposes this buffer after parsing it, never on an earlier control reply.
         M.selection=request.selection
         vim.cmd('redraw')
+        if M.trace then M.trace.redraw=uv.hrtime()/1e9 end
         if api.nvim_ui_send then
           api.nvim_ui_send('\27]2;neolink-selection:'..tostring(request.selection)..'\7')
         else
@@ -230,12 +234,17 @@ function M.dispatch(json)
           vim.o.titlestring='neolink-selection:'..tostring(request.selection)
           vim.cmd('redraw')
         end
+        if M.trace then M.trace.markerQueued=uv.hrtime()/1e9 end
       end
     elseif request.method=='save' then M.save(request.path)
     elseif request.method=='close' then M.close(request.path)
     elseif request.method=='action' then M.action(request.action) end
   end)
-  return vim.json.encode({ok=ok,error=ok and '' or tostring(err),state=M.snapshot()})
+  if M.trace then M.trace.metadataBegin=uv.hrtime()/1e9 end
+  local state=M.snapshot()
+  if M.trace then M.trace.ack=uv.hrtime()/1e9 end
+  local trace=M.trace; M.trace=nil
+  return vim.json.encode({ok=ok,error=ok and '' or tostring(err),state=state,trace=trace})
 end
 api.nvim_create_autocmd({'BufEnter','BufModifiedSet','BufWritePost','ModeChanged','LspAttach','LspDetach','DiagnosticChanged'}, {callback=M.publish})
 api.nvim_create_autocmd('BufReadPost',{callback=function(ev) M.baseline[ev.buf]=signature(api.nvim_buf_get_name(ev.buf)) end})

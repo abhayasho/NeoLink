@@ -22,13 +22,41 @@ final class EditorControlChannel: @unchecked Sendable {
     private let path: String
     init(path: String) { self.path = path }
 
-    func request(_ data: Data, timeout: Double = 8) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
-            worker.async {
-                do { continuation.resume(returning: try self.exchange(data, timeout: timeout)) }
-                catch { self.disconnect(); continuation.resume(throwing: error) }
+    final class Reply: @unchecked Sendable {
+        private let lock = NSLock()
+        private var result: Result<Data, Error>?
+        private var continuation: CheckedContinuation<Data, Error>?
+        fileprivate func finish(_ result: Result<Data, Error>) {
+            lock.lock()
+            self.result = result
+            let continuation = self.continuation; self.continuation = nil
+            lock.unlock()
+            continuation?.resume(with: result)
+        }
+        func value() async throws -> Data {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                if let result { lock.unlock(); continuation.resume(with: result) }
+                else { self.continuation = continuation; lock.unlock() }
             }
         }
+    }
+    /// Enqueue synchronously so a warm selection leaves before SwiftUI lays out
+    /// the new tab state. The dedicated worker still serializes every exchange.
+    func submit(_ data: Data, timeout: Double = 8, traceToken: UInt64 = 0) -> Reply {
+        let reply = Reply()
+        worker.async {
+            do {
+                SelectionTrace.mark(traceToken, "socket.begin")
+                let response = try self.exchange(data, timeout: timeout)
+                SelectionTrace.mark(traceToken, "socket.received")
+                reply.finish(.success(response))
+            } catch { self.disconnect(); reply.finish(.failure(error)) }
+        }
+        return reply
+    }
+    func request(_ data: Data, timeout: Double = 8, traceToken: UInt64 = 0) async throws -> Data {
+        try await submit(data, timeout: timeout, traceToken: traceToken).value()
     }
     func close() { worker.async { self.disconnect() } }
     deinit { if descriptor >= 0 { Darwin.close(descriptor) } }

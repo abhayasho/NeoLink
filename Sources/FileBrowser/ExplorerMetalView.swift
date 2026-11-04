@@ -57,6 +57,9 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     private let pipeline: MTLRenderPipelineState
     private let gpu: NeoGPURenderer
     private let worker = DispatchQueue(label: "com.neolink.explorer.artwork", qos: .userInitiated)
+    private let prefetchWorker = DispatchQueue(label: "com.neolink.explorer.prefetch", qos: .utility)
+    private var prefetchJobs: Set<JobKey> = []
+    private var rasterViewport = 0..<0
     private var cache: [URL: Artwork] = [:]
     private var jobs: Set<JobKey> = []
     private let rasterEpoch = ExplorerRasterEpoch()
@@ -257,12 +260,19 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         let scale = window?.backingScaleFactor ?? 2, width = Int(ceil(bounds.width * scale))
         if artworkSize?.width != width || artworkSize?.scale != scale {
             generation &+= 1; rasterEpoch.set(generation)
-            jobs.removeAll(); artworkRefreshScheduled = false; resizeRetryScheduled = false
+            jobs.removeAll(); prefetchJobs.removeAll(); artworkRefreshScheduled = false; resizeRetryScheduled = false
             artworkSize = (width, scale)
         }
         let y = scroll.contentView.bounds.minY
         let visibleRows = Self.visibleRows(count: scene.rows.count, y: y, height: bounds.height)
         if reusableComposition(visible: visibleRows, width: width, scale: scale) != nil { return true }
+        // A fast flick can leave the entire queued viewport behind. Cancel its
+        // unfinished work before admitting newly visible rows; keep cached pixels.
+        if !rasterViewport.isEmpty, !rasterViewport.overlaps(visibleRows), !jobs.isEmpty {
+            generation &+= 1; rasterEpoch.set(generation)
+            jobs.removeAll(); prefetchJobs.removeAll(); artworkRefreshScheduled = false
+        }
+        rasterViewport = visibleRows
         let first = visibleRows.lowerBound, end = visibleRows.upperBound
         let prefetchMargin = 48
         for index in first..<max(first, end) {
@@ -270,11 +280,15 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
             if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
             schedule(row, width: width, scale: scale)
         }
-        let prefetch = max(0, first - prefetchMargin)..<min(scene.rows.count, max(first, end) + prefetchMargin)
-        for index in prefetch where index < first || index >= end {
-            let row = scene.rows[index]
-            if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
-            schedule(row, width: width, scale: scale)
+        // Warm nearest neighbors first, rather than spending the bounded queue
+        // on the far edge of a 48-row prefetch range. Reserve four admission
+        // slots for newly visible work while keeping the strip's margins warm.
+        for distance in 1...prefetchMargin {
+            for index in [end + distance - 1, first - distance] where scene.rows.indices.contains(index) {
+                let row = scene.rows[index]
+                if let art = cache[row.id], art.row == row, art.width == width, art.scale == scale { continue }
+                schedule(row, width: width, scale: scale, prefetch: true)
+            }
         }
         return (first..<max(first, end)).allSatisfy { index in
             let row = scene.rows[index]
@@ -293,7 +307,7 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         windowObservers.forEach(NotificationCenter.default.removeObserver); windowObservers.removeAll()
         frames?.unregister(ObjectIdentifier(self))
         uncover(); scene = nil; coverageChanged = nil
-        cache.removeAll(); jobs.removeAll(); composition = nil
+        cache.removeAll(); jobs.removeAll(); prefetchJobs.removeAll(); composition = nil
     }
 
     private func uncover() {
@@ -603,10 +617,11 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         }
     }
 
-    private func schedule(_ row: ExplorerRow, width: Int, scale: CGFloat) {
+    private func schedule(_ row: ExplorerRow, width: Int, scale: CGFloat, prefetch: Bool = false) {
         let key = JobKey(id: row.id, width: width, scale: scale, generation: generation)
-        guard jobs.count < 16, !jobs.contains(key) else { return }
+        guard jobs.count < 16, !jobs.contains(key), !prefetch || prefetchJobs.count < 12 else { return }
         jobs.insert(key)
+        if prefetch { prefetchJobs.insert(key) }
         // Resolve AppKit symbols/colors/fonts on the main thread. CoreText rasterization
         // and bitmap allocation run on the worker; there is no per-frame text shaping.
         let look = SemanticFileIcon.appearance(url: row.item.url, directory: row.item.isDirectory, expanded: row.expanded)
@@ -621,7 +636,7 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         let smallFont = NSFont.monospacedSystemFont(ofSize: 8, weight: .bold) as CTFont
         let badgeFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium) as CTFont
         let rasterEpoch = rasterEpoch
-        worker.async { [weak self] in
+        (prefetch ? prefetchWorker : worker).async { [weak self] in
             guard rasterEpoch.matches(key.generation) else { return }
             let art = Self.raster(row, width: width, scale: scale, abbreviation: look.abbreviation, symbol: symbol,
                 chevron: chevron, text: text, iconColor: iconColor, secondary: secondary, badgeColor: badgeColor,
@@ -629,7 +644,7 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
             guard rasterEpoch.matches(key.generation) else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.jobs.remove(key)
+                self.jobs.remove(key); self.prefetchJobs.remove(key)
                 guard key.generation == self.generation, let art else { return }
                 let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: art.width, height: art.height, mipmapped: false)
                 descriptor.usage = .shaderRead; descriptor.storageMode = .shared

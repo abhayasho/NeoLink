@@ -67,9 +67,11 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     }
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
+        if let editor = self as? CodeTerminalView { SelectionTrace.mark(editor.session?.selectionToken ?? 0, "pty.received") }
         rendering.noteOutput()
         smoothScroll.noteOutput(slice.count)
         super.dataReceived(slice: slice)
+        if let editor = self as? CodeTerminalView { SelectionTrace.mark(editor.session?.selectionToken ?? 0, "pty.parsed") }
     }
 
     override func scrolled(source terminal: Terminal, yDisp: Int) {

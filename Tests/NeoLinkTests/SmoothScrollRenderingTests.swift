@@ -7,6 +7,35 @@ import SwiftTerm
 /// Renders with SwiftTerm's Metal renderer and compares frames pixel by pixel.
 final class SmoothScrollRenderingTests: XCTestCase {
     @MainActor
+    func testSubColumnResizeMatchesFreshRendererIncludingDoubledHeightClips() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        defer { TerminalView.allowsMetalFrameCapture = false }
+        let (window, view) = makeMetalTerminal()
+        let (referenceWindow, reference) = makeMetalTerminal()
+        defer { window.close(); referenceWindow.close() }
+        window.setContentSize(.init(width: 490, height: 320))
+        referenceWindow.setContentSize(.init(width: 490, height: 320))
+        try view.setUseMetal(true); try reference.setUseMetal(true)
+        let content = "\u{1B}[?25l\u{1B}[2J\u{1B}[Hcolor \u{1B}[31;44m界 🦎 abcdefghijklmnopqrstuvwxyz\u{1B}[0m\r\n\u{1B}#3DOUBLE HEIGHT TOP \r\n\u{1B}#4DOUBLE HEIGHT BOTTOM\r\n\u{1B}#6DOUBLE WIDTH\r\nnormal last row"
+        view.feed(text: content)
+        _ = try capture(view)
+        let columns = view.getTerminal().cols
+        for width: CGFloat in [480.125, 480.25, 480.375, 480, 489] {
+            view.setFrameSize(.init(width: width, height: 320))
+            reference.setFrameSize(.init(width: width, height: 320))
+            // A full erase/repaint makes the reference rebuild independently.
+            reference.feed(text: content)
+            if width < 481 { XCTAssertEqual(view.getTerminal().cols, columns) }
+            let reused = try capture(view), fresh = try capture(reference)
+            XCTAssertEqual(reused.width, fresh.width)
+            XCTAssertEqual(reused.dataProvider!.data! as Data, fresh.dataProvider!.data! as Data,
+                           "Sub-column resize must preserve clipping and phase-correct text at width \(width)")
+        }
+    }
+
+    @MainActor
     func testHostedTerminalSceneCompositesWithoutChangingPixelsOrCommittingTheOwnersBuffer() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         _ = NSApplication.shared

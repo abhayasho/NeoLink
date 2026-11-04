@@ -283,7 +283,12 @@ final class TerminalRendering: NeoGPUClient {
     func gpuPrepare(time: Double, command: MTLCommandBuffer) -> NeoGPUNode? {
         guard let view, let frames, let workspaceGPU, view.isUsingMetalRenderer else { return nil }
         let id = ObjectIdentifier(view), scale = view.window?.backingScaleFactor ?? 2
+        let prepareBegan = CACurrentMediaTime()
         frames.prepareDrawable(id, at: time)
+        // Preparation drains PTY updates; correlate the buffer actually encoded,
+        // including a marker parsed during this very display callback.
+        let traceToken = (view as? CodeTerminalView)?.session?.parsedSelection ?? SelectionTrace.current
+        SelectionTrace.mark(traceToken, "frame.prepare", at: prepareBegan)
         let width = max(1, Int((view.bounds.width * scale).rounded()))
         let height = max(1, Int((view.bounds.height * scale).rounded()))
         var fresh = false
@@ -312,14 +317,21 @@ final class TerminalRendering: NeoGPUClient {
             pendingDraw = nil
             view.metalHostTexture = hostTexture; view.metalHostCommandBuffer = command
             view.metalHostFrameEncoded = { encoded = $0 }
+            SelectionTrace.mark(traceToken, "frame.encode.begin")
             frames.presentDrawable(id, outputAt: output, present: draw)
+            SelectionTrace.mark(traceToken, "frame.encode.end")
+            if SelectionTrace.enabled, encoded != 0 {
+                command.addScheduledHandler { _ in SelectionTrace.mark(traceToken, "gpu.scheduled") }
+                command.addCompletedHandler { _ in SelectionTrace.mark(traceToken, "gpu.completed") }
+            }
             view.metalHostTexture = nil; view.metalHostCommandBuffer = nil; view.metalHostFrameEncoded = nil
             if encoded == 0 { pendingDraw = draw }
             else { hostTextureReady = true }
         }
         guard hostTextureReady, let scene = hostScene else { return nil }
-        return NeoGPUNode(scene: scene, needsAnotherFrame: pendingDraw != nil || frames.hasDrawableAnimation(id), presented: { [weak view] time in
+        return NeoGPUNode(scene: scene, needsAnotherFrame: pendingDraw != nil || frames.hasDrawableAnimation(id), traceSelection: encoded == 0 ? 0 : traceToken, presented: { [weak view] time in
             guard let view else { return }
+            if !(view is CodeTerminalView) { SelectionTrace.mark(traceToken, "shell.presented", at: time) }
             view.metalDisplayLayer?.opacity = 0
             view.metalHostFramePresented(tag: encoded, time: time)
         })

@@ -41,6 +41,8 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     private var watcher: DispatchSourceFileSystemObject?
     private var startup: Task<Void, Never>?
     private var requestChain: Task<Void, Never>?
+    private var queuedCommands = 0
+    weak var host: NeovimHostView?
     private var control: EditorControlChannel?
     private var epoch = UUID()
     private var selection: UInt64 = 0
@@ -57,6 +59,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     func selectionPresented(_ token: UInt64, at time: Double) {
         guard token == selection, token == parsedSelection, time > 0 else { return }
         if presentedSelection?.token != token {
+            SelectionTrace.mark(token, "presented", at: time)
             presentedSelection = (token, time)
             if recordsSelectionSamples, time >= selectionBegan {
                 selectionSamples.append(time - selectionBegan)
@@ -186,9 +189,11 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
 
     func selectionParsed(_ token: UInt64) {
         guard token == selection else { return }
+        SelectionTrace.mark(token, "marker.recognized")
         parsedSelection = token
         guard requestedPath == selectedPath?() else { return }
         if requestedPath != nil { requestedPath = nil }
+        host?.selectionReady(session: self)
     }
 
     @discardableResult
@@ -200,36 +205,68 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         }
         start()
         // Enqueue before awaiting startup: saves/closes cannot overtake a cold open.
-        let preceding = requestChain, startup = startup, token = epoch
+        let preceding = queuedCommands > 0 ? requestChain : nil, startup = startup, token = epoch
+        let traceToken = message["selectionOnly"] as? UInt64 ?? selection
+        SelectionTrace.mark(traceToken, "command.enqueued")
+        var immediate: EditorControlChannel.Reply?
+        let immediateSent = CACurrentMediaTime()
+        if queuedCommands == 0, isReady, let control,
+           message["selectionOnly"] as? UInt64 == selection,
+           let path = message["path"] as? String, path == selectedPath?(), !closedPaths.contains(path) {
+            var dispatch = message
+            dispatch.removeValue(forKey: "selectionOnly")
+            dispatch["activate"] = true; dispatch["selection"] = selection
+            if SelectionTrace.enabled { dispatch["trace"] = true }
+            if let data = try? JSONSerialization.data(withJSONObject: dispatch) {
+                SelectionTrace.mark(traceToken, "command.queueReady")
+                SelectionTrace.mark(traceToken, "command.dispatched", at: immediateSent)
+                immediate = control.submit(data, traceToken: traceToken)
+                dispatchedRequests += 1
+            }
+        }
+        queuedCommands += 1
         let task = Task { @MainActor [weak self] () -> Bool in
+            defer { if let self { self.queuedCommands -= 1 } }
             await preceding?.value
             await startup?.value
             guard let self, self.epoch == token, self.isReady, let control = self.control else { return false }
             do {
+                SelectionTrace.mark(traceToken, "command.queueReady")
                 var message = message
                 let opening = message["method"] as? String == "open"
                 if opening, let path = message["path"] as? String {
                     if self.closedPaths.contains(path) { return false }
                     let active = self.selectedPath.map { path == $0() } ?? true
                     if let requested = message.removeValue(forKey: "selectionOnly") as? UInt64,
-                       !active || requested != self.selection {
+                       immediate == nil && (!active || requested != self.selection) {
+                        SelectionTrace.mark(traceToken, "command.skipped")
                         self.skippedSelections += 1
                         return true
                     }
                     message["activate"] = active
                     if active { message["selection"] = self.selection }
                 }
+                if SelectionTrace.enabled { message["trace"] = true }
                 let data = try JSONSerialization.data(withJSONObject: message)
                 if opening { PhaseTrace.mark("editor.openRequest.begin") }
-                self.dispatchedRequests += 1
-                let output = try await control.request(data)
+                if immediate == nil { self.dispatchedRequests += 1 }
+                let sent = immediate == nil ? CACurrentMediaTime() : immediateSent
+                SelectionTrace.mark(traceToken, "command.dispatched", at: sent)
+                let output: Data
+                if let immediate { output = try await immediate.value() }
+                else { output = try await control.request(data, traceToken: traceToken) }
+                let received = CACurrentMediaTime()
+                SelectionTrace.mark(traceToken, "command.acknowledged", at: received)
                 if opening { PhaseTrace.mark("editor.openRequest.end") }
-                struct Response: Decodable { let ok: Bool; let error: String; let state: NeovimSnapshot }
+                struct Response: Decodable { let ok: Bool; let error: String; let state: NeovimSnapshot; let trace: [String: Double]? }
                 let response = try await Task.detached(priority: .userInitiated) {
                     let value = try JSONDecoder().decode(Response.self, from: output)
-                    return Response(ok: value.ok, error: value.error, state: Self.normalized(value.state))
+                    return Response(ok: value.ok, error: value.error, state: Self.normalized(value.state), trace: value.trace)
                 }.value
                 guard self.epoch == token else { return false }
+                if let times = response.trace { SelectionTrace.remote(traceToken, times, sent: SelectionTrace.time(traceToken, "socket.begin") ?? sent,
+                                         received: SelectionTrace.time(traceToken, "socket.received") ?? received) }
+                SelectionTrace.mark(traceToken, "metadata.accept")
                 self.accept(response.state)
                 if !response.ok { self.error = response.error }
                 return response.ok
@@ -251,6 +288,12 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     func prepareSelection(_ path: String?) {
         selection &+= 1
         selectionBegan = CACurrentMediaTime()
+        SelectionTrace.mark(selection, "selection.begin", at: selectionBegan)
+        if let event = NSApp?.currentEvent, [.leftMouseDown, .leftMouseUp, .keyDown].contains(event.type),
+           selectionBegan - event.timestamp >= 0, selectionBegan - event.timestamp < 0.5 {
+            SelectionTrace.mark(selection, "input.event", at: event.timestamp, fields: ["type": event.type.rawValue])
+        }
+        host?.selectionChanging()
         if requestedPath != path { requestedPath = path }
     }
     var selectionToken: UInt64 { selection }
@@ -320,7 +363,27 @@ struct NeovimSurface: NSViewRepresentable {
 final class NeovimHostView: NSView {
     private var terminal: CodeTerminalView?
     private var selection: UUID?
+    private var wantsActive = false
+    func selectionChanging() {
+        if let terminal, !terminal.isHidden {
+            if window?.firstResponder === terminal { window?.makeFirstResponder(nil) }
+            terminal.isHidden = true
+        }
+    }
+    func selectionReady(session: NeovimSession) {
+        guard wantsActive, session.requestedPath == nil, session.selectedPath?() != nil else { return }
+        terminal?.isHidden = false
+        SelectionTrace.mark(session.selectionToken, "view.shown")
+        if let terminal {
+            SelectionTrace.mark(session.selectionToken, "focus.begin")
+            window?.makeFirstResponder(terminal)
+            SelectionTrace.mark(session.selectionToken, "focus.end")
+        }
+    }
     func synchronize(session: NeovimSession, active: Bool, selection: UUID?) {
+        session.host = self
+        wantsActive = active
+        let active = active && session.requestedPath == nil
         let mounting = terminal == nil && session.terminal != nil
         if terminal == nil, let view = session.terminal { terminal = view; addSubview(view) }
         if !active, let terminal, !terminal.isHidden, let window, let responder = window.firstResponder as? NSView,
@@ -329,6 +392,7 @@ final class NeovimHostView: NSView {
             window.makeFirstResponder(nil)
         }
         if terminal?.isHidden != !active {
+            SelectionTrace.mark(session.selectionToken, active ? "view.shown" : "view.hidden")
             terminal?.isHidden = !active
             if active { PhaseTrace.mark("editor.shown") }
         }
@@ -337,14 +401,16 @@ final class NeovimHostView: NSView {
             self.selection = selection
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.selection == selection, let terminal = self.terminal, !terminal.isHidden else { return }
+                SelectionTrace.mark(terminal.session?.selectionToken ?? 0, "focus.begin")
                 self.window?.makeFirstResponder(terminal)
+                SelectionTrace.mark(terminal.session?.selectionToken ?? 0, "focus.end")
                 PhaseTrace.mark("editor.focused")
             }
         } else if !active { self.selection = nil }
     }
     override func layout() {
         super.layout()
-        if bounds.width > 100, bounds.height > 40, terminal?.frame != bounds { terminal?.frame = bounds }
+        if bounds.width > 100, bounds.height > 40, terminal?.frame != bounds { SelectionTrace.mark(terminal?.session?.selectionToken ?? 0, "layout"); terminal?.frame = bounds }
     }
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if let terminal, !terminal.isHidden { window?.makeFirstResponder(terminal) } }
 }

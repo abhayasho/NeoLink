@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import NeoLink
 
@@ -91,6 +92,36 @@ final class NeovimTabsTests: XCTestCase {
         XCTAssertFalse(controller.codeSession.snapshot?.buffers.contains { $0.path == files[2].path } ?? true)
         XCTAssertEqual(controller.selectedTabID, documents[0].id)
         XCTAssertNil(controller.codeSession.error)
+    }
+
+    @MainActor
+    func testHiddenEditorKeepsItsFrameAndGridAcrossShellRoundTrip() async throws {
+        guard CommandRunner.executable("nvim") != nil else { throw XCTSkip("Neovim is optional") }
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLink-grid-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let file = root.appendingPathComponent("example.txt")
+        try Data("retained grid\n".utf8).write(to: file)
+        let controller = TabsController()
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: TabbedTerminalView(controller: controller))
+        defer { controller.codeSession.shutdown(); controller.tabs.compactMap(\.terminal).forEach { $0.state.close() }; window.close(); try? FileManager.default.removeItem(at: root) }
+        window.makeKeyAndOrderFront(nil)
+        controller.openFile(file)
+        let documentID = try XCTUnwrap(controller.selectedTabID)
+        try await settle { controller.codeSession.requestedPath == nil && controller.codeSession.terminal?.isHidden == false }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let terminal = try XCTUnwrap(controller.codeSession.terminal)
+        let frame = terminal.frame, rows = terminal.getTerminal().rows
+        controller.selectedTabID = controller.workspaceTerminalTabs.first?.id
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(terminal.frame, frame, "Hidden chrome must not enlarge the editor")
+        XCTAssertEqual(terminal.getTerminal().rows, rows)
+        controller.selectedTabID = documentID
+        try await settle { controller.codeSession.requestedPath == nil && !terminal.isHidden }
+        XCTAssertEqual(terminal.frame, frame)
+        XCTAssertEqual(terminal.getTerminal().rows, rows)
     }
 
     @MainActor

@@ -10,6 +10,10 @@ struct CodeWorkspaceView: View {
             if let document, document.usesNeovim {
                 CodeToolbar(document: document, session: session, controller: controller)
                 CodeDocumentStatus(document: document)
+            } else {
+                // The retained editor is invisible behind shell/PDF tabs. Removing
+                // its toolbar would resize Neovim twice on every round trip.
+                Color.clear.frame(height: 30).accessibilityHidden(true)
             }
             if let error = session.error {
                 HStack(alignment: .top) {
@@ -19,7 +23,7 @@ struct CodeWorkspaceView: View {
                     Button { session.error = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
                 }.font(.system(size: 11)).foregroundColor(NeoLinkTheme.warning).padding(10)
             }
-            NeovimSurface(session: session, active: document?.usesNeovim == true && !controller.isConfirmingClose && session.isReady && session.requestedPath == nil, selection: document?.id)
+            NeovimSurface(session: session, active: document?.usesNeovim == true && !controller.isConfirmingClose && session.isReady, selection: document?.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(spacing: 10) {
                 Text("Neovim · \(session.mode)")
