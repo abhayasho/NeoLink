@@ -269,6 +269,7 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         if !rasterViewport.isEmpty, !rasterViewport.overlaps(visibleRows), !jobs.isEmpty {
             generation &+= 1; rasterEpoch.set(generation)
             jobs.removeAll(); artworkRefreshScheduled = false
+            resizeRetryScheduled = false; resizeRetries = 0
         }
         rasterViewport = visibleRows
         let first = visibleRows.lowerBound, end = visibleRows.upperBound
