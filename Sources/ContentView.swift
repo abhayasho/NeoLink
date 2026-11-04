@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var search: SearchPresentation?
     @State private var sessionToEdit: Session?
     @State private var showAgentLauncher = false
+    @State private var showRecentProjects = false
     @State private var gitReview: GitPresentation?
     private struct GitPresentation: Identifiable { let id = UUID(); let root: URL }
     private struct SearchPresentation: Identifiable {
@@ -116,6 +117,9 @@ struct ContentView: View {
         .sheet(isPresented: $showAgentLauncher) {
             AgentLauncherView(controller: tabsController, directory: access.projectURL)
         }
+        .sheet(isPresented: $showRecentProjects) {
+            RecentProjectsView(access: access, onClose: { showRecentProjects = false })
+        }
         .alert("Project access", isPresented: Binding(get: { access.error != nil }, set: { if !$0 { access.error = nil } })) {
             Button("OK") { access.error = nil }
         } message: { Text(access.error ?? "") }
@@ -209,8 +213,15 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Menu {
                 Button("Open Project…") { access.chooseFolder() }
+                if !access.recentFolders.isEmpty { Divider() }
                 ForEach(access.recentFolders, id: \.self) { url in
                     Button(url.lastPathComponent) { access.select(url) }
+                        .help(url.path)
+                }
+                if access.hasSavedFolders {
+                    Divider()
+                    Button("Manage Recent Projects…") { showRecentProjects = true }
+                    Button("Clear Recent Projects") { access.clearRecentFolders() }
                 }
             } label: { Image(systemName: "folder.badge.gearshape").foregroundStyle(NeoLinkTheme.accent) }
             .menuStyle(.borderlessButton).fixedSize().help("Open project and remember folder access")

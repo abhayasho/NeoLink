@@ -82,4 +82,76 @@ final class WorkspaceAccessTests: XCTestCase {
         access = nil
         XCTAssertEqual(stopped, [first, second])
     }
+
+    @MainActor
+    func testForgetOneProjectPersistsWithoutDeletingItsFilesOrOtherBookmarks() throws {
+        let defaults = try defaults()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("keep.txt")
+        try Data("keep this file".utf8).write(to: file)
+        let other = URL(fileURLWithPath: "/tmp/other-project")
+        let unavailable = Data("offline grant".utf8)
+        let resolver = operations(resolve: { data in
+            if data == unavailable { throw Unavailable.folder }
+            return (URL(fileURLWithPath: String(decoding: data, as: UTF8.self)), false)
+        })
+        defaults.set([Data(directory.path.utf8), Data(other.path.utf8), unavailable], forKey: "workspaceFolderBookmarks")
+        defaults.set(other.path, forKey: "activeProjectPath")
+        let access = WorkspaceAccess(defaults: defaults, operations: resolver)
+        access.forget(directory.appendingPathComponent("."))
+        access.forget(directory) // Repeated removal is harmless.
+        let restored = WorkspaceAccess(defaults: defaults, operations: resolver)
+        XCTAssertEqual(restored.recentFolders, [other])
+        XCTAssertEqual(restored.projectURL, other)
+        XCTAssertEqual(defaults.array(forKey: "workspaceFolderBookmarks") as? [Data], [Data(other.path.utf8), unavailable])
+        XCTAssertEqual(try String(contentsOf: file), "keep this file")
+    }
+
+    @MainActor
+    func testForgettingActiveProjectKeepsItsLiveScopeUntilShutdown() throws {
+        let defaults = try defaults()
+        let folder = URL(fileURLWithPath: "/tmp/current-project")
+        defaults.set([Data(folder.path.utf8)], forKey: "workspaceFolderBookmarks")
+        defaults.set(folder.path, forKey: "activeProjectPath")
+        var stopped: [URL] = []
+        let resolver = operations(resolve: { _ in (folder, false) }, stop: { stopped.append($0) })
+        var access: WorkspaceAccess? = WorkspaceAccess(defaults: defaults, operations: resolver)
+        access?.forget(folder)
+        XCTAssertEqual(access?.projectURL, folder, "Forgetting a shortcut must not close the current workspace")
+        XCTAssertEqual(access?.hasSavedFolders, false)
+        XCTAssertTrue(stopped.isEmpty, "Open terminals and editors may still need the active grant")
+        XCTAssertNil(defaults.string(forKey: "activeProjectPath"))
+        let restored = WorkspaceAccess(defaults: defaults, operations: resolver)
+        XCTAssertNil(restored.projectURL)
+        XCTAssertTrue(restored.recentFolders.isEmpty)
+        access = nil
+        XCTAssertEqual(stopped, [folder])
+    }
+
+    @MainActor
+    func testClearRecentProjectsAlsoForgetsUnavailableFoldersAcrossLaunches() throws {
+        let defaults = try defaults()
+        let folder = URL(fileURLWithPath: "/tmp/current-project")
+        let unavailable = Data("offline grant".utf8)
+        defaults.set([Data(folder.path.utf8), unavailable], forKey: "workspaceFolderBookmarks")
+        defaults.set(folder.path, forKey: "activeProjectPath")
+        var stopped: [URL] = []
+        let resolver = operations(resolve: { data in
+            if data == unavailable { throw Unavailable.folder }
+            return (folder, false)
+        }, stop: { stopped.append($0) })
+        let access = WorkspaceAccess(defaults: defaults, operations: resolver)
+        access.clearRecentFolders()
+        access.clearRecentFolders()
+        XCTAssertEqual(access.projectURL, folder)
+        XCTAssertTrue(stopped.isEmpty)
+        XCTAssertFalse(access.hasSavedFolders)
+        XCTAssertEqual(defaults.array(forKey: "workspaceFolderBookmarks") as? [Data], [])
+        let restored = WorkspaceAccess(defaults: defaults, operations: resolver)
+        XCTAssertNil(restored.projectURL)
+        XCTAssertTrue(restored.recentFolders.isEmpty)
+        XCTAssertFalse(restored.hasSavedFolders)
+    }
 }

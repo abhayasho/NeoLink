@@ -36,6 +36,7 @@ final class WorkspaceAccess: ObservableObject {
         var url: URL?
     }
     private var savedFolders: [SavedFolder] = []
+    var hasSavedFolders: Bool { !savedFolders.isEmpty }
 
     init(defaults: UserDefaults = .standard, operations: FolderBookmarkOperations = .system) {
         self.defaults = defaults
@@ -102,6 +103,24 @@ final class WorkspaceAccess: ObservableObject {
         projectURL = url
         defaults.set(url.path, forKey: "activeProjectPath")
         error = nil
+    }
+
+    /// Forget the shortcut and future restoration, without disrupting open files
+    /// or security scopes still being used by terminals/editors this session.
+    func forget(_ url: URL) {
+        let canonical = url.standardizedFileURL
+        savedFolders.removeAll { $0.url?.standardizedFileURL == canonical }
+        if let path = defaults.string(forKey: "activeProjectPath"),
+           URL(fileURLWithPath: path).standardizedFileURL == canonical {
+            defaults.removeObject(forKey: "activeProjectPath")
+        }
+        persistFolders()
+    }
+
+    func clearRecentFolders() {
+        savedFolders.removeAll()
+        defaults.removeObject(forKey: "activeProjectPath")
+        persistFolders()
     }
 
     deinit { scopedURLs.forEach(operations.stopAccess) }
