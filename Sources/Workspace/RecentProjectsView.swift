@@ -46,6 +46,7 @@ struct RecentProjectsView: View {
                         }
                         .padding(.vertical, 4)
                         .help(url.path)
+                        .accessibilityElement(children: .contain)
                     }
                 }
                 .listStyle(.inset)
