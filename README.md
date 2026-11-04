@@ -19,7 +19,7 @@
 > [!NOTE]
 > NeoLink is in preview. Automated release checks are included; public notarization and authenticated remote release checks remain outstanding.
 
-Build 27 (1.11.3) adds readable, content-sized tabs with duplicate-filename context, stable editor geometry when switching to terminals, and nonblocking language-service errors. It preserves cached explorer highlights and minimal reveal from Build 26. [Current interaction evidence and limits](docs/TAB_INTERACTIONS.md). **NeoGPU** is the custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
+Build 28 (1.11.4) fixes a crash when opening or switching projects through an empty file tree. It retains readable, content-sized tabs with duplicate-filename context, stable editor geometry when switching to terminals, and nonblocking language-service errors. [Project-switch fix and verification](docs/PROJECT_SWITCHING.md). It preserves cached explorer highlights and minimal reveal from Build 26. [Current interaction evidence and limits](docs/TAB_INTERACTIONS.md). **NeoGPU** is the custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
 
 ## Features
 

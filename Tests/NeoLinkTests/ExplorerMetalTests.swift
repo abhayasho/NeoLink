@@ -37,7 +37,7 @@ final class ExplorerMetalTests: XCTestCase {
         let document = FlippedExplorerDocument(frame: NSRect(x: 0, y: 0, width: 320, height: 24 * 500))
         scroll.documentView = document
         window.contentView!.addSubview(scroll)
-        let rows = (0..<500).map { index -> ExplorerRow in
+        var rows = (0..<500).map { index -> ExplorerRow in
             let url = URL(fileURLWithPath: "/tmp/gpu-explorer/row-\(index).swift")
             return ExplorerRow(id: url, item: LocalFileItem(url: url, isDirectory: false, creationDate: nil, modificationDate: nil, fileSize: nil),
                 name: url.lastPathComponent, depth: 0, expanded: false, missing: false, git: .modified,
@@ -143,6 +143,23 @@ final class ExplorerMetalTests: XCTestCase {
         let resized = try capture(surface, contentChanged: false)
         XCTAssertEqual(resized.width, Int((surface.bounds.width * scale).rounded()))
         XCTAssertGreaterThan(surface.compositionBuilds, buildsBeforeResize)
+        // Opening a project can temporarily replace the tree with no rows while
+        // its old active file and a native selection notification still survive.
+        scroll.contentView.scroll(to: .zero)
+        selected = 1; hovered = 2; active = rows[3].id
+        let replacement = Array(rows.prefix(3).reversed())
+        _ = try capture(surface)
+        rows = []; selected = -1; hovered = nil
+        let empty = try capture(surface, contentChanged: false)
+        XCTAssertEqual(pixel(empty, x: Int(100 * scale), y: Int(36 * scale)), [20,20,20],
+                       "A stale strip/highlight must never index or paint the previous project")
+        surface.invalidateRowContent()
+        rows = replacement; selected = 1; hovered = 2; active = rows[0].id
+        let newProject = try capture(surface, contentChanged: false)
+        surface.usesCachedComposition = false
+        let newProjectReference = try capture(surface, contentChanged: false)
+        XCTAssertEqual(newProject.dataProvider!.data! as Data, newProjectReference.dataProvider!.data! as Data,
+                       "A smaller project must recover with fresh, correctly ordered native-resolution rows")
         surface.shutdown()
         XCTAssertFalse(surface.isCoveringNativeRows); XCTAssertEqual(covered.last, false)
     }

@@ -38,6 +38,14 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     private var contentRevision: UInt64 = 1
     private var activeLookup: (revision: UInt64, url: URL?, index: Int?)?
 
+    /// Discard row-indexed state before AppKit can reenter drawing during reloads.
+    /// This does not evaluate the scene or schedule artwork against the old rows.
+    func invalidateRowContent() {
+        contentRevision &+= 1; sceneRevision &+= 1
+        composition = nil; highlightedScene = nil; highlightKey = nil; activeLookup = nil
+        dirty = true
+    }
+
     /// Highlights change only a few row quads, never the retained text strip.
     func invalidateHighlights() { invalidateScene(contentChanged: false, highlightsChanged: true) }
     // Tests compare the cached GPU pass with the original per-row pass pixel for pixel.
@@ -221,8 +229,8 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     }
 
     func invalidateScene(contentChanged: Bool = true, highlightsChanged: Bool = false) {
-        if contentChanged { contentRevision &+= 1 }
-        if contentChanged || highlightsChanged { sceneRevision &+= 1 }
+        if contentChanged { invalidateRowContent() }
+        else if highlightsChanged { sceneRevision &+= 1 }
         dirty = true
         // Keep ProMotion supplied during interaction, using display-link-provided drawables
         // rather than queuing redundant terminal frames ahead of the next real input.
@@ -548,6 +556,12 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
     /// their original transparent artwork and new fill. This preserves the reference
     /// shader's exact antialiasing and paint order without copying or allocating textures.
     private func displayScene(_ composition: Composition, scene: Scene) throws -> NeoGPUScene {
+        // A project replacement can shrink the model before native table layout
+        // finishes. Never trust retained strip bounds or highlight indices then.
+        guard composition.rows.lowerBound >= 0, composition.rows.upperBound <= scene.rows.count else {
+            invalidateRowContent()
+            throw NeoGPUScene.Failure.invalidGeometry
+        }
         let key = Highlights(selected: scene.selected, hovered: scene.hovered, active: scene.active)
         if key == highlightKey, let highlightedScene { return highlightedScene }
         let width = Float(composition.texture.width), height = Float(24 * composition.scale)
@@ -560,7 +574,8 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
         }
         if let index = activeLookup?.index { indices.insert(index) }
         for index in indices.sorted() where composition.rows.contains(index) {
-            guard let art = cache[scene.rows[index].id] else {
+            guard let art = cache[scene.rows[index].id], art.row == scene.rows[index],
+                  art.width == composition.texture.width, art.scale == composition.scale else {
                 self.composition = nil; highlightedScene = nil
                 throw NeoGPUScene.Failure.allocation // Restore native rows until artwork is ready.
             }

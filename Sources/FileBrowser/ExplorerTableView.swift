@@ -167,7 +167,7 @@ struct ExplorerTableView: NSViewRepresentable {
             (scroll as? ExplorerScrollView)?.usesMetalScrolling = metalSurface?.isCoveringNativeRows == true
             guard let table else { return }
             let visible = table.rows(in: table.visibleRect)
-            guard visible.location != NSNotFound else { return }
+            guard visible.location != NSNotFound, visible.location < min(rows.count, NSMaxRange(visible)) else { return }
             CATransaction.begin(); CATransaction.setDisableActions(true)
             for row in visible.location..<min(rows.count, NSMaxRange(visible)) {
                 (table.view(atColumn: 0, row: row, makeIfNecessary: false) as? ExplorerCellView)?.setMetalCovered(metalSurface?.isCoveringNativeRows == true)
@@ -255,6 +255,7 @@ struct ExplorerTableView: NSViewRepresentable {
             let top = min(max(0, Int((scroll?.contentView.bounds.minY ?? 0) / Self.rowHeight)), max(0, rows.count - 1))
             let anchor = rows.indices.contains(top) ? rows[top].id : nil
             let offset = (scroll?.contentView.bounds.minY ?? 0) - CGFloat(top) * Self.rowHeight
+            metalSurface?.invalidateRowContent()
             rows = newRows
             applying = true
             defer { applying = false }
@@ -294,7 +295,7 @@ struct ExplorerTableView: NSViewRepresentable {
             selectedID = selected.map { rows[$0].id }
             // Recompute hover after membership changes; an old row index can now name another file.
             if oldIDs != newIDs { hoveredRow = nil }
-            refreshVisibleCells()
+            refreshVisibleCells(contentChanged: false)
             if oldIDs != newIDs, let anchor, let scroll {
                 var index = newIDs.firstIndex(of: anchor)
                 if index == nil {
@@ -323,9 +324,15 @@ struct ExplorerTableView: NSViewRepresentable {
         }
 
         private func refreshVisibleCells(contentChanged: Bool = true) {
+            // Empty trees and viewports beyond a shrinking document have no
+            // native cells, but must still retire the previous GPU scene.
+            defer {
+                if contentChanged { metalSurface?.invalidateScene() }
+                else { metalSurface?.invalidateHighlights() }
+            }
             guard let table else { return }
             let visible = table.rows(in: table.visibleRect)
-            guard visible.location != NSNotFound, visible.length > 0 else { return }
+            guard visible.location != NSNotFound, visible.location < min(rows.count, NSMaxRange(visible)) else { return }
             for row in visible.location..<min(rows.count, NSMaxRange(visible)) {
                 if let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? ExplorerCellView {
                     cell.configure(rows[row], active: rows[row].item.id == activeFileURL,
@@ -333,8 +340,6 @@ struct ExplorerTableView: NSViewRepresentable {
                 }
             }
             refreshNativeCoverage()
-            if contentChanged { metalSurface?.invalidateScene() }
-            else { metalSurface?.invalidateHighlights() }
         }
 
         func cancelPendingReveal() { lastReveal = parent.tree.revealRevision }

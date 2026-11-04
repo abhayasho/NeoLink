@@ -1,10 +1,15 @@
 import AppKit
+import Metal
 import XCTest
 @testable import NeoLink
 
 @MainActor
 private final class RecordingExplorerTable: NSTableView {
     var reloads = 0
+    var forcedVisibleRows: NSRange?
+    var beforeMutation: (() -> Void)?
+    override func rows(in rect: NSRect) -> NSRange { forcedVisibleRows ?? super.rows(in: rect) }
+    override func beginUpdates() { beforeMutation?(); super.beginUpdates() }
     override func reloadData() { reloads += 1; super.reloadData() }
 }
 
@@ -14,6 +19,49 @@ private final class ScrollTestDocument: NSView {
 }
 
 final class ExplorerTableTests: XCTestCase {
+    @MainActor
+    func testEmptyProjectInvalidatesGPUStateBeforeNativeTableMutation() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        let previous = TerminalRenderingPreferences.shared.useGPU
+        TerminalRenderingPreferences.shared.setUseGPU(true)
+        let (coordinator, table, scroll) = setup()
+        defer { coordinator.stopObservingScrolling(); TerminalRenderingPreferences.shared.setUseGPU(previous) }
+        coordinator.apply(rows: (0..<40).map { row("\($0).swift") }, revision: 1, activeFileURL: nil)
+        coordinator.installMetalSurface()
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while coordinator.metalSurface == nil, Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        let surface = try XCTUnwrap(coordinator.metalSurface)
+        let before = surface.visualRevision
+        var mutations = 0
+        table.beforeMutation = {
+            mutations += 1
+            XCTAssertGreaterThan(surface.visualRevision, before, "Retire row indices before AppKit can reenter rendering")
+        }
+        table.forcedVisibleRows = NSRange(location: 0, length: 0)
+        coordinator.apply(rows: [], revision: 2, activeFileURL: nil)
+        XCTAssertGreaterThan(mutations, 0)
+        XCTAssertGreaterThan(surface.visualRevision, before)
+        XCTAssertTrue(coordinator.rows.isEmpty)
+        let emptyRevision = surface.visualRevision
+        coordinator.apply(rows: [], revision: 2, activeFileURL: row("previous.swift").id)
+        XCTAssertGreaterThan(surface.visualRevision, emptyRevision, "An empty native viewport must still wake highlight/fallback updates")
+        _ = scroll // Retain the input surface until the coordinator is shut down.
+    }
+
+    @MainActor
+    func testShrinkingProjectToleratesNativeVisibleRangeBeyondItsNewEnd() {
+        let (coordinator, table, scroll) = setup()
+        defer { coordinator.stopObservingScrolling() }
+        coordinator.apply(rows: (0..<100).map { row("\($0).swift") }, revision: 1, activeFileURL: nil)
+        table.forcedVisibleRows = NSRange(location: 80, length: 5)
+        coordinator.apply(rows: [row("new.swift")], revision: 2, activeFileURL: nil)
+        XCTAssertEqual(coordinator.rows.count, 1)
+        XCTAssertEqual(table.numberOfRows, 1)
+        _ = scroll
+    }
+
     private func row(_ name: String, depth: Int = 0, folder: Bool = false, expanded: Bool = false,
                      missing: Bool = false, errors: Int = 0, warnings: Int = 0) -> ExplorerRow {
         let url = URL(fileURLWithPath: "/tmp/NeoLink-table-tests/" + name)
