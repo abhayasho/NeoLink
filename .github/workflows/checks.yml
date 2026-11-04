@@ -35,3 +35,7 @@ jobs:
         run: ./scripts/build-app.sh
       - name: Verify packaged resources and signature
         run: python3 scripts/verify-app.py NeoLink.app
+      - name: Verify downloadable app and installer
+        run: |
+          ./scripts/package-release.sh
+          python3 scripts/test-installer.py

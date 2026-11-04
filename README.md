@@ -19,7 +19,7 @@
 > [!NOTE]
 > NeoLink is in preview. Automated release checks are included; public notarization and authenticated remote release checks remain outstanding.
 
-Build 26 (1.11.2) keeps explorer text cached through hover/selection changes, reveals files without recentering, and switches editor buffers over a persistent connection. Stale selection work is skipped while saves/closes remain ordered. [Interaction results and remaining resize limits](docs/INTERACTIONS.md). **NeoGPU** is the custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
+Build 27 (1.11.3) adds readable, content-sized tabs with duplicate-filename context, stable editor geometry when switching to terminals, and nonblocking language-service errors. It preserves cached explorer highlights and minimal reveal from Build 26. [Current interaction evidence and limits](docs/TAB_INTERACTIONS.md). **NeoGPU** is the custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
 
 ## Features
 
@@ -49,7 +49,7 @@ Build 26 (1.11.2) keeps explorer text cached through hover/selection changes, re
 
 ## Performance and benchmarks
 
-[Build 26 interaction checks](docs/INTERACTIONS.md) separate command completion, focus and visible-content response. The final installed release reduced median tab-selection-to-focus time from 110.5 to 45.2 ms across 24 procedural switches (worst: 141.7 to 64.1 ms). This is not a general frame-rate claim; sidebar resizing still stalls, and natural trackpad smoothness remains unverified.
+[Build 27 interaction checks](docs/TAB_INTERACTIONS.md) separate focus from the first presented selected buffer. In two repeated full-screen runs, median focus response was **26.4 / 30.0 ms**, versus **37.6 / 32.5 ms** in the current Build 26 baseline. Median acknowledged-buffer presentation was **72.9 / 62.0 ms**, versus **76.7 / 69.9 ms**. These short procedural runs do not establish a general smoothness or CPU improvement. Resize stalls remain substantial (up to 251.5 ms main-thread wait), and the final motion repeats had 16.7–25 ms maximum changed-content gaps. [Earlier Build 26 results](docs/INTERACTIONS.md) remain available separately.
 
 Build 25's full-screen release checks measured **8.3 ms motion p95** on an M2 Max's built-in 120 Hz display. The latest five-second installed-app run also had an 8.3 ms maximum; earlier repeats had 16.7–25 ms gaps. Continuous mode also maintained 8.3 ms idle drawable intervals. It uses more idle GPU/CPU work; turn off **View → Continuous High Refresh** for demand-driven operation. This is a procedural test, not a guarantee of every refresh or human-perceived smoothness. [Build 25 results and power tradeoff](docs/RENDERING.md#continuous-workspace-refresh-1111-build-25).
 
@@ -97,34 +97,44 @@ Shared GPU presentation requires macOS 14+; macOS 13 retains independent/native 
 
 > The app uses Swift 5 language mode for compatibility with `swift-ssh-client`; the Metal-enabled SwiftTerm dependency requires a Swift 6.0+ toolchain.
 
-## Build and run
+## Download and install
 
-**From the terminal:**
+**[Download NeoLink for Apple silicon](https://github.com/abhayasho/NeoLink/releases/latest/download/NeoLink-macos-arm64.zip)** · macOS 13+, M1 or later
+
+Unzip and drag **NeoLink.app** into **Applications**. No Git checkout, Xcode or Swift installation is needed.
+
+Or quit NeoLink and paste this into Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abhayasho/NeoLink/main/scripts/install.sh | bash
+```
+
+The installer downloads the prebuilt app, checks its SHA-256 and bundle signature, and installs it in `/Applications` (or `~/Applications` if that folder isn't writable). Run the same command to update; the previous app is kept in a backup folder. Documents, settings and credentials stay in place. [Inspect the installer](scripts/install.sh).
+
+This preview is ad-hoc signed and **not notarized**. If macOS blocks the first launch, review [Apple's instructions](https://support.apple.com/en-us/102445) for opening a trusted app through **System Settings → Privacy & Security → Open Anyway**. Updates may ask again for protected-folder access. The installer does not change macOS security settings.
+
+<details>
+<summary>Build from source (developers and Intel Macs)</summary>
 
 ```bash
 git clone https://github.com/abhayasho/NeoLink.git
 cd NeoLink
-swift build
-swift run
-```
-
-**As a double-clickable app with an icon:**
-
-```bash
 ./scripts/build-app.sh
 ```
 
-This builds a release binary, wraps it in `NeoLink.app` in the project root and embeds the icon from `Resources/AppIcon.png`. Double-click it, or move it to `/Applications`.
+The release app appears as `NeoLink.app` in the project root. For debugging, use `swift run` instead. Source builds require the toolchain listed above; Intel source builds have not been release-tested on an Intel device.
+
+</details>
 
 ## Coding tools
 
 ```bash
 brew install neovim ripgrep
 # Optional language servers for Python and JavaScript/TypeScript:
-brew install pyright typescript-language-server
+brew install pyright typescript typescript-language-server
 ```
 
-Neovim 0.11+ is required for the coding engine (tested with 0.12.6). Swift and C/C++ language services use `sourcekit-lsp` and `clangd` from the installed toolchain. Servers start only when needed. Without Neovim, text files still open in native tabs; without ripgrep, project search explains how to install it.
+Neovim 0.11+ is required for the coding engine (tested with 0.12.6). Swift and C/C++ language services use `sourcekit-lsp` and `clangd` from the installed toolchain. Servers start only when needed. JavaScript/TypeScript services also need the TypeScript SDK, installed globally above or in your project. A missing or failed server displays a dismissible notice while editing and tab navigation remain available. Without Neovim, text files still open in native tabs; without ripgrep, project search explains how to install it.
 
 For remembered folder access, choose **File → Open Project** once. NeoLink restores the selected folder, retains bookmarks when a drive is temporarily unavailable, and activates other recent folders only when selected. Use the same installed copy in `/Applications` for everyday work.
 

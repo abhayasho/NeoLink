@@ -1,5 +1,7 @@
 # Native GPU text rendering
 
+[Build 27 tab sizing, per-selection tracing and resize checks](TAB_INTERACTIONS.md).
+
 [Build 26 explorer and tab interaction changes, measurements and limits](INTERACTIONS.md). Highlight composition now retains the text strip independently; historical whole-strip invalidation descriptions below apply to their original builds.
 
 ## Continuous workspace refresh (1.11.1, build 25)
