@@ -23,33 +23,39 @@ struct RecentProjectsView: View {
                 .foregroundStyle(NeoLinkTheme.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List {
-                    ForEach(access.recentFolders, id: \.self) { url in
-                        HStack(spacing: 10) {
-                            Image(systemName: "folder")
-                                .foregroundStyle(NeoLinkTheme.textSecondary)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(url.lastPathComponent).font(.system(size: 12, weight: .medium))
-                                Text(url.path)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(NeoLinkTheme.textSecondary)
-                                    .lineLimit(1).truncationMode(.middle)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(access.recentFolders, id: \.self) { url in
+                            VStack(spacing: 0) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "folder")
+                                        .foregroundStyle(NeoLinkTheme.textSecondary)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(url.lastPathComponent).font(.system(size: 12, weight: .medium))
+                                        Text(url.path)
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(NeoLinkTheme.textSecondary)
+                                            .lineLimit(1).truncationMode(.middle)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    Button { access.forget(url) } label: {
+                                        Image(systemName: "xmark")
+                                            .frame(width: 22, height: 22)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help("Remove from recent projects")
+                                    .accessibilityLabel("Remove \(url.path) from recent projects")
+                                }
+                                .padding(10)
+                                .help(url.path)
+                                .accessibilityElement(children: .contain)
+                                Divider()
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            Button { access.forget(url) } label: {
-                                Image(systemName: "xmark")
-                                    .frame(width: 22, height: 22)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Remove from recent projects")
-                            .accessibilityLabel("Remove \(url.path) from recent projects")
                         }
-                        .padding(.vertical, 4)
-                        .help(url.path)
-                        .accessibilityElement(children: .contain)
                     }
                 }
-                .listStyle(.inset)
+                .background(NeoLinkTheme.background)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             HStack {
                 Button("Clear Recent Projects") { access.clearRecentFolders() }
