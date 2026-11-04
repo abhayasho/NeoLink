@@ -21,6 +21,7 @@ struct NeovimSnapshot: Decodable {
     let mode: String
     let unnamedModified: Bool
     var selection: UInt64? = nil
+    var notice: String? = nil
 }
 
 @MainActor
@@ -54,6 +55,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     private(set) var parsedSelection: UInt64 = 0
     private(set) var presentedSelection: (token: UInt64, time: Double)?
     private var selectionBegan = 0.0
+    private var lastNotice = ""
     var recordsSelectionSamples = false
     private(set) var selectionSamples: [Double] = []
     func selectionPresented(_ token: UInt64, at time: Double) {
@@ -176,12 +178,15 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         return NeovimSnapshot(revision: raw.revision, buffers: raw.buffers.map {
             NeovimBufferSnapshot(path: normalize($0.path), modified: $0.modified, filetype: $0.filetype, servers: $0.servers,
                                  diagnostics: $0.diagnostics, errors: $0.errors, warnings: $0.warnings)
-        }, active: normalize(raw.active), mode: raw.mode, unnamedModified: raw.unnamedModified, selection: raw.selection)
+        }, active: normalize(raw.active), mode: raw.mode, unnamedModified: raw.unnamedModified, selection: raw.selection, notice: raw.notice)
     }
 
     private func accept(_ state: NeovimSnapshot) {
         guard state.revision > (snapshot?.revision ?? -1) else { return }
         snapshot = state
+        if let notice = state.notice, !notice.isEmpty, notice != lastNotice {
+            lastNotice = notice; error = notice
+        }
         let mode = state.mode.hasPrefix("i") ? "Insert" : (state.mode == "n" ? "Normal" : "Visual / Command")
         if self.mode != mode { self.mode = mode }
         onSnapshot?(state)

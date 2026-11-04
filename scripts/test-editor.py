@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the actual Neovim runtime through its socket, using disposable files."""
-import json, os, pathlib, shutil, socket as socket_module, subprocess, tempfile, time
+import json, os, pathlib, shutil, socket as socket_module, subprocess, sys, tempfile, time
 
 nvim = shutil.which('nvim')
 if not nvim:
@@ -133,3 +133,6 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
             if 'Error detected' in errors or 'Error in' in errors:
                 print(errors[-6000:])
                 raise AssertionError('Editor runtime errors')
+
+# Headless mode cannot detect hit-enter deadlocks; use a private drained PTY too.
+subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("test-editor-messages.py"))], check=True)

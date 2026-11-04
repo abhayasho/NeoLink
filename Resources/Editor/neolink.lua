@@ -14,6 +14,9 @@ vim.o.showtabline = 0
 -- inserting lines: about 20x the output, and NeoLink cannot follow it smoothly.
 vim.o.laststatus = 3
 vim.o.cmdheight = 0
+-- Embedded panes cannot answer a hit-enter prompt while a redraw is gated.
+-- Keep errors in :messages and publish v:errmsg to the native error banner.
+if vim.fn.exists('+messagesopt')==1 then vim.o.messagesopt='wait:0,history:500' end
 vim.o.fillchars = 'eob: '
 vim.o.foldcolumn = '1'
 vim.o.foldlevel = 99
@@ -116,7 +119,7 @@ function M.snapshot()
       end
     end
   end
-  return {revision=M.revision,buffers=buffers,active=api.nvim_buf_get_name(0),mode=api.nvim_get_mode().mode,unnamedModified=unnamed,selection=M.selection}
+  return {revision=M.revision,buffers=buffers,active=api.nvim_buf_get_name(0),mode=api.nvim_get_mode().mode,unnamedModified=unnamed,selection=M.selection,notice=vim.fn.strcharpart(vim.v.errmsg,0,2048)}
 end
 function M.publish()
   if not status_path or M.pending then return end
@@ -297,7 +300,7 @@ for _,server in ipairs(servers) do
         capabilities.textDocument={diagnostic={dynamicRegistration=false}}
       end
       vim.lsp.start({name=server.name,cmd=server.cmd,root_dir=root,settings=server.settings,
-        flags={debounce_text_changes=300},capabilities=capabilities}, {bufnr=ev.buf})
+        flags={debounce_text_changes=300},capabilities=capabilities,on_exit=function() vim.schedule(M.publish) end}, {bufnr=ev.buf})
     end})
   end
 end
