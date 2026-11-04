@@ -214,6 +214,7 @@ struct CacheSignature: Hashable {
     let scale: Double
     let cellWidth: Double
     let cellHeight: Double
+    let viewWidth: Double
     let viewHeight: Double
     let rows: Int
     let cols: Int
@@ -255,7 +256,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private var lastFrameSignature = 0
     private var cacheBufferingMode: MetalBufferingMode?
     private var cacheSignature: CacheSignature?
-    private var cachedViewportWidth: CGFloat?
     private var atlasInvalidatedDuringBuild = false
     private var cursorBlinkTimer: Timer?
     private var cursorBlinkOn = true
@@ -883,6 +883,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let signature = CacheSignature(scale: Double(scale),
                                        cellWidth: Double(cellWidth),
                                        cellHeight: Double(cellHeight),
+                                       viewWidth: Double(terminalView.bounds.width),
                                        viewHeight: Double(terminalView.bounds.height),
                                        rows: buffer.rows,
                                        cols: buffer.cols,
@@ -891,19 +892,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                        isAltBuffer: terminalView.terminal.isCurrentBufferAlternate,
                                        kittyStamp: kittyStamp,
                                        bidiHostPolicy: terminalView.bidiHostPolicy)
-        // Ordinary row geometry is width-independent while columns stay the
-        // same. Only doubled-height rows bake the viewport's right clip edge.
-        // Preserve other rows during sub-column divider movement; drawable-size
-        // validation and the final viewport/scissor still apply every frame.
-        if cachedViewportWidth != terminalView.bounds.width {
-            rowCache = rowCache.filter { _, entry in
-                switch entry.lineRef.renderMode {
-                case .doubledDown, .doubledTop: return false
-                case .single, .doubleWidth: return true
-                }
-            }
-            cachedViewportWidth = terminalView.bounds.width
-        }
         let signatureChanged = signature != cacheSignature
         if signatureChanged {
             rowCache.removeAll()
@@ -1063,9 +1051,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         // Frame identity for measurement: a frame that rebuilt nothing and placed the same
         // rows at the same offsets as the previous one shows no new content.
         var frameHasher = Hasher()
-        // Resizing can change presented pixels without rebuilding cached rows.
-        frameHasher.combine(Int((terminalView.bounds.width * scale).rounded()))
-        frameHasher.combine(Int((terminalView.bounds.height * scale).rounded()))
         for row in rows {
             frameHasher.combine(row.buffers.backgroundBuffer.map { ObjectIdentifier($0) })
             frameHasher.combine(row.buffers.glyphGrayBuffer.map { ObjectIdentifier($0) })
