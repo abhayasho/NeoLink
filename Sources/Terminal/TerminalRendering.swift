@@ -187,7 +187,7 @@ final class TerminalRendering: NeoGPUClient {
                 // Consume all parsed state for this surface immediately before drawing.
                 // The update may schedule/replace pendingDraw with the newest dirty rows.
                 let id = ObjectIdentifier(view)
-                view.process?.servicePendingOutput()
+                view.servicePendingOutput()
                 frames.prepareDrawable(id, at: self.drawableClock?.targetTimestamp)
                 guard let draw = self.pendingDraw else {
                     return frames.hasDrawableAnimation(id)
@@ -270,7 +270,7 @@ final class TerminalRendering: NeoGPUClient {
         // Other hidden sessions retain ordinary queue delivery and do no extra
         // work on the visible workspace's deadline.
         guard Self.isVisible(view) || (view as? CodeTerminalView)?.session?.requestedPath != nil else { return }
-        view.process?.servicePendingOutput()
+        view.servicePendingOutput()
     }
     func gpuReleaseHiddenResources() {
         hostTexture = nil; hostScene = nil; hostTextureReady = false; hostBufferSelection = nil
