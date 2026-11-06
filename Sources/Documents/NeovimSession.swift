@@ -239,7 +239,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         presenter.session = self
         presenter.prepareTerminal(terminal)
         presenter.onClosed = { [weak self] reason in
-            guard let self, !self.tearingDownNative, self.epoch != UUID() else { return }
+            guard let self, !self.tearingDownNative else { return }
             self.isReady = false
             self.error = "The coding engine connection closed (\(reason)). Close and reopen NeoLink to start it again."
         }
@@ -267,7 +267,10 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         tearingDownNative = true
         nativeGrid?.shutdown(); nativeGrid = nil
         terminal?.nativeGrid = nil
-        if let process = nativeProcess, process.isRunning { process.terminate() }
+        if let process = nativeProcess {
+            process.terminationHandler = nil
+            if process.isRunning { process.terminate() }
+        }
         nativeProcess = nil
         tearingDownNative = false
     }

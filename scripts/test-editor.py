@@ -75,6 +75,9 @@ with tempfile.TemporaryDirectory(prefix='neolink-editor-', dir='/tmp') as tmp:
             assert lua('vim.api.nvim_get_current_line()') == 'return 123'
             assert not dispatch(method='save', path=str(agent_file))['ok'], 'Dirty editor overwrote agent edits'
             assert 'conflicting agent edit' in agent_file.read_text()
+            # Native-UI hooks are inert without an attached native client (the TUI default).
+            assert dispatch(method='leave')['ok'], 'leave must be a no-op without a native UI'
+            assert lua('NeoLink.ui_channel == nil and 1 or 0') == '1'
             print('PASS: clean buffers reload agent edits; unsaved buffers and external edits are preserved')
             scroll_file = root / 'scrolling.py'
             scroll_file.write_text(''.join(f'print({i})\n' for i in range(1, 401)))
