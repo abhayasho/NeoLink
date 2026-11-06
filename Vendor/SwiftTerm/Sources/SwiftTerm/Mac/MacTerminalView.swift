@@ -278,6 +278,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var retainedScrollLines = RetainedScrollLines()
     /// Lines whose rows moved without changing content since the last Metal frame.
     var metalMovedLines = Set<ObjectIdentifier>()
+    /// NeoLink: lines a host keeps for later (for example another buffer's rows). Their cached geometry survives frames that do not draw them.
+    public var metalRetainedLines: [BufferLine] = []
 #endif
 
     var pendingDisplay: Bool = false

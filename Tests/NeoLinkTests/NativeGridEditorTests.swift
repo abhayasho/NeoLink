@@ -206,6 +206,7 @@ final class NativeGridEditorTests: XCTestCase {
         }
         let presenter = try XCTUnwrap(session.nativeGrid)
         XCTAssertGreaterThan(presenter.speculations, 0, "switch-backs reuse validated images: \(presenter.speculationRejections)")
+        XCTAssertGreaterThan(presenter.geometryReuses, 0, "after the first round trip, retained rows are re-installed rather than rewritten")
         // After the confirmation the terminal equals Neovim's own screen, whichever path showed it.
         try await Task.sleep(nanoseconds: 200_000_000)
         presenter.drain()

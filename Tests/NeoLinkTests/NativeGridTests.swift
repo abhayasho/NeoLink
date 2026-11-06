@@ -426,6 +426,93 @@ final class NativeGridRenderingTests: XCTestCase {
                       "\u{1b}[4 q\u{1b}[2;1H"))
         try assertParity(steps: steps)
     }
+
+    @MainActor
+    func testReinstalledRowsAreDrawnFromCachedGeometryWithIdenticalPixels() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        let gpuPreference = TerminalRenderingPreferences.shared.useGPU
+        TerminalRenderingPreferences.shared.setUseGPU(false)
+        defer { TerminalView.allowsMetalFrameCapture = false; TerminalRenderingPreferences.shared.setUseGPU(gpuPreference) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("NativeGridRows-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pathA = directory.appendingPathComponent("a.txt").path, pathB = directory.appendingPathComponent("b.txt").path
+        try Data("a".utf8).write(to: URL(fileURLWithPath: pathA)); try Data("b".utf8).write(to: URL(fileURLWithPath: pathB))
+
+        let native = CodeTerminalView(frame: .zero)
+        let host = window(native)
+        defer { host.close() }
+        native.nativeForegroundColor = NSColor(hex: 0xd8d8d8); native.nativeBackgroundColor = NSColor(hex: 0x181818)
+        try native.setUseMetal(true)
+        var profiles: [[String: Double]] = []
+        native.metalPreparationProfile = { profiles.append($0) }
+        let cols = native.getTerminal().cols, rows = native.getTerminal().rows
+        let presenter = NativeGridPresenter(client: NeovimGridClient(socketPath: "/nonexistent"))
+        presenter.prepareTerminal(native)
+
+        func screen(_ prefix: String, hl: Int) -> NativeGridItem {
+            let model = NeovimGridModel(cols: cols, rows: rows)
+            var events: [MsgPackValue] = [event("grid_resize", .array([.int(1), .int(Int64(cols)), .int(Int64(rows))])),
+                                          event("default_colors_set", .array([.int(0xd8d8d8), .int(0x181818), .int(-1), .int(-1), .int(-1)])),
+                                          event("hl_attr_define", .array([.int(1), map([("foreground", .int(0xcc9595))]), .map([]), .array([])])),
+                                          event("hl_attr_define", .array([.int(2), map([("foreground", .int(0xa8ccdf)), ("bold", .bool(true))]), .map([]), .array([])]))]
+            for row in 0..<rows {
+                let text = "\(prefix) row \(row) the quick brown fox 界"
+                events.append(event("grid_line", gridLine(row: row, column: 0, cells: text.map { cell(String($0), row % 3 == 0 ? hl : 0) } + [cell(" ", 0, max(1, cols - text.count))])))
+            }
+            events.append(event("grid_cursor_goto", .array([.int(1), .int(0), .int(0)])))
+            model.apply(redraw: events)
+            return .frame(model.takeFrame()!)
+        }
+        func push(_ items: NativeGridItem...) { items.forEach { presenter.client.mailbox.push($0) }; presenter.drain() }
+        func drawn(_ label: String = "") throws -> (pixels: [UInt8], rebuilt: Double, cached: Double) {
+            // Let the view's own scheduled display update run first, as the display deadline does in the app:
+            // it publishes the dirty range that the next draw consumes together with the moved-line set.
+            profiles.removeAll()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            let image = try capture(native)
+            // Another display-update draw may follow the explicit one; count every draw of this step.
+            let rebuilt = profiles.reduce(0) { $0 + ($1["rowsRebuilt"] ?? 0) }, cached = profiles.reduce(0) { $0 + ($1["rowsCached"] ?? 0) }
+            return (pixels(image), rebuilt, cached)
+        }
+
+        push(screen("ALPHA", hl: 1))
+        let first = try drawn("first")
+        XCTAssertGreaterThan(first.rebuilt, 0)
+        // Leave A while hidden: its rows are detached for later instead of being overwritten.
+        native.isHidden = true
+        push(.leave(path: pathA, mode: "i", popupVisible: false, diagnostics: true))
+        XCTAssertEqual(presenter.cache.entries[pathA]?.lines.count, rows, "the displayed rows are retained with the image")
+        push(screen("BRAVO", hl: 2), .selection(token: 1, path: pathB))
+        native.isHidden = false
+        let bravo = try drawn("bravo")
+        XCTAssertNotEqual(bravo.pixels, first.pixels)
+        native.isHidden = true
+        push(.leave(path: pathB, mode: "i", popupVisible: false, diagnostics: true))
+        XCTAssertEqual(presenter.cache.entries[pathB]?.lines.count, rows)
+        // Return to A: the retained rows are installed at once; no row is rebuilt and the pixels are identical.
+        XCTAssertTrue(presenter.speculate(path: pathA, token: 2))
+        XCTAssertEqual(presenter.geometryReuses, 1)
+        native.isHidden = false
+        let again = try drawn("again")
+        XCTAssertEqual(again.rebuilt, 0, "cached geometry is reused for every row")
+        XCTAssertGreaterThanOrEqual(again.cached, Double(rows))
+        XCTAssertEqual(again.pixels, first.pixels, "identical pixels to the first time A was drawn")
+        // Neovim's confirmation (the same screen) leaves the rows untouched.
+        push(screen("ALPHA", hl: 1), .selection(token: 2, path: pathA))
+        XCTAssertEqual(presenter.phase, .live)
+        let confirmed = try drawn("confirmed")
+        XCTAssertEqual(confirmed.pixels, first.pixels)
+        XCTAssertEqual(confirmed.rebuilt, 0, "an unchanged confirmation rewrites no row")
+        // Rows retained for B are still valid after A's round trip.
+        XCTAssertTrue(presenter.speculate(path: pathB, token: 3))
+        push(screen("BRAVO", hl: 2), .selection(token: 3, path: pathB))
+        let backToB = try drawn("backToB")
+        XCTAssertEqual(backToB.pixels, bravo.pixels)
+        XCTAssertEqual(backToB.rebuilt, 0)
+    }
 }
 
 extension Array where Element == UInt8 {

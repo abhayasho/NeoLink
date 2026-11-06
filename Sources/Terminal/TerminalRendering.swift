@@ -350,6 +350,12 @@ final class TerminalRendering: NeoGPUClient {
             if !(view is CodeTerminalView) { SelectionTrace.mark(traceToken, "shell.presented", at: time) }
             view.metalDisplayLayer?.opacity = 0
             view.metalHostFramePresented(tag: encoded, time: time)
+        }, acknowledged: { [weak view] time in
+            // The drawable carrying this frame reached the display, but the workspace's client set changed
+            // (for example SwiftUI re-parented the pane) so ownership callbacks are not safe to run. The
+            // content acknowledgement is still true and must not be lost.
+            if !(view is CodeTerminalView) { SelectionTrace.mark(traceToken, "shell.presented", at: time) }
+            view?.metalHostFramePresented(tag: encoded, time: time)
         })
     }
 

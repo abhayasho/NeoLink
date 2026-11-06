@@ -26,10 +26,13 @@ struct GridSnapshotCache {
         var styleEpoch: Int
         var diagnosticsEnabled: Bool
         var signature: FileSignature?
+        /// The line objects that displayed `image` (detached, unchanged since): re-installing them reuses the renderer's
+        /// cached row geometry. Empty when the rows must be written again.
+        var lines: [BufferLine] = []
         var stamp: UInt64 = 0
     }
 
-    static let limit = 16
+    static let limit = 8
     private(set) var entries: [String: Entry] = [:]
     private var clock: UInt64 = 0
 

@@ -1126,6 +1126,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #if os(macOS)
         for line in terminalView.retainedScrollLines.above.suffix(buffer.rows) { keep.insert(ObjectIdentifier(line)) }
         for line in terminalView.retainedScrollLines.below.suffix(buffer.rows) { keep.insert(ObjectIdentifier(line)) }
+        for line in terminalView.metalRetainedLines { keep.insert(ObjectIdentifier(line)) }
 #endif
         if rowCache.count > keep.count {
             rowCache = rowCache.filter { keep.contains($0.key) }

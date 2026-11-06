@@ -102,6 +102,19 @@ extension Terminal {
         buffer.scrollBottom = savedBottom
     }
 
+    /// Replaces the visible rows' line objects with `lines` and returns the ones that were displayed.
+    /// Line identity is what the Metal renderer's row cache is keyed by, so re-installing lines that were
+    /// detached earlier (unchanged since) draws from retained geometry instead of rebuilding every row.
+    /// Each line must have exactly `cols` cells. Returns nil, changing nothing, if the request is invalid.
+    public func externalGridExchangeRows(_ lines: [BufferLine]) -> [BufferLine]? {
+        guard lines.count == rows, buffer.yBase == 0, lines.allSatisfy({ $0.count == cols }) else { return nil }
+        var displaced: [BufferLine] = []
+        displaced.reserveCapacity(rows)
+        for y in 0..<rows { displaced.append(buffer.lines[y]); buffer.lines[y] = lines[y] }
+        updateRange(startLine: 0, endLine: rows - 1)
+        return displaced
+    }
+
     public func externalGridSetCursor(column: Int, row: Int) {
         buffer.x = min(max(0, column), cols - 1)
         buffer.y = min(max(0, row), rows - 1)
