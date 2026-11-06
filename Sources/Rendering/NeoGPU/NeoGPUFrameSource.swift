@@ -111,7 +111,13 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
         let now = CACurrentMediaTime()
         // A presentation callback that never arrives must not stall the workspace forever.
         let period = link.targetTimestamp - link.timestamp
-        if queue.count(at: now, grace: period / 2) >= Self.maximumQueued, now - lastAcquired > 0.25 { queue.reset() }
+        // `nextDrawable()` blocks (up to a second) when every drawable is held. If shown frames stop being
+        // acknowledged (a sleeping or disconnected display), do not ask for another: wait for an acknowledgement,
+        // and only after several seconds without one discard the stale bookkeeping and try once more.
+        if queue.oldestUnpresented(before: now - 0.1) {
+            if now - lastAcquired < 5 { skippedForQueue += 1; return }
+            queue.reset()
+        }
         // A frame counts as waiting until it is shown, or until half a refresh after the refresh it was made for:
         // its presentation callback can trail the very refresh at which this tick runs.
         guard queue.count(at: now, grace: period / 2) < Self.maximumQueued, let layer, let drawable = layer.nextDrawable() else {
@@ -120,7 +126,7 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
         }
         lastAcquired = now
         let queue = self.queue
-        let id = queue.add(target: link.targetTimestamp)
+        let id = queue.add(target: link.targetTimestamp, acquired: now)
         drawable.addPresentedHandler { _ in queue.remove(id) }
         let result = draw(drawable)
         if !result.presented { queue.remove(id) }
@@ -143,18 +149,23 @@ private final class DirectDisplayTarget: NSObject {
 
 final class QueuedDrawables: @unchecked Sendable {
     private let lock = NSLock()
-    private var entries: [(id: UInt64, target: Double)] = []
+    private var entries: [(id: UInt64, target: Double, acquired: Double)] = []
     private var next: UInt64 = 0
     func count(at now: Double, grace: Double) -> Int {
         lock.lock(); defer { lock.unlock() }
         return entries.filter { $0.target + grace > now }.count
     }
-    func add(target: Double) -> UInt64 {
+    func add(target: Double, acquired: Double) -> UInt64 {
         lock.lock(); defer { lock.unlock() }
         next &+= 1
-        entries.append((next, target))
+        entries.append((next, target, acquired))
         if entries.count > 8 { entries.removeFirst(entries.count - 8) }
         return next
+    }
+    /// Whether a frame acquired before `time` has still not been acknowledged by the display.
+    func oldestUnpresented(before time: Double) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return entries.contains { $0.acquired < time }
     }
     func remove(_ id: UInt64) { lock.lock(); entries.removeAll { $0.id == id }; lock.unlock() }
     func reset() { lock.lock(); entries.removeAll(); lock.unlock() }

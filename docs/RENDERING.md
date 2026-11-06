@@ -6,6 +6,30 @@
 
 [Build 26 explorer and tab interaction changes, measurements and limits](INTERACTIONS.md). Highlight composition now retains the text strip independently; historical whole-strip invalidation descriptions below apply to their original builds.
 
+## Direct workspace presentation (input-to-photon latency)
+
+Per-frame traces showed every workspace frame was scheduled by `CAMetalDisplayLink` for a target **about 24 ms (3 refreshes at 120 Hz) after its callback**, and about 41 ms (5 refreshes) in later runs. Frames then often arrived 2–18 ms after that target. That fixed delay sits under every keypress, click, hover and scroll, and it is why typing in the editor and terminal measured about 30 ms key→display even when the editor did almost no work. It does not show up as a dropped frame.
+
+The shared workspace now presents directly (`NeoGPUDirectFrameSource`): the window's `CADisplayLink` ticks at each refresh, the workspace takes `CAMetalLayer.nextDrawable()`, encodes, and presents as soon as the command buffer is committed. It is still one clock for every hosted pane, VSync stays on, there are no extra timers, and the existing one-GPU-frame-in-flight slot still applies. Latency is bounded by never letting more than two drawables wait for the display. A frame counts as waiting until its presentation callback arrives, or half a refresh after the refresh it was made for, because that callback can trail the tick that is asking. If shown frames stop being acknowledged (a sleeping display), the clock stops asking for drawables, because `nextDrawable()` would block. `NEOLINK_PRESENTATION=link` restores the `CAMetalDisplayLink` path for same-binary comparisons. Independent per-pane fallbacks (Quick Open/Git overlays, no workspace) keep their display links.
+
+Same-binary A/B on the release build, native full screen, unlocked and frontmost, native editor client, alternating order. Valid runs: 7 with the display link, 5 direct. One more direct run is excluded: it recorded a 55.8 s main-thread stall while the Mac was locking. The screen locked twice during these runs, and runs interrupted by a lock were discarded. Ranges are across runs:
+
+| Metric (per-run p50 unless noted) | Display link (`NEOLINK_PRESENTATION=link`) | Direct (default) |
+| --- | --- | --- |
+| Editor typing key → display | 28.9–30.3 ms | **20.5–21.6 ms** |
+| Terminal typing key → display | 28.4–30.0 ms | 12.1–29.0 ms (variable) |
+| Explorer highlight → presented | 26.7–34.7 ms | **9.8–10.5 ms** |
+| Tab → correct buffer presented | 44.1–48.5 ms | **31.3–35.8 ms** |
+| Flick scroll input → display (best-fit lag) | 33–49 ms | 23–35 ms |
+| Frame prepare → presented (tab switches, median) | 25.5–27.3 ms | 10.8–14.2 ms |
+| Dropped drawables, whole workload | 26–85 | **3–6** |
+| Resize: maximum main-thread wait | 148–572 ms | **37–60 ms** |
+| Resize: changed-content interval p95 | 25–33.3 ms | 29.2 ms |
+| Motion: missed refreshes | 6–69 | 3–12 |
+| Motion / typing CPU (% of one core) | 19–38 / 28–29 | 19–39 / 28 |
+
+Every interaction that ends in a presented frame is 9–17 ms sooner, and dropped drawables nearly disappear. Resize's worst main-thread wait falls from hundreds of milliseconds to about 50 ms: the display-link path apparently stalled the main thread around drawable acquisition during live resize. Terminal typing improved in some runs only. Resize content cadence is slightly worse at p95 (29.2 vs 25 ms). These are procedural measurements, not physical click-to-photon latency; how it feels still needs a person.
+
 ## Scroll resampling (display-rate trackpad motion)
 
 `SmoothScrollDriver` used to draw each trackpad event's distance the moment it arrived and nothing in between. Input slower than the display (a slowly moving finger reports about 60 Hz; arrival times also jitter) therefore repeated frames every other refresh on a 120 Hz display. `ScrollResampler` keeps the recent history of the accumulated input and, on every display frame of the shared NeoGPU clock, draws the position it had `delay` seconds earlier by linear interpolation. For input slower than 1.5 display frames the delay is one input interval plus 6 ms; for input at the display's rate it is half an interval plus 2 ms. It is capped at 30 ms, never draws ahead of the fingers, never overshoots, and drops input the content had no room for (an end of the buffer) so reversing does not jump. It applies to program scrolling (the editor) and to local scrollback; the animation stops when the remainder has been drawn, so no extra clock or timer is introduced.
