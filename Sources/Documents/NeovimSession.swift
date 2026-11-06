@@ -195,7 +195,8 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
 
     /// A headless server with no PTY, TUI client or VT parser; NeoLink attaches as its UI.
     private func launchNative(executable: String, directory: URL) throws {
-        let environment = try editorEnvironment(directory: directory)
+        var environment = try editorEnvironment(directory: directory)
+        environment["NEOLINK_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["--headless", "--noplugin", "-u", Self.configurationURL.path, "-i", "NONE", "--listen", directory.appendingPathComponent("editor.sock").path]

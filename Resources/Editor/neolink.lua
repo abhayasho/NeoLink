@@ -404,3 +404,14 @@ if vim.env.NEOLINK_CONTROL_SOCKET then
   end)
   M.control_server=server
 end
+
+-- A headless native-UI server has no PTY whose closing would end it. Leave when NeoLink is gone
+-- (a crash or force-quit), so an orphaned editor never lingers behind its temporary socket directory.
+local parent = tonumber(vim.env.NEOLINK_PARENT_PID or '')
+if parent then
+  local watchdog = uv.new_timer()
+  watchdog:start(5000, 5000, function()
+    if uv.kill(parent, 0) ~= 0 then vim.schedule(function() vim.cmd('qa!') end) end
+  end)
+  M.watchdog = watchdog
+end
