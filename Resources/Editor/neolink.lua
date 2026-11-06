@@ -230,14 +230,20 @@ function M.dispatch(json)
         if M.trace then M.trace.redraw=uv.hrtime()/1e9 end
         if api.nvim_ui_send then
           api.nvim_ui_send('\27]2;neolink-selection:'..tostring(request.selection)..'\7')
+          if M.trace then M.trace.markerQueued=uv.hrtime()/1e9 end
+          -- ui_send is an ordered UI event, not a PTY flush. Flush that event
+          -- now rather than waiting for an unrelated event-loop redraw. The
+          -- marker still follows the completed buffer redraw, never stdout RPC.
+          vim.cmd('redraw')
         else
           -- Older Neovim versions expose titles through the TUI event stream.
           -- Never write raw bytes to stdout: in split TUI mode stdout is RPC.
           vim.o.title=true
           vim.o.titlestring='neolink-selection:'..tostring(request.selection)
           vim.cmd('redraw')
+          if M.trace then M.trace.markerQueued=uv.hrtime()/1e9 end
         end
-        if M.trace then M.trace.markerQueued=uv.hrtime()/1e9 end
+        if M.trace then M.trace.markerFlushed=uv.hrtime()/1e9 end
       end
     elseif request.method=='save' then M.save(request.path)
     elseif request.method=='close' then M.close(request.path)

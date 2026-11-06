@@ -6,6 +6,71 @@ import SwiftTerm
 /// Program output reaches the terminal complete and in order, and the parser gives the same
 /// result wherever a read boundary falls.
 final class TerminalOutputDeliveryTests: XCTestCase {
+    private final class OutputRecorder: @unchecked Sendable {
+        let lock = NSLock()
+        let received = DispatchSemaphore(value: 0)
+        let admitted = DispatchSemaphore(value: 0)
+        var events: [(LocalProcess.OutputEvent, Bool)] = []
+        func record(_ event: LocalProcess.OutputEvent) {
+            lock.lock(); events.append((event, Thread.isMainThread)); lock.unlock()
+            if event.stage == .received { received.signal() }
+            if event.stage == .admitted { admitted.signal() }
+        }
+        var snapshot: [(LocalProcess.OutputEvent, Bool)] {
+            lock.lock(); defer { lock.unlock() }; return events
+        }
+    }
+
+    func testOwningDeadlineCanServiceQueuedOutputWithoutDoubleDelivery() {
+        let collector = Collector(), recorder = OutputRecorder()
+        let process = LocalProcess(delegate: collector)
+        process.outputEventHandler = { recorder.record($0) }
+        let done = expectation(description: "printf finished")
+        collector.terminated = done
+        process.startProcess(executable: "/usr/bin/printf", args: ["deadline é 😀"])
+        XCTAssertEqual(recorder.admitted.wait(timeout: .now() + 3), .success)
+        XCTAssertTrue(collector.received.isEmpty, "The queued main block has not run")
+        process.servicePendingOutput()
+        XCTAssertEqual(String(decoding: collector.received, as: UTF8.self), "deadline é 😀")
+        // The original queue block and further deadline latches must be harmless.
+        process.servicePendingOutput()
+        wait(for: [done], timeout: 5)
+        process.servicePendingOutput()
+        XCTAssertEqual(String(decoding: collector.received, as: UTF8.self), "deadline é 😀")
+        XCTAssertEqual(recorder.snapshot.filter { $0.0.stage == .delivered }.count,
+                       recorder.snapshot.filter { $0.0.stage == .received }.count)
+    }
+
+    func testTransportReceiptIsRecordedBeforeMainQueueDeliveryAndRetainsChunkIdentity() {
+        let collector = Collector(), recorder = OutputRecorder()
+        let process = LocalProcess(delegate: collector)
+        process.outputEventHandler = { recorder.record($0) }
+        let done = expectation(description: "printf finished")
+        collector.terminated = done
+        process.startProcess(executable: "/usr/bin/printf", args: ["héllo 😀"])
+        // Hold the delivery queue. A main-thread-only receipt probe cannot see
+        // this data yet; the PTY reader must already report it independently.
+        XCTAssertEqual(recorder.received.wait(timeout: .now() + 3), .success)
+        XCTAssertTrue(collector.received.isEmpty)
+        wait(for: [done], timeout: 5)
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while collector.received.isEmpty && Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        XCTAssertEqual(String(decoding: collector.received, as: UTF8.self), "héllo 😀")
+        let events = recorder.snapshot
+        let groups = Dictionary(grouping: events, by: { $0.0.chunk })
+        XCTAssertFalse(groups.isEmpty)
+        for unsorted in groups.values {
+            let group = unsorted.sorted { $0.0.uptimeNanoseconds < $1.0.uptimeNanoseconds }
+            XCTAssertEqual(group.map { $0.0.stage }, [.received, .admitted, .delivered, .parsed])
+            XCTAssertEqual(Set(group.map { $0.0.bytes }).count, 1)
+            XCTAssertFalse(group[0].1)
+            XCTAssertTrue(group[2].1)
+            XCTAssertTrue(group[3].1)
+            XCTAssertEqual(group.map { $0.0.uptimeNanoseconds }, group.map { $0.0.uptimeNanoseconds }.sorted())
+        }
+    }
     private final class Collector: LocalProcessDelegate {
         var received: [UInt8] = []
         var largestSlice = 0

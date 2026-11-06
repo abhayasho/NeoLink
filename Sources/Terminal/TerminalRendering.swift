@@ -61,6 +61,7 @@ final class TerminalRendering: NeoGPUClient {
     private var hostTexture: MTLTexture?
     private var hostScene: NeoGPUScene?
     private var hostTextureReady = false
+    private var hostBufferSelection: UInt64?
     private var disablingGPU = false
 
     init(view: InteractiveTerminalView, preferences: TerminalRenderingPreferences? = nil) {
@@ -109,7 +110,8 @@ final class TerminalRendering: NeoGPUClient {
         }
         view.displayUpdateScheduler = { [weak self] update in
             Self.onMain {
-                guard let self, let view = self.view, Self.isVisible(view), let frames = self.frames else {
+                guard let self, let view = self.view, let frames = self.frames,
+                      Self.isVisible(view) || (view as? CodeTerminalView)?.session?.requestedPath != nil else {
                     DispatchQueue.main.async { update() }
                     return
                 }
@@ -185,6 +187,7 @@ final class TerminalRendering: NeoGPUClient {
                 // Consume all parsed state for this surface immediately before drawing.
                 // The update may schedule/replace pendingDraw with the newest dirty rows.
                 let id = ObjectIdentifier(view)
+                view.process?.servicePendingOutput()
                 frames.prepareDrawable(id, at: self.drawableClock?.targetTimestamp)
                 guard let draw = self.pendingDraw else {
                     return frames.hasDrawableAnimation(id)
@@ -261,14 +264,22 @@ final class TerminalRendering: NeoGPUClient {
     }
 
     var gpuInputView: NSView? { view }
+    func gpuLatchOutput() {
+        guard let view else { return }
+        // A pending selection must parse its post-redraw marker while hidden.
+        // Other hidden sessions retain ordinary queue delivery and do no extra
+        // work on the visible workspace's deadline.
+        guard Self.isVisible(view) || (view as? CodeTerminalView)?.session?.requestedPath != nil else { return }
+        view.process?.servicePendingOutput()
+    }
     func gpuReleaseHiddenResources() {
-        hostTexture = nil; hostScene = nil; hostTextureReady = false
+        hostTexture = nil; hostScene = nil; hostTextureReady = false; hostBufferSelection = nil
     }
     func gpuSetHosted(_ hosted: Bool) {
         guard let view else { return }
         view.metalUsesExternalDrawables = hosted
         if !hosted {
-            workspaceGPU = nil; hostTexture = nil; hostScene = nil; hostTextureReady = false
+            workspaceGPU = nil; hostTexture = nil; hostScene = nil; hostTextureReady = false; hostBufferSelection = nil
             view.metalHostTexture = nil; view.metalHostCommandBuffer = nil; view.metalHostFrameEncoded = nil
             view.metalDisplayLayer?.opacity = 1
             if !disablingGPU {
@@ -288,7 +299,8 @@ final class TerminalRendering: NeoGPUClient {
         // Preparation drains PTY updates; correlate the buffer actually encoded,
         // including a marker parsed during this very display callback.
         let traceToken = (view as? CodeTerminalView)?.session?.parsedSelection ?? SelectionTrace.current
-        SelectionTrace.mark(traceToken, "frame.prepare", at: prepareBegan)
+        SelectionTrace.mark(traceToken, "frame.prepare", at: prepareBegan,
+                            fields: ["targetPresentationTime": time, "leadSeconds": time - prepareBegan])
         let width = max(1, Int((view.bounds.width * scale).rounded()))
         let height = max(1, Int((view.bounds.height * scale).rounded()))
         var fresh = false
@@ -301,7 +313,11 @@ final class TerminalRendering: NeoGPUClient {
             hostTexture = texture; hostScene = scene; hostTextureReady = false; fresh = true
         }
         var encoded: UInt64 = 0
-        if pendingDraw != nil || fresh || !hostTextureReady {
+        let bufferSelection = (view as? CodeTerminalView)?.session?.parsedSelection
+        // A marker serviced by this deadline can unhide the editor before a
+        // previously queued native update has run. A retained texture from a
+        // different acknowledged selection must be re-encoded, never exposed.
+        if pendingDraw != nil || fresh || !hostTextureReady || bufferSelection != hostBufferSelection {
             let output = pendingOutput; pendingOutput = nil
             let draw = pendingDraw ?? { [weak self, weak view, weak frames] in
                 guard let view, let frames else { return }
@@ -326,7 +342,7 @@ final class TerminalRendering: NeoGPUClient {
             }
             view.metalHostTexture = nil; view.metalHostCommandBuffer = nil; view.metalHostFrameEncoded = nil
             if encoded == 0 { pendingDraw = draw }
-            else { hostTextureReady = true }
+            else { hostTextureReady = true; hostBufferSelection = bufferSelection }
         }
         guard hostTextureReady, let scene = hostScene else { return nil }
         return NeoGPUNode(scene: scene, needsAnotherFrame: pendingDraw != nil || frames.hasDrawableAnimation(id), traceSelection: encoded == 0 ? 0 : traceToken, presented: { [weak view] time in

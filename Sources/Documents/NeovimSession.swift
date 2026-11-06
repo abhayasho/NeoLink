@@ -106,6 +106,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
             terminal.session = self
             terminal.onActivate = { [weak self] in self?.onEditorFocus?() }
             terminal.processDelegate = self
+            if SelectionTrace.enabled { terminal.process.outputEventHandler = { SelectionTrace.pty($0) } }
             TerminalAppearance.apply(to: terminal)
             terminal.observeTextSize()
             self.terminal = terminal
@@ -194,7 +195,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
 
     func selectionParsed(_ token: UInt64) {
         guard token == selection else { return }
-        SelectionTrace.mark(token, "marker.recognized")
+        SelectionTrace.marker(token)
         parsedSelection = token
         guard requestedPath == selectedPath?() else { return }
         if requestedPath != nil { requestedPath = nil }

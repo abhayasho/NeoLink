@@ -3,6 +3,13 @@ import XCTest
 @testable import NeoLink
 
 final class NeoGPUSceneTests: XCTestCase {
+    func testFrameLatencyExperimentAcceptsOnlyDocumentedLeads() {
+        XCTAssertEqual(NeoGPUFrameLatency.requested("1"), 1)
+        XCTAssertEqual(NeoGPUFrameLatency.requested("2"), 2)
+        for value: String? in [nil, "", "0", "3", "1.5", "nan", "inf"] {
+            XCTAssertNil(NeoGPUFrameLatency.requested(value))
+        }
+    }
     func testFrameWakeDuringEncodingSurvivesAnUnusedDrawable() {
         var demand = NeoGPUFrameDemand()
         demand.wake(); demand.beginFrame()
