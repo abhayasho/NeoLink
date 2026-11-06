@@ -93,6 +93,9 @@ final class NeoGPUWorkspace: NSView {
     private(set) var lastNodeCount = 0
     private var generation: UInt64 = 0
     private(set) var drawCallbacks = 0
+    private var presentedLastDraw = false
+    /// Refreshes the direct clock skipped because enough frames already waited for the display.
+    var skippedForQueue: Int { if #available(macOS 14, *) { return (source as? NeoGPUDirectFrameSource)?.skippedForQueue ?? 0 }; return 0 }
     var diagnostics: String { "enabled=\(enabled) suspended=\(suspended) window=\(window != nil) hidden=\(isHidden) bounds=\(bounds) clients=\(clients.count) callbacks=\(drawCallbacks) nodes=\(lastNodeCount) frames=\(presentedFrames)" }
     static var allowsOffscreenTesting = false
     var captureNextFrame: ((CGImage) -> Void)?
@@ -152,8 +155,19 @@ final class NeoGPUWorkspace: NSView {
         source?.invalidate(); source = nil
         guard !Self.allowsOffscreenTesting else { return }
         guard #available(macOS 14, *), let layer = layer as? CAMetalLayer else { return }
-        source = NeoGPUFrameSource(layer: layer, rate: WindowFrameScheduler.rate(for: window?.screen?.maximumFramesPerSecond ?? 60)) { [weak self] drawable in
-            self?.draw(drawable) ?? false
+        let rate = WindowFrameScheduler.rate(for: window?.screen?.maximumFramesPerSecond ?? 60)
+        switch NeoGPUPresentation.current {
+        case .direct:
+            source = NeoGPUDirectFrameSource(layer: layer, view: self, rate: rate) { [weak self] drawable in
+                guard let self else { return (false, false) }
+                self.presentedLastDraw = false
+                let keepRunning = self.draw(drawable)
+                return (keepRunning, self.presentedLastDraw)
+            }
+        case .displayLink:
+            source = NeoGPUFrameSource(layer: layer, rate: rate) { [weak self] drawable in
+                self?.draw(drawable) ?? false
+            }
         }
     }
     func register(_ client: any NeoGPUClient) {
@@ -314,6 +328,7 @@ final class NeoGPUWorkspace: NSView {
         if SelectionTrace.enabled {
             for token in Set(nodes.map { $0.0.traceSelection }).filter({ $0 > 0 }) { SelectionTrace.mark(token, "frame.submitted") }
         }
+        presentedLastDraw = true
         command.present(drawable); command.commit()
         // Repeat only at the owning display-link deadline. Retained pane textures
         // avoid reshaping unchanged text; do not enqueue timer-driven extra frames.

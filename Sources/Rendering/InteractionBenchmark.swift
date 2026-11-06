@@ -1023,6 +1023,8 @@ final class InteractionBenchmark {
             .mapValues { (($0 - processStart) * 10_000).rounded() / 10 }
         let latency = NeoGPUFrameLatency.requested(ProcessInfo.processInfo.environment["NEOLINK_FRAME_LATENCY"])
         setup["requestedFrameLatency"] = latency.map { String($0) } ?? "system default"
+        setup["presentation"] = NeoGPUPresentation.current == .direct ? "direct" : "displayLink"
+        setup["workspaceSkippedForQueue"] = window.gpuWorkspace?.skippedForQueue ?? 0
         if #available(macOS 14, *) { setup["effectiveFrameLatency"] = NeoGPUFrameSource.effectiveFrameLatency.map { String($0) } ?? "unavailable" }
         setup.merge([
             "displayMaximumHz": window.screen?.maximumFramesPerSecond ?? 0,
