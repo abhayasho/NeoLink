@@ -207,6 +207,8 @@ final class NativeGridEditorTests: XCTestCase {
         let presenter = try XCTUnwrap(session.nativeGrid)
         XCTAssertGreaterThan(presenter.speculations, 0, "switch-backs reuse validated images: \(presenter.speculationRejections)")
         XCTAssertGreaterThan(presenter.geometryReuses, 0, "after the first round trip, retained rows are re-installed rather than rewritten")
+        XCTAssertGreaterThan(presenter.confirmedSpeculations, 0)
+        XCTAssertEqual(presenter.speculationCorrections, 0, "a validated image is exactly what Neovim then draws: confirmation rewrote no row")
         // After the confirmation the terminal equals Neovim's own screen, whichever path showed it.
         try await Task.sleep(nanoseconds: 200_000_000)
         presenter.drain()
@@ -233,6 +235,42 @@ final class NativeGridEditorTests: XCTestCase {
         try await settleEditor(controller) { controller.selectedTabID == second && session.requestedPath == nil && screen().contains("rewritten by an agent") }
         XCTAssertTrue(screen().contains("rewritten by an agent"), screen())
         XCTAssertNil(session.error)
+    }
+
+    @MainActor
+    func testCachedImageStaysExactAfterTheCursorMovesAndTheViewScrolls() async throws {
+        guard CommandRunner.executable("nvim") != nil else { throw XCTSkip("Neovim is optional") }
+        _ = NSApplication.shared
+        setenv("NEOLINK_NATIVE_GRID", "1", 1)
+        defer { unsetenv("NEOLINK_NATIVE_GRID") }
+        let long = (1...300).map { "line \($0) of a long file, with some text to scroll through" }.joined(separator: "\n") + "\n"
+        let (root, urls) = try files(["long.txt": long, "short.txt": "SHORT\n", "other.txt": "OTHER\n"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let controller = TabsController()
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: TabbedTerminalView(controller: controller))
+        defer { controller.codeSession.shutdown(); controller.tabs.compactMap(\.terminal).forEach { $0.state.close() }; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        controller.openFile(urls["long.txt"]!); let long1 = try XCTUnwrap(controller.selectedTabID); try await settleEditor(controller)
+        controller.openFile(urls["short.txt"]!); let short1 = try XCTUnwrap(controller.selectedTabID); try await settleEditor(controller)
+        controller.openFile(urls["other.txt"]!); let other = try XCTUnwrap(controller.selectedTabID); try await settleEditor(controller)
+        let session = controller.codeSession, presenter = try XCTUnwrap(session.nativeGrid), terminal = try XCTUnwrap(session.terminal)
+        func screen() -> String { (0..<terminal.getTerminal().rows).map { terminal.getTerminal().externalGridRowText($0) }.joined(separator: "\n") }
+        // Round trips that leave the long file at different cursor positions and scroll offsets.
+        for step in ["<PageDown><PageDown>", "<Down><Down><Down><Right><Right>", "<PageUp>", "<C-End>", "<Home><Up><Up>"] {
+            controller.selectedTabID = long1; try await settleEditor(controller)
+            presenter.send(keys: step)
+            try await Task.sleep(nanoseconds: 150_000_000)
+            for target in [short1, long1, other, long1] {
+                controller.selectedTabID = target
+                try await settleEditor(controller)
+                try await Task.sleep(nanoseconds: 60_000_000)
+            }
+            XCTAssertTrue(screen().contains("of a long file"), "step \(step)")
+        }
+        XCTAssertGreaterThan(presenter.confirmedSpeculations, 5, "\(presenter.speculationRejections)")
+        XCTAssertEqual(presenter.speculationCorrections, 0, "cached images were exact after \(presenter.confirmedSpeculations) confirmations; rejected: \(presenter.speculationRejections)")
     }
 
     @MainActor
