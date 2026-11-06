@@ -12,7 +12,7 @@ extension MsgPackValue {
 
 /// Ordered facts from the editor's UI channel. Frames, selection echoes and buffer
 /// notices travel on one connection, so their relative order is exactly Neovim's.
-enum GridItem: Sendable {
+enum NativeGridItem: Sendable {
     case frame(GridFrame)
     /// `neolink_selection`: sent after the redraw (and its flush) that displayed `path` for `token`.
     case selection(token: UInt64, path: String)
@@ -27,11 +27,11 @@ enum GridItem: Sendable {
 /// so a hidden editor holds at most one pending frame regardless of how long it stays hidden.
 final class GridMailbox: @unchecked Sendable {
     private let lock = NSLock()
-    private var items: [GridItem] = []
+    private var items: [NativeGridItem] = []
 
     /// Returns true when the mailbox was empty, so the consumer needs waking.
     @discardableResult
-    func push(_ item: GridItem) -> Bool {
+    func push(_ item: NativeGridItem) -> Bool {
         lock.lock(); defer { lock.unlock() }
         let wasEmpty = items.isEmpty
         if case .frame(let new) = item, case .frame(let old)? = items.last {
@@ -41,7 +41,7 @@ final class GridMailbox: @unchecked Sendable {
         }
         return wasEmpty
     }
-    func drain() -> [GridItem] {
+    func drain() -> [NativeGridItem] {
         lock.lock(); defer { lock.unlock() }
         let result = items
         items.removeAll(keepingCapacity: true)
@@ -105,7 +105,7 @@ final class NeovimGridClient: @unchecked Sendable {
     }
     private var resolvedPaths: [String: String] = [:]   // reader queue only
 
-    private func publish(_ item: GridItem) {
+    private func publish(_ item: NativeGridItem) {
         if mailbox.push(item) { onWake?() }
     }
 

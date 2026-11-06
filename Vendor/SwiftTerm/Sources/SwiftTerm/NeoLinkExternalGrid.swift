@@ -46,7 +46,8 @@ extension Terminal {
         let underline: UnderlineStyle
         switch style.underline {
         case .none: underline = .none
-        case .single: underline = .single
+        // Plain underline is the SGR 4 style flag, drawn by the same path as the parser's.
+        case .single: underline = .none; flags.insert(.underline)
         case .double: underline = .double
         case .curly: underline = .curly
         case .dotted: underline = .dotted
@@ -63,7 +64,8 @@ extension Terminal {
     /// The cell after a double-width character must be passed with `continuation: true`.
     public func externalCell(text: String, width: Int, continuation: Bool, attribute: Attribute) -> CharData {
         if continuation { return makeCharData(attribute: attribute, code: 0, size: 0) }
-        guard let first = text.first, text != " " else { return makeCharData(attribute: attribute, code: 0, size: Int8(width)) }
+        // A blank cell is a space, as the parser would store it, so copied and accessible text has no NULs.
+        guard let first = text.first, text != " " else { return makeCharData(attribute: attribute, scalar: " ", size: 1) }
         if text.unicodeScalars.count == 1, let scalar = text.unicodeScalars.first {
             return makeCharData(attribute: attribute, scalar: scalar, size: Int8(width))
         }
@@ -109,6 +111,6 @@ extension Terminal {
     /// The text of one visible row, for tests and accessibility comparisons.
     public func externalGridRowText(_ y: Int) -> String {
         guard y >= 0, y < rows else { return "" }
-        return buffer.lines[buffer.yBase + y].translateToString(trimRight: true)
+        return buffer.lines[buffer.yBase + y].translateToString(trimRight: true).replacingOccurrences(of: "\u{0}", with: " ")
     }
 }

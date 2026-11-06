@@ -231,3 +231,203 @@ final class NativeGridProtocolTests: XCTestCase {
         XCTAssertEqual(NeovimKeyEncoder.mouseModifiers([.shift, .control]), "SC")
     }
 }
+
+// MARK: Rendering parity with the terminal path
+
+final class NativeGridRenderingTests: XCTestCase {
+    private func window(_ view: NSView) -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        view.frame = window.contentView!.bounds
+        window.contentView!.addSubview(view)
+        window.orderFrontRegardless()
+        return window
+    }
+
+    @MainActor
+    private func capture(_ view: TerminalView) throws -> CGImage {
+        let done = expectation(description: "frame")
+        var image: CGImage?
+        view.metalFrameCapture = { image = $0; done.fulfill() }
+        view.drawMetalFrameNow()
+        wait(for: [done], timeout: 5)
+        return try XCTUnwrap(image)
+    }
+
+    private func pixels(_ image: CGImage) -> [UInt8] {
+        var data = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = CGContext(data: &data, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return data
+    }
+
+    @MainActor
+    func testNativeGridTextIsPixelIdenticalToTheTerminalPathForTheSameContent() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        // The editor view attaches its own display-link presentation to any window; this test drives
+        // frames directly, so keep the shared GPU preference from handing it to that owner.
+        let gpuPreference = TerminalRenderingPreferences.shared.useGPU
+        TerminalRenderingPreferences.shared.setUseGPU(false)
+        defer { TerminalView.allowsMetalFrameCapture = false; TerminalRenderingPreferences.shared.setUseGPU(gpuPreference) }
+        let reference = TerminalView(frame: .zero)
+        let native = CodeTerminalView(frame: .zero)
+        let windows = [window(reference), window(native)]
+        defer { windows.forEach { $0.close() } }
+        for view in [reference, native] {
+            view.nativeForegroundColor = NSColor(hex: 0xd8d8d8); view.nativeBackgroundColor = NSColor(hex: 0x181818)
+            try view.setUseMetal(true)
+        }
+        let cols = native.getTerminal().cols, rows = native.getTerminal().rows
+        XCTAssertEqual(cols, reference.getTerminal().cols)
+        XCTAssertEqual(rows, reference.getTerminal().rows)
+
+        // The same screen two ways: escape sequences through the VT parser, and Neovim grid events.
+        let model = NeovimGridModel(cols: cols, rows: rows)
+        var events: [MsgPackValue] = [
+            event("grid_resize", .array([.int(1), .int(Int64(cols)), .int(Int64(rows))])),
+            event("default_colors_set", .array([.int(0xd8d8d8), .int(0x181818), .int(-1), .int(-1), .int(-1)])),
+        ]
+        func define(_ id: Int, _ attributes: [(String, MsgPackValue)]) {
+            events.append(event("hl_attr_define", .array([.int(Int64(id)), map(attributes), .map([]), .array([])])))
+        }
+        define(1, [("foreground", .int(0xcc9595))])
+        define(2, [("bold", .bool(true)), ("foreground", .int(0xa8ccdf))])
+        define(3, [("italic", .bool(true)), ("foreground", .int(0xd6b3d2))])
+        define(4, [("background", .int(0x343434))])
+        define(5, [("reverse", .bool(true))])
+        define(6, [("underline", .bool(true)), ("foreground", .int(0xd6d6a4))])
+        define(7, [("strikethrough", .bool(true))])
+        define(8, [("bold", .bool(true)), ("italic", .bool(true)), ("foreground", .int(0xa4b29b)), ("background", .int(0x283128))])
+        func line(_ row: Int, _ cells: [[MsgPackValue]]) { events.append(event("grid_line", gridLine(row: row, column: 0, cells: cells))) }
+        /// One grid cell per grapheme, as Neovim sends them.
+        func run(_ text: String, _ hl: Int) -> [[MsgPackValue]] { text.map { cell(String($0), hl) } }
+        func pad(_ used: Int) -> [[MsgPackValue]] { [cell(" ", 0, cols - used)] }
+        line(0, run("plain text with <>{}[] symbols", 0) + pad(30))
+        line(1, run("red ", 1) + run("bold ", 2) + run("italic ", 3) + run("shaded ", 4) + run("reverse ", 5) + run("under ", 6) + run("strike", 7) + pad(38))
+        line(2, [cell("界", 0), cell(""), cell("面", 1), cell(""), cell("👋", 0), cell(""), cell("e\u{301}", 3), cell("x", 8)] + pad(9))
+        line(3, run("gf", 0) + run("i", 2) + run("fi", 0) + pad(5))
+        events.append(event("grid_cursor_goto", .array([.int(1), .int(2), .int(3)])))
+        events.append(event("busy_start"))
+        model.apply(redraw: events)
+        let frame = try XCTUnwrap(model.takeFrame())
+
+        // Reference via escape sequences (colours as true colour, default pair unchanged).
+        func sgr(_ parts: String) -> String { "\u{1b}[\(parts)m" }
+        let reset = sgr("0")
+        var text = "\u{1b}[?1049h\u{1b}[?25l\u{1b}[2J\u{1b}[H"
+        text += "plain text with <>{}[] symbols\r\n"
+        text += sgr("38;2;204;149;149") + "red " + reset + sgr("1;38;2;168;204;223") + "bold " + reset + sgr("3;38;2;214;179;210") + "italic " + reset
+        text += sgr("48;2;52;52;52") + "shaded " + reset + sgr("7") + "reverse " + reset + sgr("4;38;2;214;214;164") + "under " + reset + sgr("9") + "strike" + reset + "\r\n"
+        text += "界" + sgr("38;2;204;149;149") + "面" + reset + "👋" + sgr("3;38;2;214;179;210") + "e\u{301}" + reset
+        text += sgr("1;3;38;2;164;178;155;48;2;40;49;40") + "x" + reset + "\r\n"
+        text += "gf" + sgr("1;38;2;168;204;223") + "i" + reset + "fi"
+        reference.feed(text: text)
+
+        let presenter = NativeGridPresenter(client: NeovimGridClient(socketPath: "/nonexistent"))
+        presenter.prepareTerminal(native)
+        presenter.client.mailbox.push(.frame(frame))
+        presenter.drain()
+        XCTAssertGreaterThan(presenter.rowsWritten, 0)
+
+        XCTAssertTrue(reference.isUsingMetalRenderer && native.isUsingMetalRenderer, "metal \(reference.frame) \(native.frame)")
+        let expected = try capture(reference)
+        let actual = try capture(native)
+        XCTAssertEqual(actual.width, expected.width); XCTAssertEqual(actual.height, expected.height)
+        let a = pixels(actual), b = pixels(expected)
+        let differing = zip(a, b).filter { $0 != $1 }.count
+        if differing > 0, let dir = ProcessInfo.processInfo.environment["NEOLINK_TEST_ARTIFACTS"] {
+            for (name, image) in [("native", actual), ("terminal", expected)] {
+                let rep = NSBitmapImageRep(cgImage: image)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
+            }
+            var rowsDiff = Set<Int>(), colsDiff = Set<Int>()
+            for index in 0..<a.count where a[index] != b[index] { let pixel = index / 4; rowsDiff.insert(pixel / actual.width); colsDiff.insert(pixel % actual.width) }
+            var cells = Set<String>()
+            for index in 0..<a.count where a[index] != b[index] { let pixel = index / 4; cells.insert("(\(pixel % actual.width / 16),\(pixel / actual.width / 32))") }
+            print("DIFFCELLS \(cells.sorted())")
+            print("DIFF rows \(rowsDiff.min() ?? -1)...\(rowsDiff.max() ?? -1) cols \(colsDiff.min() ?? -1)...\(colsDiff.max() ?? -1) cell \(native.cellSizeInPixels(source: native.getTerminal()) ?? (0, 0))")
+        }
+        XCTAssertEqual(differing, 0, "\(differing) of \(a.count) bytes differ between the native grid and the terminal path")
+        // Bold text is only bright where the terminal path draws it (guard against a vacuous comparison).
+        XCTAssertGreaterThan(Set(a.chunked(by: 4)).count, 8)
+    }
+
+    /// Renders each step through the native presenter and through the VT parser and requires equal pixels.
+    @MainActor
+    private func assertParity(steps: [(events: [MsgPackValue], terminal: String)], file: StaticString = #filePath, line: UInt = #line) throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        let gpuPreference = TerminalRenderingPreferences.shared.useGPU
+        TerminalRenderingPreferences.shared.setUseGPU(false)
+        defer { TerminalView.allowsMetalFrameCapture = false; TerminalRenderingPreferences.shared.setUseGPU(gpuPreference) }
+        let reference = TerminalView(frame: .zero)
+        let native = CodeTerminalView(frame: .zero)
+        let windows = [window(reference), window(native)]
+        defer { windows.forEach { $0.close() } }
+        for view in [reference, native] {
+            view.nativeForegroundColor = NSColor(hex: 0xd8d8d8); view.nativeBackgroundColor = NSColor(hex: 0x181818)
+            try view.setUseMetal(true)
+        }
+        let cols = native.getTerminal().cols, rows = native.getTerminal().rows
+        let model = NeovimGridModel(cols: cols, rows: rows)
+        let modes: [MsgPackValue] = [
+            map([("name", .string("normal")), ("cursor_shape", .string("block"))]),
+            map([("name", .string("insert")), ("cursor_shape", .string("vertical")), ("cell_percentage", .int(25))]),
+            map([("name", .string("replace")), ("cursor_shape", .string("horizontal")), ("cell_percentage", .int(20))]),
+        ]
+        model.apply(redraw: [event("grid_resize", .array([.int(1), .int(Int64(cols)), .int(Int64(rows))])),
+                             event("default_colors_set", .array([.int(0xd8d8d8), .int(0x181818), .int(-1), .int(-1), .int(-1)])),
+                             event("mode_info_set", .array([.bool(true), .array(modes)]))])
+        reference.feed(text: "\u{1b}[?1049h\u{1b}[2J\u{1b}[H")
+        let presenter = NativeGridPresenter(client: NeovimGridClient(socketPath: "/nonexistent"))
+        presenter.prepareTerminal(native)
+        for (index, step) in steps.enumerated() {
+            model.apply(redraw: step.events)
+            if let frame = model.takeFrame() { presenter.client.mailbox.push(.frame(frame)); presenter.drain() }
+            reference.feed(text: step.terminal)
+            let expected = try capture(reference), actual = try capture(native)
+            let differing = zip(pixels(actual), pixels(expected)).filter { $0 != $1 }.count
+            XCTAssertEqual(differing, 0, "step \(index): \(differing) bytes differ", file: file, line: line)
+        }
+    }
+
+    private func rowEvents(_ rows: [(Int, String)], cols: Int, hl: Int = 0) -> [MsgPackValue] {
+        rows.map { row, text in
+            let cells = text.map { cell(String($0), hl) } + [cell(" ", hl, max(1, cols - text.count))]
+            return event("grid_line", gridLine(row: row, column: 0, cells: cells))
+        }
+    }
+
+    @MainActor
+    func testRegionScrollAndRewrittenRowsMatchTheTerminalPathAcrossScrollsAndCursorShapes() throws {
+        let cols = 40
+        let rows = 9
+        var steps: [(events: [MsgPackValue], terminal: String)] = []
+        var first = rowEvents((0..<rows).map { ($0, "line \($0 + 1) of the document") }, cols: 50)
+        first.append(event("grid_cursor_goto", .array([.int(1), .int(2), .int(5)])))
+        first.append(event("mode_change", .array([.string("normal"), .int(0)])))
+        steps.append((first, (0..<rows).map { "line \($0 + 1) of the document" }.joined(separator: "\r\n") + "\u{1b}[2 q\u{1b}[3;6H\u{1b}[?25h"))
+        // Scroll rows 0..<8 up by two and draw the exposed rows (Neovim's grid_scroll then grid_line).
+        var scrolled: [MsgPackValue] = [event("grid_scroll", .array([.int(1), .int(0), .int(8), .int(0), .int(50), .int(2), .int(0)]))]
+        scrolled += rowEvents([(6, "line 9 of the document"), (7, "line 10 of the document")], cols: 50)
+        steps.append((scrolled, "\u{1b}[1;8r\u{1b}[2S\u{1b}[r\u{1b}[7;1Hline 9 of the document\u{1b}[K\u{1b}[8;1Hline 10 of the document\u{1b}[K\u{1b}[3;6H"))
+        // Scroll back down by one.
+        var down: [MsgPackValue] = [event("grid_scroll", .array([.int(1), .int(0), .int(8), .int(0), .int(50), .int(-1), .int(0)]))]
+        down += rowEvents([(0, "line 2 of the document")], cols: 50)
+        steps.append((down, "\u{1b}[1;8r\u{1b}[1T\u{1b}[r\u{1b}[1;1Hline 2 of the document\u{1b}[K\u{1b}[3;6H"))
+        // Cursor shapes per mode and a cursor move.
+        steps.append(([event("mode_change", .array([.string("insert"), .int(1)])), event("grid_cursor_goto", .array([.int(1), .int(4), .int(9)]))],
+                      "\u{1b}[6 q\u{1b}[5;10H"))
+        steps.append(([event("mode_change", .array([.string("replace"), .int(2)])), event("grid_cursor_goto", .array([.int(1), .int(1), .int(0)]))],
+                      "\u{1b}[4 q\u{1b}[2;1H"))
+        try assertParity(steps: steps)
+    }
+}
+
+extension Array where Element == UInt8 {
+    func chunked(by size: Int) -> [[UInt8]] { stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) } }
+}
