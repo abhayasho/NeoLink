@@ -10,6 +10,15 @@ struct NeoGPUFrameDemand {
     mutating func endFrame(usedDrawable: Bool) -> Bool { usedDrawable || requested }
 }
 
+enum NeoGPUFrameLatency {
+    // Controlled release experiment; unset retains Apple's default. Only the
+    // documented 1- and 2-frame leads are accepted, with no rate/timer changes.
+    static func requested(_ value: String?) -> Float? {
+        guard let value, let frames = Float(value), frames == 1 || frames == 2 else { return nil }
+        return frames
+    }
+}
+
 /// Supplies bounded drawables at the display deadline. AppKit input/state is
 /// latched on the main actor immediately before the owner's GPU encoding.
 @available(macOS 14, *)
@@ -19,15 +28,21 @@ final class NeoGPUFrameSource: NSObject, CAMetalDisplayLinkDelegate, FrameClock 
     private var demand = NeoGPUFrameDemand()
     private(set) var targetTimestamp: Double?
     private let draw: (CAMetalDrawable) -> Bool
+    /// Value read back from the link after configuration, for benchmark reports.
+    static private(set) var effectiveFrameLatency: Float?
 
     init(layer: CAMetalLayer, rate: Int, draw: @escaping (CAMetalDrawable) -> Bool) {
         self.draw = draw
         super.init()
         link = CAMetalDisplayLink(metalLayer: layer)
         link?.delegate = self
+        if let latency = NeoGPUFrameLatency.requested(ProcessInfo.processInfo.environment["NEOLINK_FRAME_LATENCY"]) {
+            link?.preferredFrameLatency = latency
+        }
         link?.preferredFrameRateRange = CAFrameRateRange(minimum: Float(rate), maximum: Float(rate), preferred: Float(rate))
         link?.isPaused = true
         link?.add(to: .main, forMode: .common)
+        Self.effectiveFrameLatency = link?.preferredFrameLatency
     }
 
     nonisolated func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {

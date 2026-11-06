@@ -131,7 +131,9 @@ final class InteractionBenchmark {
                             "explorerCompositionBuilds": surface.compositionBuilds - oldBuilds,
                             "explorerCompositionReuses": surface.compositionReuses - oldReuses,
                             "explorerPresentedIntervalMs": ["p50": ms(PresentationTiming.percentile(intervals, 0.5)),
-                                "p95": ms(PresentationTiming.percentile(intervals, 0.95)), "max": ms(intervals.max() ?? 0)],
+                                "p95": ms(PresentationTiming.percentile(intervals, 0.95)),
+                                "p99": ms(PresentationTiming.percentile(intervals, 0.99)), "max": ms(intervals.max() ?? 0)],
+                            "explorerLateIntervals": intervals.filter { $0 > 1.5 / Double(self.window.frames.targetRate) }.count,
                             "explorerNativeFallbacks": surface.nativeFallbacks - oldFallbacks,
                             "explorerFrameSamples": samples.map { ["time": $0.time, "y": $0.y] }]
                 }) {
@@ -268,6 +270,7 @@ final class InteractionBenchmark {
                 await measure(scenario, extra: {
                     ["inputDriver": "procedural hover/selection, no pointer injection",
                      "highlightToPresentedMs": Self.summary(latencies), "timeouts": timeouts,
+                     "highlightToPresentedSamplesMs": latencies.map { $0 * 1000 },
                      "explorerCPUms": Self.summary(cpu), "compositionBuilds": surface.compositionBuilds - builds,
                      "visibleRowRange": [firstVisible, firstVisible + 6]]
                 }) {
@@ -299,6 +302,7 @@ final class InteractionBenchmark {
                 await measure(scenario, extra: {
                     ["switchToFocusedMs": Self.summary(latencies), "switches": latencies.count,
                      "switchToContentPresentedMs": Self.summary(visible), "presentedSwitches": visible.count,
+                     "switchToContentPresentedSamplesMs": visible.map { $0 * 1000 },
                      "presentationTimeouts": timeouts, "failures": failures,
                      "inputDriver": "procedural selection, not pointer input", "selectionTrace": SelectionTrace.report]
                 }) {
@@ -474,6 +478,21 @@ final class InteractionBenchmark {
         frames.resetPresentationTiming()
         window.gpuWorkspace?.resetPresentationTiming()
         let started = CACurrentMediaTime(), cpuStart = Self.cpuSeconds()
+        // Diagnostic runs only: collecting stage clocks and row counts changes
+        // the workload and must not be mixed with unprofiled A/B timings.
+        var preparation: [[String: Double]] = []
+        let profiledViews = ProcessInfo.processInfo.environment["NEOLINK_PREPARATION_PROFILE"] == "1"
+            ? window.contentView.map { Self.findAll(InteractiveTerminalView.self, in: $0) } ?? [] : []
+        for view in profiledViews {
+            view.metalPreparationProfile = { costs in
+                guard preparation.count < 4096 else { return }
+                var sample = costs
+                sample["time"] = CACurrentMediaTime()
+                sample["editor"] = view is CodeTerminalView ? 1 : 0
+                preparation.append(sample)
+            }
+        }
+        defer { for view in profiledViews { view.metalPreparationProfile = nil } }
         // Main-thread responsiveness: a background timer queues a block every 2 ms and
         // records how long each waited. A long wait is a stall of input and drawing.
         let probe = DispatchSource.makeTimerSource(flags: .strict, queue: eventQueue)
@@ -520,9 +539,9 @@ final class InteractionBenchmark {
             "contentIntervalMs": stats(presented.contentIntervals),
             "contentLatePercent": presented.contentIntervals.isEmpty ? 0 : (Double(contentLate) * 1000 / Double(presented.contentIntervals.count)).rounded() / 10,
             "missedRefreshes": presented.missedRefreshes(rate: frames.targetRate),
-            "mainThreadStallMs": ["p99": ms(p(stalls.values, 0.99)), "max": ms(stalls.values.max() ?? 0),
-                                  "over8ms": stalls.values.filter { $0 > 1.0 / 120 }.count,
-                                  "over16ms": stalls.values.filter { $0 > 1.0 / 60 }.count],
+            "mainThreadStallMs": stats(stalls.values).merging([
+                                  "over8ms": Double(stalls.values.filter { $0 > 1.0 / 120 }.count),
+                                  "over16ms": Double(stalls.values.filter { $0 > 1.0 / 60 }.count)]) { _, new in new },
             // The five longest waits: [ms after the scenario began, ms waited].
             "longestStalls": zip(stalls.times, stalls.values).sorted { $0.1 > $1.1 }.prefix(5).map { [ms($0.0 - started), ms($0.1)] },
             "cpuPercent": (cpu / max(elapsed, 0.001) * 1000).rounded() / 10,
@@ -549,6 +568,9 @@ final class InteractionBenchmark {
             problems.insert("only \(presented.answeredInputs) of \(expectKeys) keys answered")
         }
         if let extra { result.merge(extra()) { _, new in new } }
+        if !profiledViews.isEmpty {
+            result["preparationSamples"] = preparation
+        }
         if !problems.isEmpty { result["invalid"] = problems.sorted() }
         results.append(result)
         print("NeoLink benchmark", name, result.filter { $0.key != "raw" && $0.key != "explorerFrameSamples" })
@@ -999,6 +1021,9 @@ final class InteractionBenchmark {
         let processStart = PhaseTrace.processStart
         setup["launchPhasesMs"] = PhaseTrace.moments.filter { $0.key.hasPrefix("launch.") || $0.key.hasPrefix("shell.") }
             .mapValues { (($0 - processStart) * 10_000).rounded() / 10 }
+        let latency = NeoGPUFrameLatency.requested(ProcessInfo.processInfo.environment["NEOLINK_FRAME_LATENCY"])
+        setup["requestedFrameLatency"] = latency.map { String($0) } ?? "system default"
+        if #available(macOS 14, *) { setup["effectiveFrameLatency"] = NeoGPUFrameSource.effectiveFrameLatency.map { String($0) } ?? "unavailable" }
         setup.merge([
             "displayMaximumHz": window.screen?.maximumFramesPerSecond ?? 0,
             "backingScale": window.backingScaleFactor,
@@ -1013,6 +1038,7 @@ final class InteractionBenchmark {
             "neoGPUWorkspace": NeoGPUWorkspace.forWindow(window) != nil,
             "lowPowerMode": ProcessInfo.processInfo.isLowPowerModeEnabled,
             "thermalState": ProcessInfo.processInfo.thermalState.rawValue,
+            "preparationProfile": ProcessInfo.processInfo.environment["NEOLINK_PREPARATION_PROFILE"] == "1",
         ]) { _, new in new }
         let report: [String: Any] = ["results": results, "setup": setup, "displayMaximumHz": window.screen?.maximumFramesPerSecond ?? 0]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {

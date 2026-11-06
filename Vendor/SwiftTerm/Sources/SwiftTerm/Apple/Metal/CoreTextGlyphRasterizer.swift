@@ -21,11 +21,23 @@ struct GlyphRasterPhase: Hashable {
 final class CoreTextGlyphRasterizer {
     var fontSmoothing: Bool = true
 
+    enum Result {
+        case bitmap(GlyphBitmap)
+        /// Deterministic zero ink bounds (for example a space), not an allocation failure.
+        case empty
+        case unavailable
+    }
+
     func rasterize(font: CTFont, glyph: CGGlyph, phase: GlyphRasterPhase = .zero) -> GlyphBitmap? {
+        if case .bitmap(let bitmap) = rasterizeResult(font: font, glyph: glyph, phase: phase) { return bitmap }
+        return nil
+    }
+
+    func rasterizeResult(font: CTFont, glyph: CGGlyph, phase: GlyphRasterPhase = .zero) -> Result {
         var glyphVar = glyph
         let rect = CTFontGetBoundingRectsForGlyphs(font, .default, &glyphVar, nil, 1)
         if rect.width <= 0 || rect.height <= 0 {
-            return nil
+            return .empty
         }
 
         let shift = phase.offset
@@ -37,7 +49,7 @@ final class CoreTextGlyphRasterizer {
         let width = Int(maxX - minX)
         let height = Int(maxY - minY)
         if width <= 0 || height <= 0 {
-            return nil
+            return .unavailable
         }
 
         let bytesPerPixel = 4
@@ -82,7 +94,7 @@ final class CoreTextGlyphRasterizer {
             return true
         }
         if !drew {
-            return nil
+            return .unavailable
         }
 
         var isColor = false
@@ -98,11 +110,11 @@ final class CoreTextGlyphRasterizer {
             idx += 4
         }
 
-        return GlyphBitmap(width: width,
+        return .bitmap(GlyphBitmap(width: width,
                            height: height,
                            bearing: CGPoint(x: minX, y: minY),
                            pixels: pixels,
-                           isColor: isColor)
+                           isColor: isColor))
     }
 }
 #endif

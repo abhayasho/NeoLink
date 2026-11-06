@@ -7,6 +7,67 @@ import SwiftTerm
 /// Renders with SwiftTerm's Metal renderer and compares frames pixel by pixel.
 final class SmoothScrollRenderingTests: XCTestCase {
     @MainActor
+    func testHiddenTerminalDoesNotPrepareRowsOrConsumeFrameTagsDuringNativeResize() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        defer { TerminalView.allowsMetalFrameCapture = false }
+        let (window, view) = makeMetalTerminal()
+        let (referenceWindow, reference) = makeMetalTerminal()
+        defer { window.close(); referenceWindow.close() }
+        try view.setUseMetal(true); try reference.setUseMetal(true)
+        let text = "\u{1B}[?25l\u{1B}[2J\u{1B}[H\u{1B}[31;44m界 🦎 native resize\u{1B}[0m\r\n\u{1B}#3DOUBLE TOP\r\n\u{1B}#4DOUBLE BOTTOM"
+        view.feed(text: text)
+        _ = try capture(view)
+        var samples = 0
+        view.metalPreparationProfile = { _ in samples += 1 }
+        view.metalNextFrameTag = 1024
+        view.metalUsesExternalDrawables = true
+        view.setFrameSize(.init(width: 490, height: 320))
+        view.drawMetalFrameNow()
+        XCTAssertEqual(samples, 0, "A native callback without the owner's drawable must not build rows")
+        XCTAssertEqual(view.metalNextFrameTag, 1024)
+        view.metalUsesExternalDrawables = false
+        view.isHidden = true
+        for width: CGFloat in [485, 480.5, 475.125, 490] {
+            view.setFrameSize(.init(width: width, height: 320))
+            view.drawMetalFrameNow()
+        }
+        XCTAssertEqual(samples, 0, "Native resize must not prepare artwork for a hidden pane")
+        XCTAssertEqual(view.metalNextFrameTag, 1024, "Keep unsubmitted tags and dirty state intact")
+        view.metalPreparationProfile = nil
+        view.isHidden = false
+        reference.setFrameSize(view.frame.size)
+        reference.feed(text: text)
+        let shown = try capture(view), fresh = try capture(reference)
+        XCTAssertEqual(shown.dataProvider!.data! as Data, fresh.dataProvider!.data! as Data,
+                       "Showing a resized pane must draw current native-resolution content")
+    }
+    @MainActor
+    func testRebuiltRowsReuseConfirmedEmptyGlyphsWithoutChangingPixels() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        defer { TerminalView.allowsMetalFrameCapture = false }
+        let (window, view) = makeMetalTerminal()
+        defer { window.close() }
+        try view.setUseMetal(true)
+        let text = "\u{1B}[?25l\u{1B}[2J\u{1B}[H\u{1B}[31;44m   界 🦎 blank glyphs   \u{1B}[0m\r\n" + String(repeating: " ", count: 40)
+        view.feed(text: text)
+        let before = try capture(view)
+        var samples: [[String: Double]] = []
+        view.metalPreparationProfile = { samples.append($0) }
+        defer { view.metalPreparationProfile = nil }
+        // Redraw identical text with new line generations, retaining the atlas.
+        view.feed(text: text)
+        let after = try capture(view)
+        XCTAssertEqual(before.dataProvider!.data! as Data, after.dataProvider!.data! as Data)
+        XCTAssertGreaterThan(samples.reduce(0) { $0 + $1["rowsRebuilt", default: 0] }, 0)
+        XCTAssertGreaterThan(samples.reduce(0) { $0 + $1["emptyGlyphHits", default: 0] }, 40)
+        XCTAssertEqual(samples.reduce(0) { $0 + $1["glyphRasterizations", default: 0] }, 0,
+                       "Blank cells must not repeatedly ask CoreText for their outlines")
+    }
+    @MainActor
     func testSubColumnResizeMatchesFreshRendererIncludingDoubledHeightClips() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
         _ = NSApplication.shared

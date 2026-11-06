@@ -79,3 +79,31 @@ The 24-switch workload includes 18 editor presentations. At these small sample c
 - **Native UI-driver actions:** opened two TypeScript files named `index.ts`; screenshots showed the correct `one` / `two` code and distinguishing parent labels. A real missing-SDK error remained dismissible and navigation continued. Rapid file/shell switches settled on the requested file, without saving edits. Opened both long explorer source filenames, exercised small/large/reversed editor and explorer scroll commands, refresh and sidebar width changes. A twelve-tab overflow check retained an already-visible selected tab and revealed the first offscreen tab at the left edge. Temporary test terminals and fixture tabs were closed. Earlier UI checks exercised folder expansion/collapse. These are interaction-correctness checks, not measured physical input latency; the final manual trace could not be correlated to those actions and is excluded from timing evidence.
 
 Natural physical trackpad motion, momentum interruption and human-perceived smoothness still need human verification. No parity with another editor, uninterrupted 120 FPS, authenticated SSH/SFTP performance or macOS 13 device performance is claimed. Existing accessibility, keyboard paths, context menus, drag/drop, file operations and remote views remain in place.
+
+## Build 30 latency pass (procedural, release, native full screen)
+
+Three alternating pairs, sequential, frontmost and unlocked, 1728 × 1084 pt, 2× scale, 120 Hz, M2 Max. Installed Build 29 (`a9ea61d2…fd6`) against the working-tree release (`78c919e5…393`), both running `render-motion,ui-tabs,ui-highlights,ui-resize`. Raw per-run reports were kept outside the repository; values below are run 1 / 2 / 3.
+
+| Metric | Build 29 | Build 30 candidate |
+| --- | --- | --- |
+| Tab selection → correct buffer presented, p50 | 76.7 / 77.0 / 77.4 | 61.7 / 66.5 / 67.6 |
+| Tab p95 / max (same value at 18 samples) | 87.4 / 89.0 / 98.1 | 85.5 / 85.1 / 87.0 |
+| Selection → focus, p50 | 29.3 / 28.3 / 29.1 | 30.3 / 30.8 / 32.7 |
+| Selection failures / presentation timeouts | 0 / 0 | 0 / 0 |
+| Highlight → presentation, p50 | 44.0 / 43.9 / 43.4 | 43.9 / 43.6 / 43.6 |
+| Resize changed-content interval p50 / p95 / p99 / max | 25 / 33.3 / 41.7 / 75 (all three) | 16.7 / 25 / 41.7 / 66.7; 16.7 / 25 / 33.3 / 66.7; 16.7 / 25 / 33.3 / 66.7 |
+| Resize missed refreshes | 407 / 403 / 424 | 226 / 207 / 223 |
+| Resize CPU % | 91.5 / 91.5 / 91.6 | 81.2 / 81.8 / 79.2 |
+| Resize **maximum main-thread wait** | 109 / 120 / 180 ms | **335 / 204 / 249 ms (worse)** |
+| Motion (scrolling) interval p95 / p99 / max | 8.3 / 16.7 / 16.7; 8.3 / 8.3 / 16.7; 8.3 / 8.3 / 16.7 | 8.3 / 8.3 / 8.3; 8.3 / 8.3 / 16.7; 8.3 / 8.3 / 16.7 |
+| Motion explorer native fallbacks | 0 | 0 |
+
+Measured causes, from a per-selection trace and a Time Profiler capture of the same workload:
+
+- Editor→editor switch timeline (median, ms from selection): Neovim redraw complete 10; PTY bytes received by the background reader 10 (the marker flush made this immediate; it was about 18 before); main-thread delivery 17–21; frame encode about 10; presentation about 50. Shell→editor switches are the slow class: the marker is ready almost at once, but the main thread is busy for 25–35 ms in SwiftUI/AppKit layout before it can deliver the bytes, giving 60–72 ms.
+- `TabPresentation.make`/`measure` ran inside the tab-strip SwiftUI body on every selection (about 5 ms of text measurement per switch). Measurement and the last presentation are now memoized (pure function of names/paths and the fixed 12 pt font). The parser now starts about 4 ms earlier.
+- Terminal row preparation (profiled, per frame): about 6.3 ms of draw data, split into attributed strings 1.9, geometry 3.2, shaping 0.8, buffers 0.2 ms. About 5,300 blank-glyph lookups per frame hashed a string-keyed `GlyphKey` each; font ids are now interned and blank glyphs are skipped before placement math. Encode time moved from about 11.7 to 9.8 ms. Pixel-equality tests are unchanged.
+- `preferredFrameLatency`: 1 versus 2 frames showed no reliable gain (p50 51.7/53.4/52.2 versus 69/52.5/52.7, where the single 69 is a first-run effect). The reported lead stayed about 24 ms in most runs and rose to 41 ms in another, so the system appears to adapt it. Default retained; `NEOLINK_FRAME_LATENCY=1|2` remains available for experiments and the effective value is written to the report setup.
+- Resize: hidden editor panes and native resize callbacks without a supplied drawable no longer build rows. The largest remaining main-thread bursts (60–90 ms) are SwiftUI view-graph updates and flexible-frame layout of the root hosting view, not terminal rendering.
+
+**Not improved:** resize worst-case main-thread wait is worse in this A/B (and varies 95–335 ms between runs of either binary), and its cause is SwiftUI/AppKit root layout that this pass did not restructure. Shell→editor switches remain 60–70 ms for the same reason. Tab p95/max are essentially unchanged. Highlight and scrolling results are unchanged within noise. Edit-to-photon latency, natural trackpad scrolling, momentum interruption and perceived smoothness were not measured and need hands-on verification.

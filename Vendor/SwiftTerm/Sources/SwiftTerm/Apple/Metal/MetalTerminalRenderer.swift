@@ -19,6 +19,19 @@ struct GlyphKey: Hashable {
     var phase: GlyphRasterPhase = .zero
 }
 
+struct FastGlyphKey: Hashable {
+    let font: UInt32
+    let glyph: CGGlyph
+    let phase: GlyphRasterPhase
+}
+
+struct ScaledFontRef {
+    let source: CTFont // retained so the identity key cannot be recycled
+    let scale: CGFloat
+    let font: CTFont
+    let id: UInt32
+}
+
 struct GlyphEntry {
     let region: AtlasRegion
     let size: CGSize
@@ -247,12 +260,23 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private let grayscaleAtlas: GlyphAtlas
     private let colorAtlas: GlyphAtlas
     private let rasterizer = CoreTextGlyphRasterizer()
-    private var glyphCache: [GlyphKey: GlyphEntry] = [:]
-    private var scaledFontCache: [GlyphKey: CTFont] = [:]
+    private var glyphCache: [FastGlyphKey: GlyphEntry] = [:]
+    // Zero-ink glyphs have no atlas entry. Remember that result too, otherwise
+    // every blank cell asks CoreText for its outline on every rebuilt row.
+    // Phase stays in the key; allocation/atlas failures are never cached here.
+    // Emptiness is decided by the glyph's outline bounds, so it is independent of
+    // raster phase: keyed by interned font id and glyph only.
+    private var emptyGlyphs = Set<UInt64>()
+    private var scaledFontCache: [GlyphKey: ScaledFontRef] = [:]
+    // Source fonts are long-lived (font set or shaper fallbacks); identity lookup
+    // avoids a PostScript-name copy plus string hash for every glyph run.
+    private var scaledFontByIdentity: [ObjectIdentifier: ScaledFontRef] = [:]
+    private var fontIDs: [GlyphKey: UInt32] = [:]
     private var customGlyphCache: [CustomGlyphKey: CustomGlyphEntry] = [:]
     private let imageTextureCache = NSMapTable<AnyObject, MTLTexture>(keyOptions: .weakMemory, valueOptions: .strongMemory)
     private var kittyTextureCache: [UInt32: (signature: KittyImageSignature, texture: MTLTexture)] = [:]
     private var rowCache: [ObjectIdentifier: RowCacheEntry] = [:]
+    private var preparationCosts: [String: Double]?
     private var lastFrameSignature = 0
     private var cacheBufferingMode: MetalBufferingMode?
     private var cacheSignature: CacheSignature?
@@ -396,6 +420,20 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        #if os(macOS)
+        // AppKit/MTKView may draw during native resize even when the retained
+        // editor is hidden behind a shell. The host scheduler's visibility gate
+        // does not cover those delegate calls. Preserve dirty state for showing
+        // the pane; do not take a slot, build rows or acquire a hidden drawable.
+        guard terminalView?.isHiddenOrHasHiddenAncestor != true else { return }
+        if let terminalView, terminalView.metalUsesExternalDrawables,
+           terminalView.metalHostTexture == nil, terminalView.metalExternalDrawable == nil {
+            // MTKView's native resize/display callback is not the owner of this
+            // layer. Leave preparation to the supplied-drawable deadline; doing
+            // it here builds every row only to refuse a missing drawable later.
+            return
+        }
+        #endif
         let cpuStarted = CACurrentMediaTime()
 #if canImport(os)
         let drawID = OSSignpostID(log: MetalTerminalRenderer.profileLog)
@@ -443,7 +481,18 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             os_signpost(.begin, log: MetalTerminalRenderer.profileLog, name: "Metal.BuildDrawData", signpostID: buildID)
         }
 #endif
+        #if os(macOS)
+        preparationCosts = terminalView.metalPreparationProfile == nil ? nil : [:]
+        #endif
+        let buildStarted = preparationCosts == nil ? 0 : CACurrentMediaTime()
         let drawData = buildDrawData(scale: scale)
+        #if os(macOS)
+        if var costs = preparationCosts {
+            costs["drawDataSeconds"] = CACurrentMediaTime() - buildStarted
+            terminalView.metalPreparationProfile?(costs)
+            preparationCosts = nil
+        }
+        #endif
 #if canImport(os)
         if MetalTerminalRenderer.profileEnabled {
             os_signpost(.end, log: MetalTerminalRenderer.profileLog, name: "Metal.BuildDrawData", signpostID: buildID)
@@ -964,7 +1013,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                     rowCache[key] = cached
                 }
                 cachedRows += 1
+                if preparationCosts != nil { preparationCosts!["rowsCached", default: 0] += 1 }
                 return cached
+            }
+            if preparationCosts != nil {
+                preparationCosts!["rowsRebuilt", default: 0] += 1
+                preparationCosts![needsFullRebuild ? "signatureOrEmptyMisses" : dirty ? "dirtyMisses" : "generationOrMissingMisses", default: 0] += 1
             }
             let buildRow = row ?? visibleRow + visibleDisp
             let data = buildRowDrawData(row: buildRow,
@@ -977,11 +1031,14 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                         viewWidthPx: viewWidthPx,
                                         scale: scale,
                                         virtualPlacementsByImageId: virtualPlacementsByImageId)
+            let bufferStarted = preparationCosts == nil ? 0 : CACurrentMediaTime()
+            let buffers = bufferingMode == .perRowPersistent ? makeRowBuffers(from: data) : nil
+            if preparationCosts != nil { preparationCosts!["buffersSeconds", default: 0] += CACurrentMediaTime() - bufferStarted }
             let built = RowCacheEntry(lineRef: line, generation: line.generation,
                                       bidiParagraphRevision: bidiRevision ?? 0,
                                       builtRow: buildRow - visibleDisp,
                                       data: data,
-                                      buffers: bufferingMode == .perRowPersistent ? makeRowBuffers(from: data) : nil)
+                                      buffers: buffers)
             rowCache[key] = built
             rebuiltRows += 1
             return built
@@ -1189,8 +1246,18 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let lineOffset = cellHeight * CGFloat(row - yDisp + 1)
         let lineOrigin = CGPoint(x: 0, y: terminalView.bounds.height - lineOffset)
         let rowBase = lineOrigin.y + cellHeight
+        let textStarted = preparationCosts == nil ? 0 : CACurrentMediaTime()
         let lineInfo = terminalView.buildAttributedString(row: row, line: line, cols: buffer.cols)
+        let shapeStarted = preparationCosts == nil ? 0 : CACurrentMediaTime()
         let shapedSegments = buildShapedSegments(lineInfo.segments, terminalView: terminalView)
+        let geometryStarted = preparationCosts == nil ? 0 : CACurrentMediaTime()
+        if preparationCosts != nil {
+            preparationCosts!["attributedSeconds", default: 0] += shapeStarted - textStarted
+            preparationCosts!["shapingSeconds", default: 0] += geometryStarted - shapeStarted
+        }
+        defer {
+            if preparationCosts != nil { preparationCosts!["geometrySeconds", default: 0] += CACurrentMediaTime() - geometryStarted }
+        }
         let lineOriginPx = CGPoint(x: lineOrigin.x * scale, y: lineOrigin.y * scale)
         let cellWidthPx = cellWidth * scale
         let cellHeightPx = cellHeight * scale
@@ -1551,7 +1618,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 var anchorOrdinal = -1
                 var anchorX: CGFloat = 0
                 for glyphRun in run.shaperRun.glyphRuns {
-                    let scaledFont = scaledFontFor(font: glyphRun.font, scale: scale)
+                    let scaledRef = scaledFontFor(font: glyphRun.font, scale: scale)
+                    let scaledFont = scaledRef.font
+                    let fontKeyBase = UInt64(scaledRef.id) << 16
                     for i in 0..<glyphRun.glyphs.count {
                         let glyph = glyphRun.glyphs[i]
                         let ctPos = glyphRun.positions[i]
@@ -1564,6 +1633,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                             anchorOrdinal = ordinal
                             anchorX = ctPos.x
                             intraCluster = 0
+                        }
+                        // Blank cells dominate a typical screen. Skip them before any
+                        // placement math; the anchor above is already updated.
+                        if emptyGlyphs.contains(fontKeyBase | UInt64(glyph)) {
+                            if preparationCosts != nil { preparationCosts!["emptyGlyphHits", default: 0] += 1 }
+                            continue
                         }
                         let glyphColumn = shaped.segment.column + (ordinal * shaped.segment.columnWidth)
                         // Center full-width (CJK) and substituted glyphs within
@@ -1580,7 +1655,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                               y: lineOrigin.y + yOffset + ctPos.y + fit.dy)
                         let baseline = CGPoint(x: basePos.x * scale, y: basePos.y * scale)
                         let placement = fit.scale == 1 ? GlyphRasterPhase.placement(at: baseline) : (origin: baseline, phase: GlyphRasterPhase.zero)
-                        guard let entry = glyphEntry(for: scaledFont, glyph: glyph, phase: placement.phase) else { continue }
+                        guard let entry = glyphEntry(for: scaledRef, glyph: glyph, phase: placement.phase) else { continue }
                         let pxX = placement.origin.x + entry.bearing.x * fit.scale
                         let pxY = placement.origin.y + entry.bearing.y * fit.scale
 
@@ -1838,15 +1913,25 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private func glyphEntry(for font: CTFont, glyph: CGGlyph, phase: GlyphRasterPhase = .zero) -> GlyphEntry? {
-        let key = GlyphKey(fontName: CTFontCopyPostScriptName(font) as String,
-                           size: CTFontGetSize(font),
-                           glyph: glyph, phase: phase)
+    private func glyphEntry(for scaled: ScaledFontRef, glyph: CGGlyph, phase: GlyphRasterPhase = .zero) -> GlyphEntry? {
+        let key = FastGlyphKey(font: scaled.id, glyph: glyph, phase: phase)
         if let cached = glyphCache[key] {
             return cached
         }
-        guard let bitmap = rasterizer.rasterize(font: font, glyph: glyph, phase: phase) else {
+        let emptyKey = (UInt64(scaled.id) << 16) | UInt64(glyph)
+        if emptyGlyphs.contains(emptyKey) {
+            if preparationCosts != nil { preparationCosts!["emptyGlyphHits", default: 0] += 1 }
             return nil
+        }
+        if preparationCosts != nil { preparationCosts!["glyphRasterizations", default: 0] += 1 }
+        let bitmap: GlyphBitmap
+        switch rasterizer.rasterizeResult(font: scaled.font, glyph: glyph, phase: phase) {
+        case .empty:
+            if emptyGlyphs.count >= 8192 { emptyGlyphs.removeAll(keepingCapacity: true) }
+            emptyGlyphs.insert(emptyKey)
+            return nil
+        case .unavailable: return nil
+        case .bitmap(let result): bitmap = result
         }
         let atlasKind: GlyphAtlasKind = bitmap.isColor ? .color : .grayscale
         let atlas = atlasKind == .color ? colorAtlas : grayscaleAtlas
@@ -1866,16 +1951,31 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         return entry
     }
 
-    private func scaledFontFor(font: CTFont, scale: CGFloat) -> CTFont {
-        let key = GlyphKey(fontName: CTFontCopyPostScriptName(font) as String,
-                           size: CTFontGetSize(font) * scale,
-                           glyph: 0)
-        if let cached = scaledFontCache[key] {
+    private func scaledFontFor(font: CTFont, scale: CGFloat) -> ScaledFontRef {
+        let identity = ObjectIdentifier(font)
+        if let cached = scaledFontByIdentity[identity], cached.scale == scale {
             return cached
         }
-        let scaled = CTFontCreateCopyWithAttributes(font, CTFontGetSize(font) * scale, nil, nil)
-        scaledFontCache[key] = scaled
-        return scaled
+        let size = CTFontGetSize(font) * scale
+        let key = GlyphKey(fontName: CTFontCopyPostScriptName(font) as String, size: size, glyph: 0)
+        let ref: ScaledFontRef
+        if let cached = scaledFontCache[key] {
+            ref = ScaledFontRef(source: font, scale: scale, font: cached.font, id: cached.id)
+        } else {
+            if fontIDs.count >= 1024 {
+                // Ids are about to be reissued: every id-keyed cache must go with them.
+                fontIDs.removeAll(); scaledFontCache.removeAll(); scaledFontByIdentity.removeAll()
+                glyphCache.removeAll(); emptyGlyphs.removeAll()
+            }
+            let id: UInt32
+            if let existing = fontIDs[key] { id = existing } else { id = UInt32(fontIDs.count); fontIDs[key] = id }
+            ref = ScaledFontRef(source: font, scale: scale,
+                                font: CTFontCreateCopyWithAttributes(font, size, nil, nil), id: id)
+            scaledFontCache[key] = ref
+        }
+        if scaledFontByIdentity.count >= 512 { scaledFontByIdentity.removeAll(keepingCapacity: true) }
+        scaledFontByIdentity[identity] = ref
+        return ref
     }
 
     private func alignToPixel(_ value: CGFloat, scale: CGFloat, rule: FloatingPointRoundingRule) -> CGFloat {

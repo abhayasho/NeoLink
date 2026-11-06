@@ -61,6 +61,37 @@ public protocol LocalProcessDelegate: AnyObject {
  * This implementation uses swift-subprocess with openpty/login_tty for pseudo-terminal support.
  */
 public class LocalProcess {
+    /// NeoLink: transport telemetry contains no output bytes. Install before start;
+    /// the handler runs on both the serial PTY reader and the delivery queue.
+    public struct OutputEvent: Sendable {
+        public enum Stage: String, Sendable { case received, admitted, delivered, parsed }
+        public let stage: Stage
+        public let chunk: UInt64
+        public let bytes: Int
+        public let uptimeNanoseconds: UInt64
+        /// Delivered/parsed only: true when the owning display deadline, not the
+        /// main-queue block, drained this chunk.
+        public var deadlineServiced = false
+    }
+    private let outputEventLock = NSLock()
+    private var outputHandler: (@Sendable (OutputEvent) -> Void)?
+    public var outputEventHandler: (@Sendable (OutputEvent) -> Void)? {
+        get { outputEventLock.lock(); defer { outputEventLock.unlock() }; return outputHandler }
+        set { outputEventLock.lock(); defer { outputEventLock.unlock() }; outputHandler = newValue }
+    }
+    private var outputChunk: UInt64 = 0 // serial readQueue only
+    private struct ReceivedChunk {
+        let bytes: [UInt8]
+        let id: UInt64
+        let handler: (@Sendable (OutputEvent) -> Void)?
+        func trace(_ stage: OutputEvent.Stage, at time: UInt64? = nil, deadline: Bool = false) {
+            guard let handler else { return }
+            var event = OutputEvent(stage: stage, chunk: id, bytes: bytes.count,
+                                    uptimeNanoseconds: time ?? DispatchTime.now().uptimeNanoseconds)
+            event.deadlineServiced = deadline
+            handler(event)
+        }
+    }
     let readSize = 128*1024
     
     /* The file descriptor used to communicate with the child process */
@@ -91,9 +122,10 @@ public class LocalProcess {
     // NeoLink: yield between output chunks after a 2 ms parsing time slice (upstream: 4 ms).
     // A single chunk can exceed the budget; this is not a hard input-latency bound.
     private let pendingTimeSliceNs: UInt64 = 2_000_000
-    private var pendingChunks: [[UInt8]] = []
+    private var pendingChunks: [ReceivedChunk] = []
     private var pendingChunkIndex: Int = 0
     private var pendingScheduled = false
+    private var drainingReceivedData = false // delivery queue only
     private let pendingLock = NSLock()
     // Backpressure for the main-queue delivery path: without it the read loop
     // re-arms unconditionally, so when the child produces output faster than
@@ -133,10 +165,10 @@ public class LocalProcess {
 
     // Returns false when the backlog passed the high-water mark; the caller
     // must then skip re-arming the PTY read (drainReceivedData resumes it).
-    private func enqueueReceivedData(_ bytes: [UInt8]) -> Bool {
+    private func enqueueReceivedData(_ chunk: ReceivedChunk) -> Bool {
         pendingLock.lock()
-        pendingChunks.append(bytes)
-        pendingBytes += bytes.count
+        pendingChunks.append(chunk)
+        pendingBytes += chunk.bytes.count
         let keepReading = pendingBytes < pendingHighWaterBytes
         if !keepReading {
             readSuspendedForBackpressure = true
@@ -145,7 +177,9 @@ public class LocalProcess {
         if shouldSchedule {
             pendingScheduled = true
         }
+        let admitted = chunk.handler == nil ? 0 : DispatchTime.now().uptimeNanoseconds
         pendingLock.unlock()
+        chunk.trace(.admitted, at: admitted)
         if shouldSchedule {
             dispatchQueue.async { [weak self] in
                 self?.drainReceivedData()
@@ -162,10 +196,25 @@ public class LocalProcess {
         }
     }
 
-    private func drainReceivedData() {
+    /// NeoLink: the owning display deadline may service queued PTY output before
+    /// main-queue work is admitted by a nested AppKit run loop. Parsing remains
+    /// on main, ordered and time-sliced; no background terminal access occurs.
+    public func servicePendingOutput() {
+        guard usesMainQueue else { return }
+        dispatchPrecondition(condition: .onQueue(.main))
+        pendingLock.lock()
+        let hasPending = pendingChunkIndex < pendingChunks.count
+        pendingLock.unlock()
+        if hasPending { drainReceivedData(reschedule: false) }
+    }
+
+    private func drainReceivedData(reschedule: Bool = true) {
+        guard !drainingReceivedData else { return }
+        drainingReceivedData = true
+        defer { drainingReceivedData = false }
         let start = DispatchTime.now().uptimeNanoseconds
         while true {
-            var chunk: [UInt8]?
+            var chunk: ReceivedChunk?
             var resumeRead = false
             pendingLock.lock()
             if pendingChunkIndex < pendingChunks.count {
@@ -178,7 +227,7 @@ public class LocalProcess {
                 // Track backlog size; resume the paused PTY read once it
                 // drains below the low-water mark.
                 if let chunk {
-                    pendingBytes -= chunk.count
+                    pendingBytes -= chunk.bytes.count
                     if readSuspendedForBackpressure && pendingBytes <= pendingLowWaterBytes {
                         readSuspendedForBackpressure = false
                         resumeRead = true
@@ -188,7 +237,10 @@ public class LocalProcess {
                 pendingChunks.removeAll(keepingCapacity: true)
                 pendingChunkIndex = 0
                 pendingBytes = 0
-                pendingScheduled = false
+                // Deadline servicing leaves the already-posted queue block in
+                // charge of this flag. Otherwise a blocked main queue could
+                // accumulate one redundant drain block per display deadline.
+                if reschedule { pendingScheduled = false }
                 pendingLock.unlock()
                 return
             }
@@ -198,12 +250,14 @@ public class LocalProcess {
                 resumePtyRead()
             }
             if let chunk {
-                delegate?.dataReceived(slice: chunk[...])
+                chunk.trace(.delivered, deadline: !reschedule)
+                delegate?.dataReceived(slice: chunk.bytes[...])
+                chunk.trace(.parsed, deadline: !reschedule)
             }
 
             if DispatchTime.now().uptimeNanoseconds - start >= pendingTimeSliceNs {
-                dispatchQueue.async { [weak self] in
-                    self?.drainReceivedData()
+                if reschedule {
+                    dispatchQueue.async { [weak self] in self?.drainReceivedData() }
                 }
                 return
             }
@@ -305,6 +359,10 @@ public class LocalProcess {
             }
             return
         }
+        outputChunk &+= 1
+        let handler = outputEventHandler
+        handler?(OutputEvent(stage: .received, chunk: outputChunk, bytes: data.count,
+                             uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds))
         var b: [UInt8] = Array.init(repeating: 0, count: data.count)
         b.withUnsafeMutableBufferPointer({ ptr in
             let _ = data.copyBytes(to: ptr)
@@ -330,11 +388,15 @@ public class LocalProcess {
         // 2. backlog under the high-water mark; drainReceivedData re-arms
         //    otherwise.
         var keepReading = true
+        let chunk = ReceivedChunk(bytes: b, id: outputChunk, handler: handler)
         if usesMainQueue {
-            keepReading = enqueueReceivedData(b)
+            keepReading = enqueueReceivedData(chunk)
         } else {
+            chunk.trace(.admitted)
             dispatchQueue.sync {
+                chunk.trace(.delivered)
                 self.delegate?.dataReceived(slice: b[...])
+                chunk.trace(.parsed)
             }
         }
         if done && keepReading {

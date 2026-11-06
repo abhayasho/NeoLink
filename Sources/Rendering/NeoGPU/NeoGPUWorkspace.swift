@@ -24,9 +24,13 @@ protocol NeoGPUClient: AnyObject {
     func gpuPrepare(time: Double, command: MTLCommandBuffer) -> NeoGPUNode?
     func gpuSetHosted(_ hosted: Bool)
     func gpuReleaseHiddenResources()
+    func gpuLatchOutput()
 }
 
-extension NeoGPUClient { func gpuReleaseHiddenResources() {} }
+extension NeoGPUClient {
+    func gpuReleaseHiddenResources() {}
+    func gpuLatchOutput() {}
+}
 
 struct NeoGPUNode {
     let scene: NeoGPUScene
@@ -205,6 +209,11 @@ final class NeoGPUWorkspace: NSView {
         var nodes: [(NeoGPUNode, SIMD2<Float>, MTLScissorRect)] = []
         nodes.reserveCapacity(clients.count)
         let time = source?.targetTimestamp ?? CACurrentMediaTime()
+        // Admit PTY bytes before deciding which pane is visible. In particular,
+        // the matching editor marker may make a previously hidden pane ready.
+        // Snapshot clients: parsing can synchronously change focus/registration.
+        let latchingClients = clients.values.compactMap(\.value)
+        latchingClients.forEach { $0.gpuLatchOutput() }
         (window as? WorkspaceWindow)?.frames.prepareWorkspace(at: time)
         if clients.values.contains(where: { $0.value == nil }) { clients = clients.filter { $0.value.value != nil } }
         for entry in clients.values {

@@ -1,5 +1,6 @@
 import Foundation
 import QuartzCore
+import SwiftTerm
 
 /// Opt-in, bounded, per-selection telemetry. Host events use mach monotonic seconds
 /// (CACurrentMediaTime); editor hrtime events carry an explicit round-trip mapping.
@@ -12,10 +13,12 @@ enum SelectionTrace {
         var events: [[String: Any]] = []
         var first: Set<String> = []
         var current: UInt64 = 0
+        var deliveredChunk: UInt64?
     }
     static func reset() {
         storage.lock.lock(); defer { storage.lock.unlock() }
         storage.events.removeAll(keepingCapacity: true); storage.first.removeAll(keepingCapacity: true)
+        storage.deliveredChunk = nil
     }
     static func mark(_ token: UInt64, _ phase: String, at time: Double = CACurrentMediaTime(), once: Bool = true,
                      fields: [String: Any] = [:]) {
@@ -36,6 +39,22 @@ enum SelectionTrace {
             mark(token, "nvim." + phase, at: remote + offset,
                  fields: ["remoteSeconds": remote, "clockOffsetSeconds": offset, "clockUncertaintySeconds": uncertainty])
         }
+    }
+    /// Only immutable telemetry crosses the PTY queues. In particular this never
+    /// reads a session, terminal buffer or AppKit view from the background reader.
+    static func pty(_ event: LocalProcess.OutputEvent) {
+        guard enabled else { return }
+        storage.lock.lock()
+        let token = storage.current
+        if event.stage == .delivered { storage.deliveredChunk = event.chunk }
+        if event.stage == .parsed { storage.deliveredChunk = nil }
+        storage.lock.unlock()
+        mark(token, "pty." + event.stage.rawValue, at: Double(event.uptimeNanoseconds) / 1_000_000_000,
+             once: false, fields: ["chunk": event.chunk, "bytes": event.bytes, "deadline": event.deadlineServiced])
+    }
+    static func marker(_ token: UInt64) {
+        storage.lock.lock(); let chunk = storage.deliveredChunk; storage.lock.unlock()
+        mark(token, "marker.recognized", fields: chunk.map { ["chunk": $0] } ?? [:])
     }
     static var current: UInt64 {
         guard enabled else { return 0 }

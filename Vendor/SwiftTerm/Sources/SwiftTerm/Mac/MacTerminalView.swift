@@ -232,6 +232,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     public var metalNextFrameTag: UInt64 = 0
     /// Opt-in profiling: CPU preparation/encoding, GPU execution, and queue wait seconds, delivered on main.
     public var metalFrameProfile: ((_ cpu: Double, _ gpu: Double, _ queue: Double) -> Void)?
+    /// NeoLink: opt-in CPU stage costs/counters. Invoked on the rendering thread;
+    /// no per-row clocks or dictionaries are collected when this is nil.
+    public var metalPreparationProfile: (([String: Double]) -> Void)?
     /// Called on the main thread when a submitted Metal frame was shown, with its tag and
     /// `MTLDrawable.presentedTime` (host time, `CACurrentMediaTime` base; 0 if never shown).
     public var metalFramePresented: ((_ tag: UInt64, _ presentedTime: CFTimeInterval) -> Void)?

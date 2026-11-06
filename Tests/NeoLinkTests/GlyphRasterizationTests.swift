@@ -4,6 +4,20 @@ import XCTest
 @testable import SwiftTerm
 
 final class GlyphRasterizationTests: XCTestCase {
+    func testZeroInkIsDistinguishedFromUnavailableRasterization() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 26, weight: .regular) as CTFont
+        var character = UniChar(32), glyph = CGGlyph()
+        XCTAssertTrue(CTFontGetGlyphsForCharacters(font, &character, &glyph, 1))
+        let rasterizer = CoreTextGlyphRasterizer()
+        for x in 0..<4 {
+            for y in 0..<4 {
+                guard case .empty = rasterizer.rasterizeResult(font: font, glyph: glyph,
+                    phase: GlyphRasterPhase(x: UInt8(x), y: UInt8(y))) else {
+                    return XCTFail("A space has no ink in any raster phase")
+                }
+            }
+        }
+    }
     func testSubpixelPlacementPreservesPositionAndIntegerTranslation() {
         for value in stride(from: -3.0, through: 3.0, by: 0.03125) {
             let point = CGPoint(x: value, y: -value)

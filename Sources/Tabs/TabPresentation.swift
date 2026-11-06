@@ -9,11 +9,38 @@ struct TabPresentation: Equatable {
     static let maximumWidth: CGFloat = 320
     static let chromeWidth: CGFloat = 96 // icon, gaps, reserved dirty indicator, close
 
+    private static let font = NSFont.systemFont(ofSize: 12)
+    private static let lock = NSLock()
+    private static var measured: [String: CGFloat] = [:]
+    private static var lastInput: (titles: [String], paths: [String?])?
+    private static var lastOutput: [TabPresentation] = []
+
+    /// Text measurement dominates tab-strip body evaluation. The result is a pure
+    /// function of the string and the fixed 12 pt system font, so reuse it; the
+    /// cache is bounded and never holds UI state.
     static func measure(_ text: String) -> CGFloat {
-        ceil((text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width)
+        lock.lock()
+        if let cached = measured[text] { lock.unlock(); return cached }
+        lock.unlock()
+        let width = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        lock.lock()
+        if measured.count >= 4096 { measured.removeAll(keepingCapacity: true) }
+        measured[text] = width
+        lock.unlock()
+        return width
     }
+    /// Selection changes re-evaluate the strip with unchanged names/paths; reuse
+    /// the previous immutable result instead of recomputing disambiguation.
     static func make(titles: [String], paths: [String?]) -> [TabPresentation] {
         precondition(titles.count == paths.count)
+        lock.lock()
+        if let last = lastInput, last.titles == titles, last.paths == paths { let out = lastOutput; lock.unlock(); return out }
+        lock.unlock()
+        let result = compute(titles: titles, paths: paths)
+        lock.lock(); lastInput = (titles, paths); lastOutput = result; lock.unlock()
+        return result
+    }
+    private static func compute(titles: [String], paths: [String?]) -> [TabPresentation] {
         let contexts: [String] = titles.indices.map { index in
             let title = titles[index]
             let peers = titles.indices.filter { $0 != index && titles[$0] == title }
