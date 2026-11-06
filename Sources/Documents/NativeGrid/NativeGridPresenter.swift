@@ -211,6 +211,7 @@ final class NativeGridPresenter {
         let info = cursorInfo(named: cursorModeName)
         var written = 0
         let attributes = AttributeCache(styles: styles)
+        view.noteExternalOutput()
         view.externalGridUpdate { terminal in
             if !sizeChanged {
                 for scroll in pendingScrolls {

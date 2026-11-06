@@ -76,6 +76,13 @@ class InteractiveTerminalView: LocalProcessTerminalView {
         rendering.attachToWindow()
     }
 
+    /// The native Neovim client changed the grid: the same bookkeeping `dataReceived` does for PTY output
+    /// (the frame that follows answers pending key presses; scroll requests that produced output were not ignored).
+    func noteExternalOutput() {
+        rendering.noteOutput()
+        smoothScroll.noteOutput(1)
+    }
+
     override func dataReceived(slice: ArraySlice<UInt8>) {
         if let editor = self as? CodeTerminalView { SelectionTrace.mark(editor.session?.selectionToken ?? 0, "pty.parse.begin") }
         rendering.noteOutput()
