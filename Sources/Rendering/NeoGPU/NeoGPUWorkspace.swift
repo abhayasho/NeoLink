@@ -18,6 +18,25 @@ final class WorkspaceContentController: NSViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 }
 
+/// Presentation acknowledgements of drawables the compositor dropped. Pane
+/// textures are retained, so the next drawable that reaches the display shows the
+/// same or newer content and may acknowledge them, oldest first. Bounded.
+struct DeferredPresentations {
+    private var pending: [(Double) -> Void] = []
+    static let limit = 64
+    var count: Int { pending.count }
+    mutating func dropped(_ callbacks: [(Double) -> Void]) {
+        pending.append(contentsOf: callbacks)
+        if pending.count > Self.limit { pending.removeFirst(pending.count - Self.limit) }
+    }
+    /// Callbacks to run for a drawable that was presented: deferred ones first.
+    mutating func presented(_ callbacks: [(Double) -> Void]) -> [(Double) -> Void] {
+        defer { pending.removeAll() }
+        return pending + callbacks
+    }
+    mutating func discard() { pending.removeAll() }
+}
+
 @MainActor
 protocol NeoGPUClient: AnyObject {
     var gpuInputView: NSView? { get }
@@ -64,6 +83,8 @@ final class NeoGPUWorkspace: NSView {
     private(set) var enabled = true
     private(set) var suspended = false
     private(set) var presentedFrames: UInt64 = 0
+    private(set) var droppedDrawables: UInt64 = 0
+    private var deferredPresentations = DeferredPresentations()
     private(set) var presentationTiming = FrameTiming()
     func resetPresentationTiming() { presentationTiming = FrameTiming() }
     private(set) var lastNodeCount = 0
@@ -253,16 +274,26 @@ final class NeoGPUWorkspace: NSView {
         drawable.addPresentedHandler { [weak self] drawable in
             let time = drawable.presentedTime
             DispatchQueue.main.async {
-                guard time > 0 else { return }
                 guard let self else { return }
+                guard time > 0 else {
+                    // The compositor dropped this drawable (presentedTime == 0). Its
+                    // pane textures are retained, so the next drawable that really
+                    // reaches the display shows the same or newer content. Defer the
+                    // acknowledgements to it instead of losing them; otherwise the
+                    // host never learns that the requested buffer became visible.
+                    guard self.generation == generation else { return }
+                    self.droppedDrawables &+= 1
+                    self.deferredPresentations.dropped(callbacks)
+                    return
+                }
                 self.presentedFrames &+= 1
                 // Completion can arrive after an overlay, fallback or tab change.
                 // It must not hide a surface that has returned to native ownership.
-                guard self.enabled, !self.suspended, self.generation == generation else { return }
+                guard self.enabled, !self.suspended, self.generation == generation else { self.deferredPresentations.discard(); return }
                 // Visibility transitions explicitly pause this series. Keep even
                 // long visible-window stalls instead of silently filtering them.
                 self.presentationTiming.record(timestamp: time, work: 0, includeLongIntervals: true)
-                callbacks.forEach { $0(time) }
+                self.deferredPresentations.presented(callbacks).forEach { $0(time) }
             }
         }
         let slot = self.slot

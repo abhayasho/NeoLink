@@ -107,3 +107,16 @@ Measured causes, from a per-selection trace and a Time Profiler capture of the s
 - Resize: hidden editor panes and native resize callbacks without a supplied drawable no longer build rows. The largest remaining main-thread bursts (60–90 ms) are SwiftUI view-graph updates and flexible-frame layout of the root hosting view, not terminal rendering.
 
 **Not improved:** resize worst-case main-thread wait is worse in this A/B (and varies 95–335 ms between runs of either binary), and its cause is SwiftUI/AppKit root layout that this pass did not restructure. Shell→editor switches remain 60–70 ms for the same reason. Tab p95/max are essentially unchanged. Highlight and scrolling results are unchanged within noise. Edit-to-photon latency, natural trackpad scrolling, momentum interruption and perceived smoothness were not measured and need hands-on verification.
+
+### Root layout investigation and dropped drawables (Build 30)
+
+A Time Profiler capture of the full workload shows the largest main-thread bursts (60–90 ms, during sidebar resize and shell→editor selection) are SwiftUI view-graph updates and flexible-frame layout of the root hosting view. Two cheap hypotheses were tested as same-binary A/B pairs (three alternating pairs each, full four-scenario workload) and **rejected, with the code removed**:
+
+- `NSHostingController.sizingOptions = []` (stops min/ideal/max probing of the root): tab p50 52.0 vs 53.6 ms, resize wait 137–649 vs 120–187 ms — no reliable difference.
+- Answering `sizeThatFits` directly in every native `NSViewRepresentable` (tab strip, terminal host, Neovim surface, explorer, background helpers) so SwiftUI does not ask AppKit for `fittingSize`: tab p50 52.4 vs 53.2 ms, resize wait 180–233 vs 86–315 ms — no reliable difference. Shell and editor grids were identical (155×59, 156×58).
+
+Resize worst-case main-thread wait varies from about 90 to 650 ms between runs of the *same* binary, so it is not a usable regression gate at three runs. Reducing it needs the root layout restructured (for example a native split view with panes that do not share one SwiftUI layout pass), which is not done.
+
+**Fixed: lost presentation acknowledgements.** The shared drawable can be dropped by the compositor (`presentedTime == 0`) — 27 to 51 times per full workload. The old handler returned early, discarding that frame's presentation callbacks. An editor selection whose only frame was dropped never reported "presented", producing an intermittent selection-presentation timeout (2 of 18 full-workload runs on the previous commit; 0 of 8 after the fix, 0 of 12 ui-tabs-only runs on either binary). Dropped frames' callbacks are now deferred (bounded to 64, cleared on overlay/fallback/generation change) and acknowledged, oldest first, by the next drawable that reaches the display, which shows the same or newer retained content. Dropped counts are written as `workspaceDroppedDrawables`. This restores a lost acknowledgement; it does not make a buffer visible earlier or expose a different one.
+
+Verification limit: after moving the deferral into the `DeferredPresentations` type (covered by unit tests for ordering, no replay, bounding and discard), the release sanity runs were rejected because the Mac locked. The eight clean runs were taken on the same logic before that extraction.

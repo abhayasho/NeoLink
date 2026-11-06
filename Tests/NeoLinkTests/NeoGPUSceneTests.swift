@@ -3,6 +3,31 @@ import XCTest
 @testable import NeoLink
 
 final class NeoGPUSceneTests: XCTestCase {
+    func testDroppedDrawableAcknowledgementsMoveToNextPresentedFrameInOrder() {
+        var log: [String] = []
+        var deferred = DeferredPresentations()
+        deferred.dropped([{ _ in log.append("a") }])
+        deferred.dropped([{ _ in log.append("b") }])
+        XCTAssertEqual(deferred.count, 2)
+        deferred.presented([{ _ in log.append("c") }]).forEach { $0(1) }
+        XCTAssertEqual(log, ["a", "b", "c"], "dropped frames are acknowledged first, once, by the next presented frame")
+        deferred.presented([{ _ in log.append("d") }]).forEach { $0(2) }
+        XCTAssertEqual(log, ["a", "b", "c", "d"], "nothing is replayed twice")
+    }
+
+    func testDeferredAcknowledgementsAreBoundedAndDiscardable() {
+        var deferred = DeferredPresentations()
+        var kept: [Int] = []
+        for index in 0..<(DeferredPresentations.limit + 10) { deferred.dropped([{ _ in kept.append(index) }]) }
+        XCTAssertEqual(deferred.count, DeferredPresentations.limit)
+        deferred.presented([]).forEach { $0(1) }
+        XCTAssertEqual(kept.first, 10, "the oldest overflow is discarded")
+        deferred.dropped([{ _ in kept.append(-1) }])
+        deferred.discard()
+        deferred.presented([]).forEach { $0(2) }
+        XCTAssertFalse(kept.contains(-1), "overlay/fallback/generation changes must not replay stale acknowledgements")
+    }
+
     func testFrameLatencyExperimentAcceptsOnlyDocumentedLeads() {
         XCTAssertEqual(NeoGPUFrameLatency.requested("1"), 1)
         XCTAssertEqual(NeoGPUFrameLatency.requested("2"), 2)
