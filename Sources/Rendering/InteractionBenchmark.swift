@@ -1040,6 +1040,7 @@ final class InteractionBenchmark {
             "thermalState": ProcessInfo.processInfo.thermalState.rawValue,
             "preparationProfile": ProcessInfo.processInfo.environment["NEOLINK_PREPARATION_PROFILE"] == "1",
         ]) { _, new in new }
+        setup["workspaceDroppedDrawables"] = window.gpuWorkspace?.droppedDrawables ?? 0
         let report: [String: Any] = ["results": results, "setup": setup, "displayMaximumHz": window.screen?.maximumFramesPerSecond ?? 0]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: outputURL)
