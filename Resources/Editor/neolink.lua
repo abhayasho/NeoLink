@@ -124,6 +124,60 @@ local function watch(buf)
     on_detach = function(_, b) M.attached[b] = nil end,
   })
 end
+-- Native horizontal smooth scrolling. The host draws the text area at sub-column offsets and asks for
+-- whole-column positions a chunk ahead of the fingers. This sets a window's leftcol the way Neovim's own
+-- mouse scrolling does (a cursor line shorter than the view moves to the longest visible line; the cursor
+-- stays inside the view), redraws, and then reports on the ordered UI channel, so the host knows that every
+-- flush before the report shows the new position.
+local function window_at(row, col)
+  for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
+    if api.nvim_win_get_config(win).relative == '' then
+      local pos = api.nvim_win_get_position(win)
+      if row >= pos[1] and row < pos[1] + api.nvim_win_get_height(win)
+        and col >= pos[2] and col < pos[2] + api.nvim_win_get_width(win) then return win end
+    end
+  end
+  return api.nvim_get_current_win()
+end
+local function line_width(lnum) return vim.fn.virtcol({lnum, '$'}) - 1 end
+function M.hscroll(token, row, col, amount, relative)
+  local win = window_at(row, col)
+  local before = api.nvim_win_call(win, function() return vim.fn.winsaveview().leftcol end)
+  api.nvim_win_call(win, function()
+    if vim.wo.wrap then return end
+    local target = math.max(0, math.floor(relative and before + amount or amount))
+    if target == before then return end
+    local info = vim.fn.getwininfo(win)[1]
+    local width = math.max(1, info.width - info.textoff)
+    local lnum = api.nvim_win_get_cursor(win)[1]
+    if line_width(lnum) < target then
+      local best, best_width = lnum, -1
+      for l = info.topline, info.botline do
+        local w = line_width(l)
+        if w > best_width then best, best_width = l, w end
+      end
+      lnum = best
+      api.nvim_win_set_cursor(win, {lnum, 0})
+    end
+    local siso = vim.wo.sidescrolloff >= 0 and vim.wo.sidescrolloff or vim.o.sidescrolloff
+    siso = math.min(siso, math.floor((width - 1) / 2))
+    local vcol = vim.fn.virtcol('.')
+    local low, high = target + 1 + siso, target + width - siso
+    local want = vcol < low and low or (vcol > high and high or nil)
+    if want and vim.fn.exists('*virtcol2col') == 1 then
+      local insert = api.nvim_get_mode().mode:sub(1, 1) == 'i'
+      want = math.min(want, math.max(1, line_width(lnum) + (insert and 1 or 0)))
+      local byte = vim.fn.virtcol2col(win, lnum, want)
+      if byte > 0 then pcall(api.nvim_win_set_cursor, win, {lnum, byte - 1}) end
+    end
+    vim.fn.winrestview({leftcol = target})
+  end)
+  vim.cmd('redraw')
+  local after = api.nvim_win_call(win, function() return vim.fn.winsaveview().leftcol end)
+  local info = vim.fn.getwininfo(win)[1]
+  notify_ui('neolink_hscroll', token, before, after, info.winrow - 1, info.wincol - 1, info.height, info.width, info.textoff)
+end
+
 -- Record the displayed buffer's view and tell the host exactly what is on screen.
 function M.leave()
   if not M.ui_channel then return end

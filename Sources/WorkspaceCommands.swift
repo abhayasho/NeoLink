@@ -98,6 +98,7 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         view.addItem(.separator())
         add("Use GPU Text Rendering", action: #selector(toggleGPUTextRendering(_:)), target: self, to: view)
         add("Continuous High Refresh", action: #selector(toggleContinuousRefresh(_:)), target: self, to: view)
+        add("Native Editor Rendering (after Restart)", action: #selector(toggleNativeEditor(_:)), target: self, to: view)
         add("Renderer Information…", action: #selector(showRendererInformation(_:)), target: self, to: view)
         add("Performance Monitor…", action: #selector(showPerformanceMonitor(_:)), target: self, to: view)
         view.addItem(.separator())
@@ -181,6 +182,12 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         preferences.setContinuousRefresh(!preferences.continuousRefresh)
     }
 
+    /// The editor engine is chosen when Neovim starts, so the saved choice applies on the next launch.
+    @objc private func toggleNativeEditor(_ sender: NSMenuItem) {
+        let defaults = UserDefaults.standard, key = NeovimSession.nativeGridPreferenceKey
+        defaults.set(!(defaults.object(forKey: key) as? Bool ?? true), forKey: key)
+    }
+
     @objc private func showRendererInformation(_ sender: NSMenuItem) {
         let alert = NSAlert()
         alert.messageText = "Text Rendering"
@@ -219,6 +226,9 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         }
         if menuItem.action == #selector(toggleContinuousRefresh(_:)) {
             menuItem.state = TerminalRenderingPreferences.shared.continuousRefresh ? .on : .off
+        }
+        if menuItem.action == #selector(toggleNativeEditor(_:)) {
+            menuItem.state = UserDefaults.standard.object(forKey: NeovimSession.nativeGridPreferenceKey) as? Bool ?? true ? .on : .off
         }
         // Native dialog text fields still need Select All. Workspace shortcuts,
         // including Shift-Command-G, must defer to the file picker's commands.

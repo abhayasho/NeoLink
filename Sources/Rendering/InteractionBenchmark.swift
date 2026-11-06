@@ -234,6 +234,42 @@ final class InteractionBenchmark {
                     last["horizontalStepsSent"] = view.horizontalWheelSteps - before
                     results[results.count - 1] = last
                 }
+            case "editor-horizontal":
+                // A file of long lines; the editor scrolls sideways and back.
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLink-benchmark-\(UUID().uuidString)")
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let fixture = directory.appendingPathComponent("wide.txt")
+                let text = (1...400).map { line in "let value\(line) = [" + (0..<60).map { "\"item\($0 * line % 97)\"" }.joined(separator: ", ") + "]" }.joined(separator: "\n")
+                try? Data(text.utf8).write(to: fixture)
+                tabs.openFile(fixture)
+                guard let view = await editorView(timeout: 10) else { fail(scenario, "editor did not open"); continue }
+                await home(view)
+                let horizontal = tabs.codeSession.nativeGrid?.horizontal
+                horizontal?.recordsSamples = true
+                let presenter = tabs.codeSession.nativeGrid
+                let before = (requests: horizontal?.requests ?? 0, flips: horizontal?.flips ?? 0, steps: view.horizontalWheelSteps,
+                              frames: presenter?.framesApplied ?? 0, rows: presenter?.rowsWritten ?? 0)
+                let start = CACurrentMediaTime()
+                var timeline: [(Double, Double)] = []
+                await measure(scenario, extra: {
+                    let samples = (horizontal?.samples ?? []).filter { $0.time >= start }
+                    return ["inputDriver": "synthesized trackpad events at 60 Hz, sideways",
+                            "horizontalSmoothing": horizontal != nil && NativeHorizontalScroll.enabled,
+                            "chunkRequests": (horizontal?.requests ?? 0) - before.requests,
+                            "rowFlips": (horizontal?.flips ?? 0) - before.flips,
+                            "columnStepsSent": view.horizontalWheelSteps - before.steps,
+                            "neovimFramesApplied": (presenter?.framesApplied ?? 0) - before.frames,
+                            "rowsWritten": (presenter?.rowsWritten ?? 0) - before.rows,
+                            "mouseReports": presenter?.mouseReports ?? [:], "lastMouseCell": [presenter?.lastMouseCell.row ?? -1, presenter?.lastMouseCell.column ?? -1],
+                            "presenterPhase": presenter.map { "\($0.phase)" } ?? "none", "editorGrid": "\(view.getTerminal().cols)x\(view.getTerminal().rows)",
+                            "drawnSamples": samples.map { [($0.time - start) * 1000, $0.drawn, Double($0.leftcol)] },
+                            "inputTimeline": timeline.map { [($0.0 - start) * 1000, $0.1] }]
+                }) {
+                    timeline = await self.play(.horizontal(), cell: 1, over: view) { [weak view] event in view?.deliverWheel(event) }
+                    await self.sleep(0.3)
+                }
+                horizontal?.recordsSamples = false
+                try? FileManager.default.removeItem(at: directory)
             case "explorer-steady", "explorer-flick":
                 guard let scroll = Self.explorerScrollView(in: window), let table = scroll.documentView as? ExplorerNSTableView,
                       let coordinator = table.coordinator else { fail(scenario, "native explorer unavailable"); continue }
@@ -272,7 +308,7 @@ final class InteractionBenchmark {
                             "clipFrameSamples": clip,
                             "inputTimeline": timeline.map { [($0.0 - start) * 1000, $0.1] }]
                 }) {
-                    timeline = await self.play(profile, cell: 1) { event in scroll.scrollWheel(with: event) }
+                    timeline = await self.play(profile, cell: 1, over: scroll) { event in scroll.scrollWheel(with: event) }
                     sampling = false
                 }
                 surface.recordsMotionSamples = false
@@ -670,6 +706,17 @@ final class InteractionBenchmark {
             return profile
         }
 
+        /// Sideways finger motion at 60 Hz reports: the view scrolls right, then back left.
+        static func horizontal(pointsPerSecond: Double = 480, seconds: Double = 3) -> ScrollProfile {
+            let perDirection = Int(seconds * 30), step = pointsPerSecond / 60
+            let events = [-step, step].flatMap { dx in
+                (0..<perDirection).map { i in Event(delta: 0, phase: i == 0 ? 1 : (i == perDirection - 1 ? 4 : 2), momentum: 0, deltaX: dx) }
+            }
+            var profile = ScrollProfile(events: events)
+            profile.interval = 1.0 / 60
+            return profile
+        }
+
         /// Constant finger speed at the 60 Hz report rate of a moving finger, one direction then the other.
         static func steady60(pointsPerSecond: Double, seconds: Double) -> ScrollProfile {
             let perDirection = Int(seconds * 30), step = pointsPerSecond / 60
@@ -718,12 +765,23 @@ final class InteractionBenchmark {
 
     /// Delivers a profile and returns the ideal content position over time: (time, lines toward the top).
     private func play(_ profile: ScrollProfile, on view: InteractiveTerminalView) async -> [(Double, Double)] {
-        await play(profile, cell: Double(cellPoints(view))) { [weak view] event in view?.deliverWheel(event) }
+        await play(profile, cell: Double(cellPoints(view)), over: view) { [weak view] event in view?.deliverWheel(event) }
+    }
+
+    /// The center of `view` in global display coordinates (top-left origin), where a real pointer would be.
+    private static func pointerLocation(over view: NSView?) -> CGPoint? {
+        guard let view, let window = view.window else { return nil }
+        let inWindow = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        let onScreen = window.convertPoint(toScreen: inWindow)
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return CGPoint(x: onScreen.x, y: primaryHeight - onScreen.y)
     }
 
     /// Delivers a profile's scroll events on the main thread at 120 Hz to `deliver`.
-    private func play(_ profile: ScrollProfile, cell: Double, deliver: @escaping @MainActor (NSEvent) -> Void) async -> [(Double, Double)] {
+    private func play(_ profile: ScrollProfile, cell: Double, over target: NSView? = nil,
+                      deliver: @escaping @MainActor (NSEvent) -> Void) async -> [(Double, Double)] {
         let frames = window.frames
+        let location = Self.pointerLocation(over: target)
         let timeline = TimelineRecorder()
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             var index = 0, position = 0.0, carried = 0.0, carriedX = 0.0
@@ -740,6 +798,7 @@ final class InteractionBenchmark {
                 let whole = carried.rounded(.towardZero)
                 carried -= whole
                 cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                if let location { cg.location = location }
                 cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: whole)
                 cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: whole)
                 carriedX += step.deltaX

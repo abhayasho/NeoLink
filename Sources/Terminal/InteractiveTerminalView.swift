@@ -34,6 +34,8 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     var nativeWheelReporter: ((_ flag: Int, _ column: Int, _ row: Int) -> Void)?
     /// For measurement: horizontal wheel steps sent to a program (each makes it redraw every row).
     private(set) var horizontalWheelSteps = 0
+    /// Set by the native editor: handles horizontal trackpad input (event, dx, dy, column, row); true if used.
+    var nativeHorizontalScroller: ((NSEvent, CGFloat, CGFloat, Int, Int) -> Bool)?
     private var axisLock = ScrollAxisLock()
     /// The current event's deltas after axis locking (trackpads only).
     private var filtered: (dx: CGFloat, dy: CGFloat) = (0, 0)
@@ -143,16 +145,19 @@ class InteractiveTerminalView: LocalProcessTerminalView {
         let pixels = cellSizeInPixels(source: terminal) ?? (width: 8, height: 16)
         let scale = window?.backingScaleFactor ?? 1
         let cell = CGSize(width: CGFloat(pixels.width) / scale, height: CGFloat(pixels.height) / scale)
+        let point = convert(event.locationInWindow, from: nil)
+        let topY = isFlipped ? point.y : bounds.height - point.y
+        let col = min(max(0, Int(point.x / max(1, cell.width))), max(0, terminal.cols - 1))
+        let row = min(max(0, Int(topY / max(1, cell.height))), max(0, terminal.rows - 1))
+        // The native editor scrolls horizontally pixel by pixel itself (whole columns ahead, offset drawn).
+        if let horizontal = nativeHorizontalScroller, event.hasPreciseScrollingDeltas,
+           horizontal(event, filtered.dx, filtered.dy, col, row) { return true }
         // Trackpad scrolling in a full-screen program follows the fingers pixel by pixel:
         // the program scrolls whole lines ahead and the renderer draws the remainder.
         let smooth = isDisplayingAlternateScreen && isSmoothVerticalScroll(event)
         let steps = wheel.consume(x: filtered.dx, y: smooth ? 0 : filtered.dy,
                                   precise: event.hasPreciseScrollingDeltas, cell: cell,
                                   newGesture: event.phase == .began)
-        let point = convert(event.locationInWindow, from: nil)
-        let topY = isFlipped ? point.y : bounds.height - point.y
-        let col = min(max(0, Int(point.x / max(1, cell.width))), max(0, terminal.cols - 1))
-        let row = min(max(0, Int(topY / max(1, cell.height))), max(0, terminal.rows - 1))
         func report(_ flag: Int, count: Int) {
             for _ in 0..<abs(count) {
                 if let native { native(flag, col, row); continue }

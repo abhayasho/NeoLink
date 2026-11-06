@@ -10,6 +10,14 @@ extension MsgPackValue {
     }
 }
 
+struct NativeHorizontalAnswer: Sendable, Equatable {
+    var token: UInt64
+    var before: Int
+    var after: Int
+    /// The window's screen rectangle (0-based) and the width of its gutter (number/sign/fold columns).
+    var row: Int, column: Int, height: Int, width: Int, textOffset: Int
+}
+
 /// Ordered facts from the editor's UI channel. Frames, selection echoes and buffer
 /// notices travel on one connection, so their relative order is exactly Neovim's.
 enum NativeGridItem: Sendable {
@@ -20,6 +28,8 @@ enum NativeGridItem: Sendable {
     case leave(path: String, mode: String, popupVisible: Bool, diagnostics: Bool)
     /// `neolink_touch`: a buffer that is not displayed changed (path "" means every cached image).
     case touch(path: String)
+    /// `neolink_hscroll`: a window's leftcol moved from `before` to `after`; every earlier frame shows it.
+    case hscroll(NativeHorizontalAnswer)
     case closed(String)
 }
 
@@ -126,6 +136,12 @@ final class NeovimGridClient: @unchecked Sendable {
             if params.count >= 4, let path = params[0].stringValue, let mode = params[1].stringValue {
                 publish(.leave(path: normalized(path), mode: mode, popupVisible: params[2].boolValue ?? true, diagnostics: params[3].boolValue ?? true))
             }
+        case "neolink_hscroll":
+            let values = params.compactMap(\.intValue)
+            if values.count >= 8 {
+                publish(.hscroll(NativeHorizontalAnswer(token: UInt64(max(0, values[0])), before: values[1], after: values[2], row: values[3],
+                                                        column: values[4], height: values[5], width: values[6], textOffset: values[7])))
+            }
         case "neolink_touch":
             publish(.touch(path: normalized(params.first?.stringValue ?? "")))
         default: break
@@ -137,6 +153,11 @@ final class NeovimGridClient: @unchecked Sendable {
     func input(_ keys: String) { guard !keys.isEmpty else { return }; rpc.notify("nvim_input", [.string(keys)]) }
     func mouse(button: String, action: String, modifier: String, row: Int, column: Int) {
         rpc.notify("nvim_input_mouse", [.string(button), .string(action), .string(modifier), .int(0), .int(Int64(row)), .int(Int64(column))])
+    }
+    /// Asks the editor to set the leftcol of the window under (row, column): `amount` absolute or relative.
+    func horizontalScroll(token: UInt64, row: Int, column: Int, amount: Int, relative: Bool) {
+        rpc.notify("nvim_exec_lua", [.string("NeoLink.hscroll(...)"),
+                                     .array([.int(Int64(token)), .int(Int64(row)), .int(Int64(column)), .int(Int64(amount)), .bool(relative)])])
     }
     func paste(_ text: String) { rpc.notify("nvim_paste", [.string(text), .bool(true), .int(-1)]) }
     func resize(cols: Int, rows: Int) { rpc.notify("nvim_ui_try_resize", [.int(Int64(max(1, cols))), .int(Int64(max(1, rows)))]) }

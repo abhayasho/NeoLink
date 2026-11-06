@@ -70,9 +70,16 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         }
     }
 
-    /// Opt-in native `ext_linegrid` client instead of a TUI in a PTY (`NEOLINK_NATIVE_GRID=1`).
-    nonisolated static func nativeGridRequested(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
-        environment["NEOLINK_NATIVE_GRID"] == "1"
+    /// The native `ext_linegrid` client (default) or Neovim's TUI in a PTY. `NEOLINK_NATIVE_GRID=1`/`0` overrides
+    /// the saved View-menu preference; the TUI also remains the automatic fallback when the native client cannot attach.
+    nonisolated static let nativeGridPreferenceKey = "NeoLink.nativeEditorGrid"
+    nonisolated static func nativeGridRequested(_ environment: [String: String] = ProcessInfo.processInfo.environment,
+                                                defaults: UserDefaults = .standard) -> Bool {
+        switch environment["NEOLINK_NATIVE_GRID"] {
+        case "1": return true
+        case "0": return false
+        default: return defaults.object(forKey: nativeGridPreferenceKey) as? Bool ?? true
+        }
     }
     private var nativeRequested: Bool
     private(set) var nativeGrid: NativeGridPresenter?
@@ -506,6 +513,12 @@ final class CodeTerminalView: InteractiveTerminalView {
     var nativeGrid: NativeGridPresenter? {
         didSet {
             nativeWheelReporter = nativeGrid == nil ? nil : { [weak self] flag, column, row in self?.reportNativeWheel(flag, column: column, row: row) }
+            nativeHorizontalScroller = nativeGrid == nil || !NativeHorizontalScroll.enabled ? nil : { [weak self] event, dx, dy, column, row in
+                guard let horizontal = self?.nativeGrid?.horizontal else { return false }
+                if dy != 0 { horizontal.endNow(); return false }
+                if dx == 0, !horizontal.isActive { return false }
+                return horizontal.scroll(points: dx, phase: SmoothScrollDriver.phase(of: event), row: row, column: column)
+            }
         }
     }
     private var lastMouseCell: (row: Int, column: Int)?

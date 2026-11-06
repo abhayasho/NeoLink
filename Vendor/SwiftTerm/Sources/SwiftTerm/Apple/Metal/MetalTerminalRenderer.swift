@@ -143,8 +143,22 @@ final class RowClip {
     }
 
     func apply(_ inside: Bool, _ encoder: MTLRenderCommandEncoder) {
-        guard let regionRect, inside != clipped else { return }
-        encoder.setScissorRect(inside ? regionRect : fullRect)
+        apply(inside, x: nil, encoder)
+    }
+
+    /// NeoLink: the region's vertical clip, optionally narrowed to a pixel column range.
+    private var current: (x: Int, y: Int, width: Int, height: Int)?
+    func apply(_ inside: Bool, x range: (Int, Int)?, _ encoder: MTLRenderCommandEncoder) {
+        var rect = (inside ? regionRect : nil) ?? fullRect
+        if let range {
+            let lower = max(rect.x, range.0), upper = min(rect.x + rect.width, range.1)
+            rect = MTLScissorRect(x: lower, y: rect.y, width: max(0, upper - lower), height: rect.height)
+        }
+        let key = (rect.x, rect.y, rect.width, rect.height)
+        if let current, current == key { return }
+        if current == nil, range == nil, !inside || regionRect == nil { current = key; clipped = false; return }
+        encoder.setScissorRect(rect)
+        current = key
         clipped = inside
     }
 }
@@ -156,6 +170,9 @@ struct PlacedRow {
     var offsetY: Float
     /// Drawn inside the smooth-scroll region's scissor rectangle.
     var clipped: Bool
+    /// NeoLink: pixels added to x coordinates, and the pixel column range the row is clipped to.
+    var offsetX: Float = 0
+    var clipX: (Int, Int)? = nil
 }
 
 struct FrameDrawData {
@@ -179,6 +196,8 @@ struct DrawData {
     /// Smooth-scroll region (visible rows), its y translation, and the row height in pixels.
     var region: (rows: ClosedRange<Int>, offsetY: Float, rowHeightPx: Float)? = nil
     var cursorClipped = false
+    var cursorOffsetX: Float = 0
+    var cursorClipX: (Int, Int)? = nil
 }
 
 struct KittyImageSignature: Hashable {
@@ -703,8 +722,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
 
         // The cursor moves with a smooth-scrolled region.
-        let cursorViewport = drawData.cursorClipped ? SIMD4<Float>(viewport.x, viewport.y, 0, clip.offsetY) : viewport
-        if drawData.cursorClipped { clip.apply(true, encoder) }
+        let cursorViewport = SIMD4<Float>(viewport.x, viewport.y, drawData.cursorOffsetX, drawData.cursorClipped ? clip.offsetY : 0)
+        if drawData.cursorClipped || drawData.cursorClipX != nil { clip.apply(drawData.cursorClipped, x: drawData.cursorClipX, encoder) }
         if !drawData.cursorColorVertices.isEmpty {
             if let buffer = makeBuffer(drawData.cursorColorVertices) {
                 encoder.setRenderPipelineState(colorPipeline)
@@ -1044,11 +1063,20 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             return built
         }
 
-        func place(_ entry: RowCacheEntry, visibleRow: Int, clipped: Bool, extraOffset: Float) {
+        /// Whether `cachedEntry` would reuse geometry for this line without building (same conditions).
+        func isCached(_ line: BufferLine, row: Int, visibleRow: Int, dirty: Bool) -> Bool {
+            guard let cached = rowCache[ObjectIdentifier(line)], !needsFullRebuild, !dirty, cached.generation == line.generation,
+                  bufferingMode == .perRowPersistent || cached.builtRow == visibleRow else { return false }
+            let revision = TerminalBidi.layoutRevision(row: row, buffer: buffer, maximumRows: terminalView.terminal.options.maximumBidiParagraphRows)
+            return cached.bidiParagraphRevision == revision
+        }
+
+        func place(_ entry: RowCacheEntry, visibleRow: Int, clipped: Bool, extraOffset: Float,
+                   offsetX: Float = 0, clipX: (Int, Int)? = nil) {
             if let buffers = entry.buffers {
                 rows.append(PlacedRow(buffers: buffers,
                                       offsetY: Float(entry.builtRow - visibleRow) * rowHeightPx + extraOffset,
-                                      clipped: clipped))
+                                      clipped: clipped, offsetX: offsetX, clipX: clipX))
             }
             if bufferingMode == .perFrameAggregated, let rowData = entry.data, var currentFrame = frameData {
                 currentFrame.backgroundCells.append(contentsOf: rowData.backgroundCells)
@@ -1095,12 +1123,84 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         for (entry, slot) in neighbours where regionRows != nil {
             place(entry, visibleRow: slot, clipped: true, extraOffset: regionOffset)
         }
+#if os(macOS)
+        // NeoLink: a horizontally scrolled band. Cells outside [textStart, textEnd) stay put; each layer is
+        // drawn translated and clipped to its own pixel columns.
+        let band = bufferingMode == .perRowPersistent ? terminalView.externalHorizontalScroll : nil
+        var bandLines: [ObjectIdentifier] = []
+        let cellPx = Float(cellWidth * scale)
+        let widthPx = Int(viewWidthPx.rounded(.up))
+        func px(_ points: CGFloat) -> Int { Int((points * scale).rounded()) }
+        var cursorOffsetX: Float = 0
+        var cursorClipX: (Int, Int)? = nil
+        if let band {
+            let cursorRow = buffer.yBase + buffer.y - visibleDisp
+            if band.rows.contains(cursorRow), buffer.x >= band.textStart, buffer.x < band.textEnd,
+               let current = band.layers.first(where: { $0.lines == nil }) {
+                cursorOffsetX = Float((current.offset * scale).rounded())
+                cursorClipX = (Int((Float(band.textStart) * cellPx).rounded()), min(widthPx, Int((Float(band.textEnd) * cellPx).rounded())))
+            }
+        }
+#else
+        let band: ExternalHorizontalScroll? = nil
+#endif
+#if os(macOS)
+        var bandBudget = band?.rebuildBudget ?? Int.max
+#endif
         for row in visibleRange {
             let line = buffer.lines[row]
             let visibleRow = row - visibleDisp
             let dirty = (rebuildRange?.contains(row) ?? false) && !movedLines.contains(ObjectIdentifier(line))
-            guard let entry = cachedEntry(for: line, row: row, visibleRow: visibleRow, dirty: dirty) else { continue }
             let inRegion = regionRows?.contains(visibleRow) ?? false
+#if os(macOS)
+            if let band, band.rows.contains(visibleRow) {
+                let start = Int((Float(band.textStart) * cellPx).rounded()), end = min(widthPx, Int((Float(band.textEnd) * cellPx).rounded()))
+                let yOffset = inRegion ? regionOffset : 0
+                let index = visibleRow - band.rows.lowerBound
+                func clip(_ layer: ExternalHorizontalScroll.Layer) -> (Int, Int)? {
+                    let from = max(start, px(layer.clipFrom)), to = min(end, px(layer.clipTo))
+                    return to > from ? (from, to) : nil
+                }
+                let needsCurrent = band.layers.contains { $0.lines == nil && clip($0) != nil }
+                // The current row is built when a layer draws it, or within the per-frame budget; otherwise a
+                // retained row (same gutter, same row) stands in for the cells outside the band.
+                var entry: RowCacheEntry?
+                if needsCurrent || isCached(line, row: row, visibleRow: visibleRow, dirty: dirty) || bandBudget > 0 {
+                    if !isCached(line, row: row, visibleRow: visibleRow, dirty: dirty) { bandBudget -= 1 }
+                    entry = cachedEntry(for: line, row: row, visibleRow: visibleRow, dirty: dirty)
+                } else {
+                    // Keep the dirty range for when this row is built.
+                    if let rebuildRange, rebuildRange.contains(row) {
+                        terminalView.metalDirtyRange = terminalView.metalDirtyRange.map { min($0.lowerBound, row)...max($0.upperBound, row) } ?? row...row
+                    }
+                    drawnLines.insert(ObjectIdentifier(line))
+                }
+                var outside = entry
+                if outside == nil, let lines = band.layers.first(where: { $0.lines != nil })?.lines, index >= 0, index < lines.count {
+                    bandLines.append(ObjectIdentifier(lines[index]))
+                    outside = cachedEntry(for: lines[index], row: nil, visibleRow: visibleRow, dirty: false)
+                }
+                if let outside {
+                    if start > 0 { place(outside, visibleRow: visibleRow, clipped: inRegion, extraOffset: yOffset, clipX: (0, start)) }
+                    if end < widthPx { place(outside, visibleRow: visibleRow, clipped: inRegion, extraOffset: yOffset, clipX: (end, widthPx)) }
+                }
+                for layer in band.layers {
+                    guard let range = clip(layer) else { continue }
+                    let offsetX = Float((layer.offset * scale).rounded())
+                    if let lines = layer.lines {
+                        guard index >= 0, index < lines.count else { continue }
+                        let retained = lines[index]
+                        bandLines.append(ObjectIdentifier(retained))
+                        guard let layerEntry = cachedEntry(for: retained, row: nil, visibleRow: visibleRow, dirty: false) else { continue }
+                        place(layerEntry, visibleRow: visibleRow, clipped: inRegion, extraOffset: yOffset, offsetX: offsetX, clipX: range)
+                    } else if let entry {
+                        place(entry, visibleRow: visibleRow, clipped: inRegion, extraOffset: yOffset, offsetX: offsetX, clipX: range)
+                    }
+                }
+                continue
+            }
+#endif
+            guard let entry = cachedEntry(for: line, row: row, visibleRow: visibleRow, dirty: dirty) else { continue }
             place(entry, visibleRow: visibleRow, clipped: inRegion, extraOffset: inRegion ? regionOffset : 0)
         }
 
@@ -1114,6 +1214,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             frameHasher.combine(row.buffers.glyphColorBuffer.map { ObjectIdentifier($0) })
             frameHasher.combine(row.offsetY.bitPattern)
             frameHasher.combine(row.clipped)
+            frameHasher.combine(row.offsetX.bitPattern)
+            frameHasher.combine(row.clipX?.0); frameHasher.combine(row.clipX?.1)
         }
         frameHasher.combine(regionOffset.bitPattern)
         frameHasher.combine(buffer.x); frameHasher.combine(buffer.y); frameHasher.combine(buffer.yBase); frameHasher.combine(terminalView.terminal.cursorHidden)
@@ -1127,6 +1229,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         for line in terminalView.retainedScrollLines.above.suffix(buffer.rows) { keep.insert(ObjectIdentifier(line)) }
         for line in terminalView.retainedScrollLines.below.suffix(buffer.rows) { keep.insert(ObjectIdentifier(line)) }
         for line in terminalView.metalRetainedLines { keep.insert(ObjectIdentifier(line)) }
+        for line in bandLines { keep.insert(line) }
 #endif
         if rowCache.count > keep.count {
             rowCache = rowCache.filter { keep.contains($0.key) }
@@ -1151,7 +1254,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                         cursorGlyphVerticesGray: cursorData.glyphVerticesGray,
                         cursorGlyphVerticesColor: cursorData.glyphVerticesColor,
                         region: regionRows.map { (rows: $0, offsetY: regionOffset, rowHeightPx: rowHeightPx) },
-                        cursorClipped: regionRows?.contains(buffer.yBase + buffer.y - visibleDisp) ?? false)
+                        cursorClipped: regionRows?.contains(buffer.yBase + buffer.y - visibleDisp) ?? false,
+                        cursorOffsetX: cursorOffsetX, cursorClipX: cursorClipX)
     }
 
     private func intersect(_ range: ClosedRange<Int>?, _ other: ClosedRange<Int>) -> ClosedRange<Int>? {
@@ -2581,7 +2685,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             encoder.setFragmentTexture(texture, index: 0)
             encoder.setFragmentSamplerState(sampler, index: 0)
         }
-        var lastOffset: Float = .nan
+        var lastOffset: Float = .nan, lastOffsetX: Float = .nan
         for row in rows {
             guard let buffer = row.buffers[keyPath: bufferKey] else {
                 continue
@@ -2590,12 +2694,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             if count == 0 {
                 continue
             }
-            if row.offsetY != lastOffset {
-                var translated = SIMD4<Float>(viewport.x, viewport.y, 0, row.offsetY)
+            if row.offsetY != lastOffset || row.offsetX != lastOffsetX {
+                var translated = SIMD4<Float>(viewport.x, viewport.y, row.offsetX, row.offsetY)
                 encoder.setVertexBytes(&translated, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
-                lastOffset = row.offsetY
+                lastOffset = row.offsetY; lastOffsetX = row.offsetX
             }
-            clip.apply(row.clipped, encoder)
+            clip.apply(row.clipped, x: row.clipX, encoder)
             encoder.setVertexBuffer(buffer, offset: 0, index: 0)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: count * 6)
         }
@@ -2613,9 +2717,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         encoder.setRenderPipelineState(textPipeline)
         encoder.setFragmentSamplerState(sampler, index: 0)
         for row in rows where !row.buffers[keyPath: imageKey].isEmpty {
-            var translated = SIMD4<Float>(viewport.x, viewport.y, 0, row.offsetY)
+            var translated = SIMD4<Float>(viewport.x, viewport.y, row.offsetX, row.offsetY)
             encoder.setVertexBytes(&translated, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
-            clip.apply(row.clipped, encoder)
+            clip.apply(row.clipped, x: row.clipX, encoder)
             for draw in row.buffers[keyPath: imageKey] {
                 encoder.setVertexBuffer(draw.buffer, offset: 0, index: 0)
                 encoder.setFragmentTexture(draw.texture, index: 0)

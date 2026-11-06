@@ -37,6 +37,8 @@ final class NativeGridPresenter {
     private(set) var geometryReuses = 0
     /// Rows Neovim's confirmation had to rewrite after a cached image was shown (0 when the image was exact).
     private(set) var speculationCorrections = 0
+    /// Pixel-smooth horizontal scrolling (see `NativeHorizontalScroll`).
+    private(set) lazy var horizontal = NativeHorizontalScroll(presenter: self)
     private(set) var confirmedSpeculations = 0
     private var diagnosticsEnabled = true
     private var queuedInput: [String] = []
@@ -76,6 +78,7 @@ final class NativeGridPresenter {
         case .selection(let token, let path): acknowledge(token: token, path: path)
         case .leave(let path, let mode, let popup, let diagnostics): recordLeave(path: path, mode: mode, popupVisible: popup, diagnostics: diagnostics)
         case .touch(let path): cache.invalidate(path: path)
+        case .hscroll(let answer): horizontal.answer(answer)
         case .closed(let reason): onClosed?(reason)
         }
     }
@@ -137,12 +140,26 @@ final class NativeGridPresenter {
     }
 
     private func retainCachedRows() {
-        view?.metalRetainedLines = cache.entries.values.flatMap(\.lines)
+        view?.metalRetainedLines = cache.entries.values.flatMap(\.lines) + horizontal.retained.flatMap(\.lines)
+    }
+    func retainHorizontalRows() { retainCachedRows() }
+
+    /// Detaches the rows showing `displayed` (they keep their cached geometry) and installs blank rows that the
+    /// next `present` fills completely. Used when a horizontal chunk replaces every row of a window.
+    func detachDisplayedRows() -> [BufferLine]? {
+        guard let view, displayed != nil else { return nil }
+        let terminal = view.getTerminal()
+        let spares = (0..<terminal.rows).map { _ in BufferLine(cols: terminal.cols) }
+        var detached: [BufferLine]?
+        view.externalGridUpdate { _ in detached = view.externalGridExchange(spares) }
+        if detached != nil { displayed = nil; pendingScrolls.removeAll() }
+        return detached
     }
 
     /// Shows the cached image of `path` immediately when it is provably what Neovim will draw.
     /// Returns false (and shows nothing) otherwise; the caller then waits for Neovim's flush.
     func speculate(path: String, token: UInt64) -> Bool {
+        horizontal.abort()
         drain()   // apply pending touch/leave notices first
         guard phase == .live, let view else { return reject("busy") }
         let terminal = view.getTerminal()
@@ -178,6 +195,7 @@ final class NativeGridPresenter {
     /// A tab change that does not involve a Neovim `open` (for example, to a shell) still lets the
     /// editor record exactly what is on screen; the session sends the `leave` command.
     func cancelSpeculation() {
+        horizontal.abort()
         guard case .speculative = phase else { return }
         phase = .live
         queuedInput.removeAll(); queuedInputBytes = 0
@@ -192,6 +210,8 @@ final class NativeGridPresenter {
 
     private func flushIfAllowed(force: Bool = false) {
         guard phase == .live, force || isVisible else { return }
+        // A horizontal chunk request is in flight: its frames are shown together with its answer.
+        guard force || !horizontal.holdsPresentation else { return }
         present(mirror, cursorModeName: nil, force: force)
     }
 
@@ -286,6 +306,7 @@ final class NativeGridPresenter {
 
     func send(keys: String) {
         guard !keys.isEmpty else { return }
+        horizontal.endNow()
         if case .speculative = phase {
             guard queuedInputBytes + keys.utf8.count <= 4096 else { return }
             queuedInput.append(keys); queuedInputBytes += keys.utf8.count
@@ -295,18 +316,26 @@ final class NativeGridPresenter {
     }
 
     func paste(_ text: String) {
+        horizontal.endNow()
         if case .speculative = phase { send(keys: NeovimKeyEncoder.escape(text: text)); return }
         client.paste(text)
     }
 
+    /// Measurement: mouse reports sent to Neovim, by "button action", and the last cell.
+    private(set) var mouseReports: [String: Int] = [:]
+    private(set) var lastMouseCell = (row: -1, column: -1)
     func mouse(button: String, action: String, modifier: String, row: Int, column: Int) {
-        if case .speculative = phase { return }   // a pointer event cannot target a buffer that is not confirmed yet
+        if button != "wheel" { horizontal.endNow() }
+        if case .speculative = phase { mouseReports["dropped", default: 0] += 1; return }   // a pointer event cannot target a buffer that is not confirmed yet
+        mouseReports[button + " " + action, default: 0] += 1
+        lastMouseCell = (row, column)
         client.mouse(button: button, action: action, modifier: modifier, row: row, column: column)
     }
 
     func viewResized(cols: Int, rows: Int) {
         guard cols > 0, rows > 0, (cols, rows) != (requestedSize.cols, requestedSize.rows) else { return }
         requestedSize = (cols, rows)
+        horizontal.abort()
         cache.removeAll(); parked = nil   // images and rows of another size can never be shown
         client.resize(cols: cols, rows: rows)
     }

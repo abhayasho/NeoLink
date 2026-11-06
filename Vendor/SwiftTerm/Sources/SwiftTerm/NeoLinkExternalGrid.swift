@@ -127,3 +127,36 @@ extension Terminal {
         return buffer.lines[buffer.yBase + y].translateToString(trimRight: true).replacingOccurrences(of: "\u{0}", with: " ")
     }
 }
+
+/// NeoLink: a horizontally scrolling band of rows (an editor window's text area) drawn at sub-cell pixel
+/// offsets while the cells left and right of the band (a gutter, other windows) stay in place.
+///
+/// Each layer draws one set of row lines translated by `offset` and clipped to `clipFrom..<clipTo` (points
+/// in view coordinates, intersected with the band). A layer whose `lines` is nil draws the buffer's current
+/// rows; other layers draw lines the host retained from earlier horizontal positions, so the strip a
+/// translation exposes shows real content instead of a gap. Hosts give layers disjoint clips.
+public struct ExternalHorizontalScroll {
+    public struct Layer {
+        public var lines: [BufferLine]?
+        public var offset: CGFloat
+        public var clipFrom: CGFloat
+        public var clipTo: CGFloat
+        public init(lines: [BufferLine]?, offset: CGFloat, clipFrom: CGFloat, clipTo: CGFloat) {
+            self.lines = lines; self.offset = offset; self.clipFrom = clipFrom; self.clipTo = clipTo
+        }
+    }
+    /// Visible rows (0-based) of the band.
+    public var rows: ClosedRange<Int>
+    /// Columns [textStart, textEnd) that move.
+    public var textStart: Int
+    public var textEnd: Int
+    public var layers: [Layer]
+    /// Rows of the current lines the renderer may rebuild per frame when no layer needs them yet. A chunk of
+    /// horizontal scrolling replaces every row; building them a few at a time, while retained layers still
+    /// cover the view, keeps a whole-window rebuild out of any single frame. nil builds every row at once.
+    public var rebuildBudget: Int?
+    public init(rows: ClosedRange<Int>, textStart: Int, textEnd: Int, layers: [Layer], rebuildBudget: Int? = nil) {
+        self.rows = rows; self.textStart = textStart; self.textEnd = textEnd; self.layers = layers
+        self.rebuildBudget = rebuildBudget
+    }
+}

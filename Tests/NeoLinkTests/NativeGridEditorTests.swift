@@ -61,7 +61,7 @@ final class NativeNvim {
             case .selection(let token, let path): selections.append((token, path, screen))
             case .leave(let path, let mode, let popup, _): leaves.append((path, mode, popup, screen))
             case .touch(let path): touches.append(path)
-            case .closed: break
+            case .closed, .hscroll: break
             }
         }
         return drained.count
@@ -318,6 +318,94 @@ final class NativeGridEditorTests: XCTestCase {
         try await settleEditor(controller)
         XCTAssertTrue(screen().contains { $0.contains("row 1 ") })
         XCTAssertTrue(agreed())
+    }
+
+    /// A synthesized precise (trackpad) scroll event with gesture/momentum phases.
+    private func trackpadEvent(dx: Double, dy: Double, phase: Int64, momentum: Int64 = 0, window: NSWindow, at point: NSPoint) -> NSEvent? {
+        guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: 0, wheel3: 0) else { return nil }
+        cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: dy)
+        cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: dy)
+        cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: dx)
+        cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: dx)
+        cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+        cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentum)
+        cg.location = CGPoint(x: window.frame.minX + point.x, y: (NSScreen.screens.first?.frame.height ?? 0) - (window.frame.minY + point.y))
+        return NSEvent(cgEvent: cg)
+    }
+
+    @MainActor
+    func testHorizontalScrollingMovesInChunksDrawsABandAndRestsOnNeovimsOwnScreen() async throws {
+        guard CommandRunner.executable("nvim") != nil else { throw XCTSkip("Neovim is optional") }
+        _ = NSApplication.shared
+        setenv("NEOLINK_NATIVE_GRID", "1", 1)
+        defer { unsetenv("NEOLINK_NATIVE_GRID") }
+        let long = (1...60).map { line in (0..<40).map { "L\(line)c\($0 * 10)".padding(toLength: 10, withPad: ".", startingAt: 0) }.joined() }.joined(separator: "\n") + "\n"
+        let (root, urls) = try files(["wide.txt": long])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let controller = TabsController()
+        // The app's window type: it owns the display-paced frame scheduler that drives the glide.
+        let window = WorkspaceWindow(contentRect: .init(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: TabbedTerminalView(controller: controller))
+        defer { controller.codeSession.shutdown(); controller.tabs.compactMap(\.terminal).forEach { $0.state.close() }; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        controller.openFile(urls["wide.txt"]!)
+        try await settleEditor(controller)
+        let session = controller.codeSession, presenter = try XCTUnwrap(session.nativeGrid), terminal = try XCTUnwrap(session.terminal)
+        let horizontal = presenter.horizontal
+        horizontal.drivesFramesManually = true
+        func screen() -> [String] { (0..<terminal.getTerminal().rows).map { terminal.getTerminal().externalGridRowText($0) } }
+        func mirror() -> [String] { presenter.mirror.rows.map { $0.map(\.text).joined().replacingOccurrences(of: "\u{0}", with: " ").trimmingCharacters(in: .whitespaces) } }
+        let center = NSPoint(x: terminal.bounds.midX, y: terminal.bounds.midY)
+        let inWindow = terminal.convert(center, to: nil)
+        // Fingers move left (content moves left: the view scrolls right) at 60 Hz, then lift.
+        var sawBand = false
+        for index in 0..<45 {
+            if let event = trackpadEvent(dx: -12, dy: 0, phase: index == 0 ? 1 : 2, window: window, at: inWindow) { terminal.deliverWheel(event) }
+            for _ in 0..<2 { try await Task.sleep(nanoseconds: 8_000_000); presenter.drain(); horizontal.stepForTesting() }
+            if terminal.externalHorizontalScroll != nil { sawBand = true }
+        }
+        if let end = trackpadEvent(dx: 0, dy: 0, phase: 4, window: window, at: inWindow) { terminal.deliverWheel(end) }
+        let deadline = Date().addingTimeInterval(3)
+        while horizontal.isActive, Date() < deadline { try await Task.sleep(nanoseconds: 8_000_000); presenter.drain(); horizontal.stepForTesting() }
+        try await Task.sleep(nanoseconds: 100_000_000); presenter.drain()
+        print("HSCROLL", horizontal.diagnostics)
+        XCTAssertTrue(sawBand, "the text area is drawn at sub-column offsets while scrolling")
+        XCTAssertFalse(horizontal.isActive, "the session settles")
+        XCTAssertNil(terminal.externalHorizontalScroll, "at rest the screen is Neovim's own")
+        XCTAssertGreaterThan(horizontal.flips, 0)
+        // About 540 points of input is ~70 columns; Neovim is asked a chunk at a time, not per column.
+        XCTAssertLessThan(horizontal.requests, 15, "\(horizontal.requests) requests")
+        let shown = screen().map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(shown, mirror(), "the rows on screen are exactly Neovim's grid after settling")
+        XCTAssertFalse(shown.contains { $0.contains("L1c0.") }, "the view scrolled right: \(shown.prefix(3))")
+        XCTAssertTrue(shown.contains { $0.contains("L1c") }, "\(shown.prefix(3))")
+        // Typing during a scroll ends it on a whole column first; the keys then reach the buffer.
+        for index in 0..<10 {
+            if let event = trackpadEvent(dx: 10, dy: 0, phase: index == 0 ? 1 : 2, window: window, at: inWindow) { terminal.deliverWheel(event) }
+            for _ in 0..<2 { try await Task.sleep(nanoseconds: 8_000_000); presenter.drain(); horizontal.stepForTesting() }
+        }
+        XCTAssertTrue(horizontal.isActive)
+        terminal.send(txt: "Z")
+        for _ in 0..<40 where horizontal.isActive { try await Task.sleep(nanoseconds: 8_000_000); presenter.drain(); horizontal.stepForTesting() }
+        try await settleEditor(controller) { controller.selectedTab?.document?.isModified == true && !horizontal.isActive }
+        try await Task.sleep(nanoseconds: 150_000_000); presenter.drain()
+        XCTAssertNil(terminal.externalHorizontalScroll)
+        XCTAssertEqual(screen().map { $0.trimmingCharacters(in: .whitespaces) }, mirror())
+        XCTAssertNil(session.error)
+    }
+
+    func testNativeEditorIsTheDefaultAndBothOverridesWork() throws {
+        let suite = "NeoLinkNativeDefault-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(NeovimSession.nativeGridRequested([:], defaults: defaults), "native by default")
+        defaults.set(false, forKey: NeovimSession.nativeGridPreferenceKey)
+        XCTAssertFalse(NeovimSession.nativeGridRequested([:], defaults: defaults), "the saved View-menu choice")
+        XCTAssertTrue(NeovimSession.nativeGridRequested(["NEOLINK_NATIVE_GRID": "1"], defaults: defaults), "environment wins")
+        defaults.set(true, forKey: NeovimSession.nativeGridPreferenceKey)
+        XCTAssertFalse(NeovimSession.nativeGridRequested(["NEOLINK_NATIVE_GRID": "0"], defaults: defaults))
     }
 
     @MainActor
