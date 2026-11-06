@@ -1,0 +1,7538 @@
+{
+ "note": "Compact per-run metrics from the matched release runs described in docs/NATIVE_GRID.md. Raw reports (with selection traces) were kept outside the repository.",
+ "machine": "M2 Max, native full screen 1728x1084 pt, 2x, 120 Hz, frontmost and unlocked",
+ "runs": [
+  {
+   "matrix": "matrix1 (candidate binary 6ba19d38\u2026, before the key-echo bookkeeping fix)",
+   "hashes": {
+    "b29": "a9ea61d2b6739ecdc88663a5cdf2f1834255459b07b86fe58b93418adefb3fd6",
+    "candidate": "6ba19d38504bbf16c3c4e8007368c09e1d1a20530ee16852f780178827affadd"
+   },
+   "scenarios": "render-motion,ui-tabs,ui-highlights,ui-resize",
+   "runs": [
+    {
+     "arm": "tui",
+     "index": 1,
+     "valid": true,
+     "seconds": 32.8,
+     "droppedDrawables": 37,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 35.5,
+      "footprintMB": 229.8,
+      "missedRefreshes": 25,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.5,
+       "over8ms": 6,
+       "over16ms": 1,
+       "p50": 0,
+       "p95": 2.8,
+       "p99": 4.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 25.9,
+      "footprintMB": 240.3,
+      "missedRefreshes": 137,
+      "switchToContentPresentedMs": {
+       "max": 74.1,
+       "p50": 52.1,
+       "p95": 74.1,
+       "p99": 74.1
+      },
+      "switchToFocusedMs": {
+       "max": 41.1,
+       "p50": 31.4,
+       "p95": 36.4,
+       "p99": 41.1
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 175,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 38.1,
+       "over8ms": 256,
+       "over16ms": 153,
+       "p50": 0,
+       "p95": 20,
+       "p99": 28.6
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       68.46112501807511,
+       43.15812501590699,
+       50.14716670848429,
+       74.11791675258428,
+       42.786708334460855,
+       51.79441662039608,
+       67.46074999682605,
+       50.43858336284757,
+       36.792416707612574,
+       68.08854162227362,
+       51.454208325594664,
+       52.455500001087785,
+       63.45516664441675,
+       52.77329171076417,
+       51.79175001103431,
+       61.09966663643718,
+       52.11825005244464,
+       51.11012503039092
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27.6,
+      "footprintMB": 240,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.7,
+       "p50": 26.6,
+       "p95": 27.9,
+       "p99": 32.7
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.4,
+       "p99": 0.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 82.3,
+      "footprintMB": 280.7,
+      "missedRefreshes": 212,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 547.5,
+       "over8ms": 1106,
+       "over16ms": 791,
+       "p50": 8.6,
+       "p95": 334.2,
+       "p99": 506
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 2,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 36,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.6,
+      "footprintMB": 229.9,
+      "missedRefreshes": 30,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 8.1,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 3.1,
+       "p99": 4.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 21.8,
+      "footprintMB": 241.7,
+      "missedRefreshes": 135,
+      "switchToContentPresentedMs": {
+       "max": 57,
+       "p50": 48.5,
+       "p95": 57,
+       "p99": 57
+      },
+      "switchToFocusedMs": {
+       "max": 41.5,
+       "p50": 27.1,
+       "p95": 36.4,
+       "p99": 41.5
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 166.7,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 38.2,
+       "over8ms": 184,
+       "over16ms": 78,
+       "p50": 0,
+       "p95": 13.7,
+       "p99": 25.6
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       53.14016668125987,
+       43.8192083965987,
+       42.47016669251025,
+       53.65112505387515,
+       48.48262504674494,
+       49.31875003967434,
+       54.30554167833179,
+       38.800583337433636,
+       43.46237506251782,
+       56.953291641548276,
+       43.63133339211345,
+       44.464583275839686,
+       53.61116665881127,
+       41.811708360910416,
+       42.943708365783095,
+       54.27966662682593,
+       45.123000047169626,
+       52.11774993222207
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 28.6,
+      "footprintMB": 241.5,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.8,
+       "p50": 26.7,
+       "p95": 32.7,
+       "p99": 32.8
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 2.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.4,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 81.5,
+      "footprintMB": 272.7,
+      "missedRefreshes": 208,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 646.9,
+       "over8ms": 1150,
+       "over16ms": 825,
+       "p50": 10,
+       "p95": 434.1,
+       "p99": 605.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 3,
+     "valid": true,
+     "seconds": 34.9,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.5,
+      "footprintMB": 227.6,
+      "missedRefreshes": 23,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 19.5,
+       "over8ms": 7,
+       "over16ms": 2,
+       "p99": 5.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 28.7,
+      "footprintMB": 238.3,
+      "missedRefreshes": 148,
+      "switchToContentPresentedMs": {
+       "max": 77.4,
+       "p50": 69.3,
+       "p95": 77.4,
+       "p99": 77.4
+      },
+      "switchToFocusedMs": {
+       "max": 57,
+       "p50": 30,
+       "p95": 42.9,
+       "p99": 57
+      },
+      "contentIntervalMs": {
+       "max": 191.7,
+       "p50": 187.5,
+       "p95": 191.7,
+       "p99": 191.7
+      },
+      "mainThreadStallMs": {
+       "max": 40.6,
+       "over8ms": 284,
+       "over16ms": 132,
+       "p99": 29.5
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27.2,
+      "footprintMB": 238.1,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 33,
+       "p50": 27.2,
+       "p95": 32.9,
+       "p99": 33
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 5.8,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 91,
+      "footprintMB": 271.6,
+      "missedRefreshes": 405,
+      "contentIntervalMs": {
+       "max": 83.3,
+       "p50": 25,
+       "p95": 37.5,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 108.9,
+       "over8ms": 2204,
+       "over16ms": 1568,
+       "p99": 81.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 4,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 56,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.2,
+      "footprintMB": 229.9,
+      "missedRefreshes": 42,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 19,
+       "over8ms": 6,
+       "over16ms": 2,
+       "p50": 0,
+       "p95": 2.9,
+       "p99": 4.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 22.5,
+      "footprintMB": 241.6,
+      "missedRefreshes": 132,
+      "switchToContentPresentedMs": {
+       "max": 57.5,
+       "p50": 44.8,
+       "p95": 57.5,
+       "p99": 57.5
+      },
+      "switchToFocusedMs": {
+       "max": 44.2,
+       "p50": 21.8,
+       "p95": 35,
+       "p99": 44.2
+      },
+      "contentIntervalMs": {
+       "max": 170.8,
+       "p50": 166.7,
+       "p95": 170.8,
+       "p99": 170.8
+      },
+      "mainThreadStallMs": {
+       "max": 33,
+       "over8ms": 173,
+       "over16ms": 75,
+       "p50": 0,
+       "p95": 13.5,
+       "p99": 26.1
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       56.66087497957051,
+       47.5083333440125,
+       44.159249984659255,
+       57.48866661451757,
+       44.165250030346215,
+       40.650541661307216,
+       57.48675006907433,
+       44.148541637696326,
+       42.81283332966268,
+       55.634999996982515,
+       38.48758339881897,
+       40.976000018417835,
+       55.586333270184696,
+       44.79274991899729,
+       41.44637507852167,
+       54.78516663424671,
+       49.79970841668546,
+       42.45270823594183
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27.4,
+      "footprintMB": 241.4,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.9,
+       "p50": 26.5,
+       "p95": 32.8,
+       "p99": 32.9
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.4,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 81.5,
+      "footprintMB": 279.6,
+      "missedRefreshes": 205,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 294.5,
+       "over8ms": 1079,
+       "over16ms": 730,
+       "p50": 8.5,
+       "p95": 200,
+       "p99": 253.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 5,
+     "valid": true,
+     "seconds": 35.2,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.7,
+      "footprintMB": 229.5,
+      "missedRefreshes": 26,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 19.4,
+       "over8ms": 6,
+       "over16ms": 2,
+       "p99": 5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 28.5,
+      "footprintMB": 240.2,
+      "missedRefreshes": 126,
+      "switchToContentPresentedMs": {
+       "max": 83.2,
+       "p50": 65.7,
+       "p95": 83.2,
+       "p99": 83.2
+      },
+      "switchToFocusedMs": {
+       "max": 45.9,
+       "p50": 28.8,
+       "p95": 43.5,
+       "p99": 45.9
+      },
+      "contentIntervalMs": {
+       "max": 195.8,
+       "p50": 187.5,
+       "p95": 195.8,
+       "p99": 195.8
+      },
+      "mainThreadStallMs": {
+       "max": 43.3,
+       "over8ms": 276,
+       "over16ms": 118,
+       "p99": 26.8
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 24.1,
+      "footprintMB": 240,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 41.1,
+       "p50": 35.2,
+       "p95": 36.8,
+       "p99": 41.1
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 2.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 1.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 91.1,
+      "footprintMB": 272.8,
+      "missedRefreshes": 380,
+      "contentIntervalMs": {
+       "max": 91.7,
+       "p50": 25,
+       "p95": 37.5,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 119.7,
+       "over8ms": 2163,
+       "over16ms": 1604,
+       "p99": 93.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 6,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 53,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.7,
+      "footprintMB": 230.3,
+      "missedRefreshes": 32,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 13.2,
+       "over8ms": 4,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 3.1,
+       "p99": 4.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 25.9,
+      "footprintMB": 240.8,
+      "missedRefreshes": 138,
+      "switchToContentPresentedMs": {
+       "max": 68.6,
+       "p50": 52.6,
+       "p95": 68.6,
+       "p99": 68.6
+      },
+      "switchToFocusedMs": {
+       "max": 40.4,
+       "p50": 31,
+       "p95": 36.2,
+       "p99": 40.4
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 175,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 37.6,
+       "over8ms": 245,
+       "over16ms": 131,
+       "p50": 0,
+       "p95": 18.1,
+       "p99": 28
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       68.60120827332139,
+       51.61591665819287,
+       52.602208335883915,
+       53.19454160053283,
+       44.277541572228074,
+       51.27879173960537,
+       62.60349997319281,
+       51.59629159606993,
+       52.604999975301325,
+       68.25358339119703,
+       51.2416249839589,
+       43.92229160293937,
+       52.90420830715448,
+       58.17433330230415,
+       51.22908332850784,
+       52.57762502878904,
+       45.74770829640329,
+       43.91254170332104
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 26.2,
+      "footprintMB": 240.6,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.9,
+       "p50": 26.7,
+       "p95": 32.7,
+       "p99": 32.9
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 82.3,
+      "footprintMB": 273.9,
+      "missedRefreshes": 208,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 917.4,
+       "over8ms": 1135,
+       "over16ms": 841,
+       "p50": 9.9,
+       "p95": 706.4,
+       "p99": 878.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 7,
+     "valid": true,
+     "seconds": 34.6,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.9,
+      "footprintMB": 230,
+      "missedRefreshes": 22,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 19.8,
+       "over8ms": 9,
+       "over16ms": 2,
+       "p99": 5.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 29,
+      "footprintMB": 240.5,
+      "missedRefreshes": 144,
+      "switchToContentPresentedMs": {
+       "max": 78.7,
+       "p50": 60,
+       "p95": 78.7,
+       "p99": 78.7
+      },
+      "switchToFocusedMs": {
+       "max": 57.7,
+       "p50": 31.2,
+       "p95": 41.3,
+       "p99": 57.7
+      },
+      "contentIntervalMs": {
+       "max": 187.5,
+       "p50": 175,
+       "p95": 187.5,
+       "p99": 187.5
+      },
+      "mainThreadStallMs": {
+       "max": 40.9,
+       "over8ms": 265,
+       "over16ms": 104,
+       "p99": 27.7
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 26.3,
+      "footprintMB": 240.3,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.7,
+       "p50": 26.8,
+       "p95": 32.6,
+       "p99": 32.7
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 4.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 91.1,
+      "footprintMB": 270.1,
+      "missedRefreshes": 401,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 25,
+       "p95": 41.7,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 91.3,
+       "over8ms": 2165,
+       "over16ms": 1544,
+       "p99": 79.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 8,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 44,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.4,
+      "footprintMB": 231.4,
+      "missedRefreshes": 31,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 13.6,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.8,
+       "p99": 4.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 25.8,
+      "footprintMB": 241.8,
+      "missedRefreshes": 142,
+      "switchToContentPresentedMs": {
+       "max": 69,
+       "p50": 52,
+       "p95": 69,
+       "p99": 69
+      },
+      "switchToFocusedMs": {
+       "max": 39.6,
+       "p50": 32.1,
+       "p95": 35.7,
+       "p99": 39.6
+      },
+      "contentIntervalMs": {
+       "max": 183.3,
+       "p50": 175,
+       "p95": 183.3,
+       "p99": 183.3
+      },
+      "mainThreadStallMs": {
+       "max": 33.3,
+       "over8ms": 220,
+       "over16ms": 118,
+       "p50": 0,
+       "p95": 17.2,
+       "p99": 28.6
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       39.329458377324045,
+       42.03008336480707,
+       51.0186665924266,
+       53.99729160126299,
+       50.98787497263402,
+       50.00716669019312,
+       65.66425005439669,
+       50.65366660710424,
+       57.96608328819275,
+       63.01249994430691,
+       51.95195833221078,
+       52.99754173029214,
+       68.96158342715353,
+       41.453958372585475,
+       52.640291629359126,
+       61.99658336117864,
+       51.28320830408484,
+       50.30787503346801
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27.3,
+      "footprintMB": 241.5,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 33,
+       "p50": 26.9,
+       "p95": 32.7,
+       "p99": 33
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.1,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.2,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 83.6,
+      "footprintMB": 273.7,
+      "missedRefreshes": 208,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 221.3,
+       "over8ms": 1055,
+       "over16ms": 640,
+       "p50": 8,
+       "p95": 112.7,
+       "p99": 180.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 9,
+     "valid": true,
+     "seconds": 32.5,
+     "droppedDrawables": 47,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.9,
+      "footprintMB": 229.8,
+      "missedRefreshes": 31,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 19.3,
+       "over8ms": 7,
+       "over16ms": 2,
+       "p50": 0,
+       "p95": 2.9,
+       "p99": 4.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 22.4,
+      "footprintMB": 241.5,
+      "missedRefreshes": 135,
+      "switchToContentPresentedMs": {
+       "max": 58.7,
+       "p50": 46.7,
+       "p95": 58.7,
+       "p99": 58.7
+      },
+      "switchToFocusedMs": {
+       "max": 40.6,
+       "p50": 21.2,
+       "p95": 39.9,
+       "p99": 40.6
+      },
+      "contentIntervalMs": {
+       "max": 170.8,
+       "p50": 166.7,
+       "p95": 170.8,
+       "p99": 170.8
+      },
+      "mainThreadStallMs": {
+       "max": 37.6,
+       "over8ms": 181,
+       "over16ms": 75,
+       "p50": 0,
+       "p95": 13.7,
+       "p99": 27
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       53.875125013291836,
+       46.72799992840737,
+       43.36104169487953,
+       57.04320827499032,
+       41.67716659139842,
+       44.35458325315267,
+       55.70166674442589,
+       42.36091673374176,
+       45.030333334580064,
+       43.68779167998582,
+       48.46795822959393,
+       49.36366667971015,
+       58.67829162161797,
+       49.66995841823518,
+       44.32966676540673,
+       55.67945830989629,
+       44.33900001458824,
+       45.0044582830742
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 26.6,
+      "footprintMB": 241.2,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.9,
+       "p50": 26.5,
+       "p95": 32.7,
+       "p99": 32.9
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 2.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.5,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 82.7,
+      "footprintMB": 278.2,
+      "missedRefreshes": 202,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 333,
+       "over8ms": 1117,
+       "over16ms": 774,
+       "p50": 9.4,
+       "p95": 196.5,
+       "p99": 292.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 10,
+     "valid": true,
+     "seconds": 32.9,
+     "droppedDrawables": 34,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 36.8,
+      "footprintMB": 230.5,
+      "missedRefreshes": 22,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 13.6,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 3,
+       "p99": 4.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 26,
+      "footprintMB": 240.8,
+      "missedRefreshes": 140,
+      "switchToContentPresentedMs": {
+       "max": 77.1,
+       "p50": 51.7,
+       "p95": 77.1,
+       "p99": 77.1
+      },
+      "switchToFocusedMs": {
+       "max": 41.6,
+       "p50": 31.8,
+       "p95": 38.8,
+       "p99": 41.6
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 175,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 38.6,
+       "over8ms": 257,
+       "over16ms": 152,
+       "p50": 0,
+       "p95": 20.1,
+       "p99": 29.7
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       45.10650003794581,
+       50.11216667480767,
+       51.12529173493385,
+       77.0754583645612,
+       52.09499993361533,
+       51.09045829158276,
+       66.74237502738833,
+       51.732291583903134,
+       50.772625021636486,
+       66.07333337888122,
+       53.87666670139879,
+       52.078125067055225,
+       75.69787499960512,
+       51.06475006323308,
+       50.0752916559577,
+       53.05599991697818,
+       44.08158338628709,
+       51.07854166999459
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27.7,
+      "footprintMB": 240.5,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 33,
+       "p50": 27,
+       "p95": 32.8,
+       "p99": 33
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 2.8,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.2,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 82.3,
+      "footprintMB": 272.5,
+      "missedRefreshes": 207,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 45.8
+      },
+      "mainThreadStallMs": {
+       "max": 711,
+       "over8ms": 1109,
+       "over16ms": 758,
+       "p50": 9.1,
+       "p95": 500,
+       "p99": 669.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 11,
+     "valid": true,
+     "seconds": 32.9,
+     "droppedDrawables": 47,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 38.7,
+      "footprintMB": 230.1,
+      "missedRefreshes": 36,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.3,
+       "over8ms": 6,
+       "over16ms": 1,
+       "p50": 0,
+       "p95": 3.2,
+       "p99": 5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 22.5,
+      "footprintMB": 241.8,
+      "missedRefreshes": 134,
+      "switchToContentPresentedMs": {
+       "max": 54.7,
+       "p50": 44,
+       "p95": 54.7,
+       "p99": 54.7
+      },
+      "switchToFocusedMs": {
+       "max": 36.8,
+       "p50": 26.1,
+       "p95": 36,
+       "p99": 36.8
+      },
+      "contentIntervalMs": {
+       "max": 166.7,
+       "p50": 166.7,
+       "p95": 166.7,
+       "p99": 166.7
+      },
+      "mainThreadStallMs": {
+       "max": 33.6,
+       "over8ms": 172,
+       "over16ms": 60,
+       "p50": 0,
+       "p95": 12.6,
+       "p99": 22.3
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       45.95783329568803,
+       42.67120826989412,
+       43.31791657023132,
+       54.65495842508972,
+       49.6556666912511,
+       44.328374904580414,
+       53.6554167047143,
+       42.31508343946189,
+       43.65366674028337,
+       53.98754170164466,
+       42.65562503132969,
+       43.30108338035643,
+       46.29245842806995,
+       42.97708335798234,
+       43.61862502992153,
+       46.619500033557415,
+       43.288375018164515,
+       43.95137506071478
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 25.9,
+      "footprintMB": 241.5,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 41.1,
+       "p50": 33.5,
+       "p95": 40.7,
+       "p99": 41.1
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.4,
+       "p99": 1.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 82,
+      "footprintMB": 271.1,
+      "missedRefreshes": 205,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 248.5,
+       "over8ms": 1092,
+       "over16ms": 738,
+       "p50": 8.9,
+       "p95": 161.1,
+       "p99": 223.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 12,
+     "valid": true,
+     "seconds": 37.5,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.5,
+      "footprintMB": 229.5,
+      "missedRefreshes": 33,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 10.2,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p99": 5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 27.7,
+      "footprintMB": 239.8,
+      "missedRefreshes": 158,
+      "switchToContentPresentedMs": {
+       "max": 90,
+       "p50": 77.3,
+       "p95": 90,
+       "p99": 90
+      },
+      "switchToFocusedMs": {
+       "max": 45.4,
+       "p50": 33.4,
+       "p95": 40.2,
+       "p99": 45.4
+      },
+      "contentIntervalMs": {
+       "max": 200,
+       "p50": 200,
+       "p95": 200,
+       "p99": 200
+      },
+      "mainThreadStallMs": {
+       "max": 42.3,
+       "over8ms": 277,
+       "over16ms": 135,
+       "p99": 26.4
+      },
+      "presentationTimeouts": 2,
+      "failures": [
+       {
+        "index": 13,
+        "parsed": 17,
+        "presented": 15,
+        "requested": 17,
+        "stage": "presentation"
+       },
+       {
+        "index": 21,
+        "parsed": 25,
+        "presented": 23,
+        "requested": 25,
+        "stage": "presentation"
+       }
+      ],
+      "presentedSwitches": 16,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 25.9,
+      "footprintMB": 239.6,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 44.6,
+       "p50": 35.6,
+       "p95": 44.3,
+       "p99": 44.6
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 1.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 91.3,
+      "footprintMB": 270.5,
+      "missedRefreshes": 402,
+      "contentIntervalMs": {
+       "max": 91.7,
+       "p50": 25,
+       "p95": 41.7,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 112.5,
+       "over8ms": 2112,
+       "over16ms": 1424,
+       "p99": 90
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 13,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 59,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 38.8,
+      "footprintMB": 231.3,
+      "missedRefreshes": 40,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 20.2,
+       "over8ms": 10,
+       "over16ms": 2,
+       "p50": 0,
+       "p95": 3.2,
+       "p99": 4.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 21.9,
+      "footprintMB": 243,
+      "missedRefreshes": 133,
+      "switchToContentPresentedMs": {
+       "max": 55.9,
+       "p50": 48.6,
+       "p95": 55.9,
+       "p99": 55.9
+      },
+      "switchToFocusedMs": {
+       "max": 40.1,
+       "p50": 20.7,
+       "p95": 36.6,
+       "p99": 40.1
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 166.7,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 33.1,
+       "over8ms": 162,
+       "over16ms": 59,
+       "p50": 0,
+       "p95": 12.2,
+       "p99": 22.9
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       55.943000013940036,
+       46.78162501659244,
+       37.11137501522899,
+       54.10425004083663,
+       44.776624999940395,
+       41.450000018812716,
+       54.74212497938424,
+       45.585958287119865,
+       46.42445838544518,
+       53.42604161705822,
+       42.09645825903863,
+       42.7696667611599,
+       51.759541616775095,
+       48.58770838472992,
+       51.58733332064003,
+       52.43091669399291,
+       51.39745830092579,
+       44.07437494955957
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27.1,
+      "footprintMB": 242.9,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 33.2,
+       "p50": 27.2,
+       "p95": 32.8,
+       "p99": 33.2
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 4.1,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.7,
+       "p99": 3.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 82.4,
+      "footprintMB": 276.2,
+      "missedRefreshes": 205,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 231.6,
+       "over8ms": 1112,
+       "over16ms": 768,
+       "p50": 9.4,
+       "p95": 151.4,
+       "p99": 203
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 14,
+     "valid": true,
+     "seconds": 34.7,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.9,
+      "footprintMB": 229,
+      "missedRefreshes": 47,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 13.8,
+       "over8ms": 6,
+       "over16ms": 0,
+       "p99": 5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 28.8,
+      "footprintMB": 239.5,
+      "missedRefreshes": 149,
+      "switchToContentPresentedMs": {
+       "max": 78.5,
+       "p50": 67.8,
+       "p95": 78.5,
+       "p99": 78.5
+      },
+      "switchToFocusedMs": {
+       "max": 57.2,
+       "p50": 32.5,
+       "p95": 40.7,
+       "p99": 57.2
+      },
+      "contentIntervalMs": {
+       "max": 191.7,
+       "p50": 191.7,
+       "p95": 191.7,
+       "p99": 191.7
+      },
+      "mainThreadStallMs": {
+       "max": 40.9,
+       "over8ms": 282,
+       "over16ms": 134,
+       "p99": 29.2
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27.2,
+      "footprintMB": 239.3,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 33.5,
+       "p50": 27.2,
+       "p95": 33.1,
+       "p99": 33.5
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 1.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 91.7,
+      "footprintMB": 273.1,
+      "missedRefreshes": 391,
+      "contentIntervalMs": {
+       "max": 91.7,
+       "p50": 25,
+       "p95": 37.5,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 104.4,
+       "over8ms": 2127,
+       "over16ms": 1501,
+       "p99": 71.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 15,
+     "valid": true,
+     "seconds": 32.8,
+     "droppedDrawables": 54,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 38.5,
+      "footprintMB": 230.3,
+      "missedRefreshes": 40,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 13.2,
+       "over8ms": 5,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 3.1,
+       "p99": 4.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 26,
+      "footprintMB": 240.7,
+      "missedRefreshes": 139,
+      "switchToContentPresentedMs": {
+       "max": 74.5,
+       "p50": 52.1,
+       "p95": 74.5,
+       "p99": 74.5
+      },
+      "switchToFocusedMs": {
+       "max": 37.9,
+       "p50": 31.6,
+       "p95": 35.4,
+       "p99": 37.9
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 175,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 36,
+       "over8ms": 256,
+       "over16ms": 147,
+       "p50": 0,
+       "p95": 19.4,
+       "p99": 29
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       61.49612506851554,
+       52.507416694425046,
+       36.83791670482606,
+       74.48945834767073,
+       51.48570833262056,
+       50.469541689381,
+       61.841083224862814,
+       51.14558327477425,
+       50.14862504322082,
+       67.80495832208544,
+       52.80741665046662,
+       51.79733328986913,
+       63.07575001846999,
+       43.844291591085494,
+       51.136041758581996,
+       52.1137083414942,
+       53.13329165801406,
+       52.13245830964297
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 28.2,
+      "footprintMB": 240.5,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.8,
+       "p50": 27,
+       "p95": 32.8,
+       "p99": 32.8
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 1.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 83,
+      "footprintMB": 271.2,
+      "missedRefreshes": 207,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 276,
+       "over8ms": 1158,
+       "over16ms": 826,
+       "p50": 9.8,
+       "p95": 185.8,
+       "p99": 255.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    }
+   ]
+  },
+  {
+   "matrix": "matrix1b (final candidate binary)",
+   "hashes": {
+    "b29": "a9ea61d2b6739ecdc88663a5cdf2f1834255459b07b86fe58b93418adefb3fd6",
+    "candidate": "dc1c26b2369805e92271382ee6ff376daec5d4b9494435d3331448cc80b01002"
+   },
+   "scenarios": "render-motion,ui-tabs,ui-highlights,ui-resize",
+   "runs": [
+    {
+     "arm": "tui",
+     "index": 1,
+     "valid": true,
+     "seconds": 34.1,
+     "droppedDrawables": 173,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 42,
+      "footprintMB": 230.7,
+      "missedRefreshes": 58,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 14.1,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.6,
+       "p99": 4.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 25.7,
+      "footprintMB": 241.3,
+      "missedRefreshes": 139,
+      "switchToContentPresentedMs": {
+       "max": 69,
+       "p50": 51.5,
+       "p95": 69,
+       "p99": 69
+      },
+      "switchToFocusedMs": {
+       "max": 44.2,
+       "p50": 31.3,
+       "p95": 38.4,
+       "p99": 44.2
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 175,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 36.4,
+       "over8ms": 248,
+       "over16ms": 136,
+       "p50": 0,
+       "p95": 19.1,
+       "p99": 28.5
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       68.97333334200084,
+       49.996124929748476,
+       44.64358324185014,
+       51.62870837375522,
+       50.65629165619612,
+       53.076208336278796,
+       52.97112499829382,
+       51.96850001811981,
+       50.94712506979704,
+       65.80183329060674,
+       42.48112498316914,
+       51.47145828232169,
+       67.45120824780315,
+       44.09124993253499,
+       51.13266664557159,
+       51.7608750378713,
+       51.134541630744934,
+       43.78325003199279
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 28.4,
+      "footprintMB": 241,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 48.7,
+       "p50": 42.9,
+       "p95": 44.7,
+       "p99": 48.7
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.2,
+       "p99": 1.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 82.6,
+      "footprintMB": 272.9,
+      "missedRefreshes": 216,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 594.2,
+       "over8ms": 1101,
+       "over16ms": 774,
+       "p50": 8.5,
+       "p95": 380.8,
+       "p99": 552.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 2,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 44,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 36.4,
+      "footprintMB": 236.5,
+      "missedRefreshes": 32,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 13.9,
+       "over8ms": 4,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.9,
+       "p99": 4.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 22.7,
+      "footprintMB": 240.3,
+      "missedRefreshes": 134,
+      "switchToContentPresentedMs": {
+       "max": 59.2,
+       "p50": 46.5,
+       "p95": 59.2,
+       "p99": 59.2
+      },
+      "switchToFocusedMs": {
+       "max": 40,
+       "p50": 27.1,
+       "p95": 35.8,
+       "p99": 40
+      },
+      "contentIntervalMs": {
+       "max": 166.7,
+       "p50": 166.7,
+       "p95": 166.7,
+       "p99": 166.7
+      },
+      "mainThreadStallMs": {
+       "max": 35.4,
+       "over8ms": 183,
+       "over16ms": 85,
+       "p50": 0,
+       "p95": 14.1,
+       "p99": 27
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       58.03229159209877,
+       42.703958228230476,
+       41.3784165866673,
+       56.87766661867499,
+       47.71229159086943,
+       44.34345825575292,
+       53.68425010237843,
+       46.529541607014835,
+       43.188874959014356,
+       58.34195832721889,
+       47.204708331264555,
+       43.83179161231965,
+       59.18174993712455,
+       43.82650007028133,
+       44.49433332774788,
+       55.65045843832195,
+       38.16645825281739,
+       42.81979170627892
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 28,
+      "footprintMB": 240.1,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.8,
+       "p50": 26.7,
+       "p95": 29,
+       "p99": 32.8
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.1,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 0.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 81.8,
+      "footprintMB": 272,
+      "missedRefreshes": 207,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 37.5
+      },
+      "mainThreadStallMs": {
+       "max": 295.8,
+       "over8ms": 1107,
+       "over16ms": 763,
+       "p50": 9.3,
+       "p95": 159,
+       "p99": 254.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 3,
+     "valid": true,
+     "seconds": 34.6,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 36.6,
+      "footprintMB": 228,
+      "missedRefreshes": 24,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 13.9,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p99": 4.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 28.3,
+      "footprintMB": 238.3,
+      "missedRefreshes": 148,
+      "switchToContentPresentedMs": {
+       "max": 71.2,
+       "p50": 65.7,
+       "p95": 71.2,
+       "p99": 71.2
+      },
+      "switchToFocusedMs": {
+       "max": 50.2,
+       "p50": 30,
+       "p95": 42,
+       "p99": 50.2
+      },
+      "contentIntervalMs": {
+       "max": 191.7,
+       "p50": 183.3,
+       "p95": 191.7,
+       "p99": 191.7
+      },
+      "mainThreadStallMs": {
+       "max": 42,
+       "over8ms": 269,
+       "over16ms": 124,
+       "p99": 28.7
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 26.6,
+      "footprintMB": 238,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.8,
+       "p50": 26.9,
+       "p95": 28.2,
+       "p99": 32.8
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.7,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 0.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 91.6,
+      "footprintMB": 276.5,
+      "missedRefreshes": 406,
+      "contentIntervalMs": {
+       "max": 83.3,
+       "p50": 25,
+       "p95": 41.7,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 158,
+       "over8ms": 2083,
+       "over16ms": 1397,
+       "p99": 108.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 4,
+     "valid": true,
+     "seconds": 32.5,
+     "droppedDrawables": 34,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 36.5,
+      "footprintMB": 230.8,
+      "missedRefreshes": 28,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 12.6,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 3.1,
+       "p99": 4.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 22.3,
+      "footprintMB": 242.7,
+      "missedRefreshes": 134,
+      "switchToContentPresentedMs": {
+       "max": 60.1,
+       "p50": 47.9,
+       "p95": 60.1,
+       "p99": 60.1
+      },
+      "switchToFocusedMs": {
+       "max": 38.4,
+       "p50": 25.2,
+       "p95": 37.7,
+       "p99": 38.4
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 166.7,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 35.5,
+       "over8ms": 173,
+       "over16ms": 82,
+       "p50": 0,
+       "p95": 13.9,
+       "p99": 25.9
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       60.08479162119329,
+       42.75516665074974,
+       43.423624942079186,
+       54.57074998412281,
+       47.42404166609049,
+       44.069499941542745,
+       55.075625074096024,
+       47.89945832453668,
+       46.756125055253506,
+       55.689583299681544,
+       42.74620837531984,
+       41.40874999575317,
+       54.56870829220861,
+       47.40958334878087,
+       44.05550006777048,
+       53.05145832244307,
+       47.88237495813519,
+       50.88933324441314
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 29.3,
+      "footprintMB": 242.4,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 30.6,
+       "p50": 26.9,
+       "p95": 27.9,
+       "p99": 30.6
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.4,
+       "p99": 0.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 83.3,
+      "footprintMB": 273,
+      "missedRefreshes": 199,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 448.6,
+       "over8ms": 1095,
+       "over16ms": 716,
+       "p50": 9.2,
+       "p95": 240.2,
+       "p99": 408
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 5,
+     "valid": true,
+     "seconds": 36.2,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 35.3,
+      "footprintMB": 229.6,
+      "missedRefreshes": 20,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 7.4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 4.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 27.3,
+      "footprintMB": 240.1,
+      "missedRefreshes": 156,
+      "switchToContentPresentedMs": {
+       "max": 86.7,
+       "p50": 76.4,
+       "p95": 86.7,
+       "p99": 86.7
+      },
+      "switchToFocusedMs": {
+       "max": 44,
+       "p50": 31.9,
+       "p95": 36.9,
+       "p99": 44
+      },
+      "contentIntervalMs": {
+       "max": 200,
+       "p50": 191.7,
+       "p95": 200,
+       "p99": 200
+      },
+      "mainThreadStallMs": {
+       "max": 41.1,
+       "over8ms": 261,
+       "over16ms": 115,
+       "p99": 24.9
+      },
+      "presentationTimeouts": 1,
+      "failures": [
+       {
+        "index": 21,
+        "parsed": 25,
+        "presented": 23,
+        "requested": 25,
+        "stage": "presentation"
+       }
+      ],
+      "presentedSwitches": 17,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 24.4,
+      "footprintMB": 240,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 44.3,
+       "p50": 35.3,
+       "p95": 43.6,
+       "p99": 44.3
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 4.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 0.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 91.2,
+      "footprintMB": 274,
+      "missedRefreshes": 415,
+      "contentIntervalMs": {
+       "max": 83.3,
+       "p50": 25,
+       "p95": 33.3,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 163.6,
+       "over8ms": 1965,
+       "over16ms": 1296,
+       "p99": 114.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 6,
+     "valid": true,
+     "seconds": 32.5,
+     "droppedDrawables": 36,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 36.7,
+      "footprintMB": 229.1,
+      "missedRefreshes": 26,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 14,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.7,
+       "p99": 4.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 26.1,
+      "footprintMB": 239.7,
+      "missedRefreshes": 141,
+      "switchToContentPresentedMs": {
+       "max": 68,
+       "p50": 52.3,
+       "p95": 68,
+       "p99": 68
+      },
+      "switchToFocusedMs": {
+       "max": 41.1,
+       "p50": 32,
+       "p95": 37.9,
+       "p99": 41.1
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 175,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 38,
+       "over8ms": 266,
+       "over16ms": 152,
+       "p50": 0,
+       "p95": 20.1,
+       "p99": 29.6
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       44.28316676057875,
+       49.31895830668509,
+       52.32170829549432,
+       65.97025005612522,
+       50.9504999499768,
+       49.977125017903745,
+       67.967833369039,
+       50.96150003373623,
+       51.96829163469374,
+       60.885791666805744,
+       50.27274996973574,
+       53.30233334098011,
+       52.28108330629766,
+       51.28570843953639,
+       52.29220830369741,
+       62.058874987997115,
+       52.92758333962411,
+       51.947083324193954
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 26.6,
+      "footprintMB": 239.5,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.8,
+       "p50": 26.6,
+       "p95": 28.2,
+       "p99": 32.8
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 4.2,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.2,
+       "p99": 0.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 83.4,
+      "footprintMB": 280.2,
+      "missedRefreshes": 199,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 278.4,
+       "over8ms": 1097,
+       "over16ms": 745,
+       "p50": 9.3,
+       "p95": 153.3,
+       "p99": 239.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 7,
+     "valid": true,
+     "seconds": 36.6,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 35.8,
+      "footprintMB": 229.8,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 12.5,
+       "over8ms": 4,
+       "over16ms": 0,
+       "p99": 4.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 27.6,
+      "footprintMB": 240.2,
+      "missedRefreshes": 153,
+      "switchToContentPresentedMs": {
+       "max": 92.9,
+       "p50": 74.9,
+       "p95": 92.9,
+       "p99": 92.9
+      },
+      "switchToFocusedMs": {
+       "max": 55.7,
+       "p50": 32,
+       "p95": 41,
+       "p99": 55.7
+      },
+      "contentIntervalMs": {
+       "max": 200,
+       "p50": 191.7,
+       "p95": 200,
+       "p99": 200
+      },
+      "mainThreadStallMs": {
+       "max": 40.4,
+       "over8ms": 271,
+       "over16ms": 121,
+       "p99": 26.5
+      },
+      "presentationTimeouts": 1,
+      "failures": [
+       {
+        "index": 17,
+        "parsed": 21,
+        "presented": 19,
+        "requested": 21,
+        "stage": "presentation"
+       }
+      ],
+      "presentedSwitches": 17,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 28.3,
+      "footprintMB": 240,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 45.2,
+       "p50": 43,
+       "p95": 44.8,
+       "p99": 45.2
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 4.4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 0.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 91.6,
+      "footprintMB": 270.2,
+      "missedRefreshes": 398,
+      "contentIntervalMs": {
+       "max": 91.7,
+       "p50": 25,
+       "p95": 37.5,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 99.5,
+       "over8ms": 2002,
+       "over16ms": 1309,
+       "p99": 77.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 8,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 44,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 36.7,
+      "footprintMB": 230.8,
+      "missedRefreshes": 33,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 14.1,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.9,
+       "p99": 4.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 25.8,
+      "footprintMB": 241,
+      "missedRefreshes": 139,
+      "switchToContentPresentedMs": {
+       "max": 74.8,
+       "p50": 52.6,
+       "p95": 74.8,
+       "p99": 74.8
+      },
+      "switchToFocusedMs": {
+       "max": 41.9,
+       "p50": 32.2,
+       "p95": 34.7,
+       "p99": 41.9
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 175,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 38.8,
+       "over8ms": 261,
+       "over16ms": 146,
+       "p50": 0,
+       "p95": 19.7,
+       "p99": 29.3
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       74.83549998141825,
+       49.866999965161085,
+       50.9401666931808,
+       62.58475000504404,
+       51.587833324447274,
+       50.61045824550092,
+       74.2540416540578,
+       53.60120825935155,
+       52.592125022783875,
+       53.167666657827795,
+       52.60258330963552,
+       53.54883335530758,
+       52.554041729308665,
+       52.12391656823456,
+       50.582041731104255,
+       69.90645837504417,
+       51.22166662476957,
+       43.9004166983068
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27,
+      "footprintMB": 240.8,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.9,
+       "p50": 26.8,
+       "p95": 30.5,
+       "p99": 32.9
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.5,
+       "p99": 3.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 83.3,
+      "footprintMB": 272.7,
+      "missedRefreshes": 200,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 418.2,
+       "over8ms": 1060,
+       "over16ms": 659,
+       "p50": 8.4,
+       "p95": 210.8,
+       "p99": 376.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 9,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 27,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 36.4,
+      "footprintMB": 231.5,
+      "missedRefreshes": 15,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 10.8,
+       "over8ms": 2,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.6,
+       "p99": 4.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 22,
+      "footprintMB": 242.8,
+      "missedRefreshes": 133,
+      "switchToContentPresentedMs": {
+       "max": 57.3,
+       "p50": 49.8,
+       "p95": 57.3,
+       "p99": 57.3
+      },
+      "switchToFocusedMs": {
+       "max": 40.2,
+       "p50": 27.9,
+       "p95": 35.8,
+       "p99": 40.2
+      },
+      "contentIntervalMs": {
+       "max": 175,
+       "p50": 166.7,
+       "p95": 175,
+       "p99": 175
+      },
+      "mainThreadStallMs": {
+       "max": 37.7,
+       "over8ms": 180,
+       "over16ms": 82,
+       "p50": 0,
+       "p95": 14.2,
+       "p99": 25.7
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       53.49491664674133,
+       44.191958266310394,
+       36.52729163877666,
+       57.263083290308714,
+       52.6782083325088,
+       43.33462496288121,
+       51.978375064209104,
+       45.012749964371324,
+       43.65183331537992,
+       54.81487500946969,
+       49.82199997175485,
+       52.8525416739285,
+       55.95983343664557,
+       44.63745839893818,
+       43.32270834129304,
+       52.31808335520327,
+       42.97183337621391,
+       41.64429160300642
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 26.7,
+      "footprintMB": 242.6,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 31,
+       "p50": 26.7,
+       "p95": 28.3,
+       "p99": 31
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.2,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.2,
+       "p99": 0.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 82.8,
+      "footprintMB": 273,
+      "missedRefreshes": 201,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 37.5
+      },
+      "mainThreadStallMs": {
+       "max": 296.1,
+       "over8ms": 1033,
+       "over16ms": 628,
+       "p50": 7.9,
+       "p95": 84.9,
+       "p99": 254.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 10,
+     "valid": true,
+     "seconds": 33.5,
+     "droppedDrawables": 157,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.1,
+      "footprintMB": 229.1,
+      "missedRefreshes": 52,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 19.1,
+       "over8ms": 7,
+       "over16ms": 2,
+       "p50": 0,
+       "p95": 3.1,
+       "p99": 4.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 26.3,
+      "footprintMB": 239.7,
+      "missedRefreshes": 144,
+      "switchToContentPresentedMs": {
+       "max": 75.2,
+       "p50": 52.8,
+       "p95": 75.2,
+       "p99": 75.2
+      },
+      "switchToFocusedMs": {
+       "max": 41.8,
+       "p50": 31.9,
+       "p95": 37.4,
+       "p99": 41.8
+      },
+      "contentIntervalMs": {
+       "max": 183.3,
+       "p50": 175,
+       "p95": 183.3,
+       "p99": 183.3
+      },
+      "mainThreadStallMs": {
+       "max": 38.7,
+       "over8ms": 251,
+       "over16ms": 143,
+       "p50": 0,
+       "p95": 18.9,
+       "p99": 28.6
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       74.06504172831774,
+       51.52420839294791,
+       50.538958283141255,
+       61.90795835573226,
+       51.17225006688386,
+       52.19516658689827,
+       63.85399994906038,
+       50.84174999501556,
+       51.855416619218886,
+       52.82683332916349,
+       50.17612501978874,
+       50.663999980315566,
+       75.15904167667031,
+       50.15229166019708,
+       61.49679166264832,
+       52.82574996817857,
+       60.17187505494803,
+       58.95195831544697
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 26.7,
+      "footprintMB": 239.5,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 49.3,
+       "p50": 42.3,
+       "p95": 44.6,
+       "p99": 49.3
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 1.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 83.7,
+      "footprintMB": 275.8,
+      "missedRefreshes": 197,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 277.1,
+       "over8ms": 1063,
+       "over16ms": 676,
+       "p50": 8.5,
+       "p95": 128.7,
+       "p99": 237.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 11,
+     "valid": true,
+     "seconds": 33.9,
+     "droppedDrawables": 151,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.9,
+      "footprintMB": 230.6,
+      "missedRefreshes": 33,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 13.9,
+       "over8ms": 5,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 3,
+       "p99": 5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 23.3,
+      "footprintMB": 242.3,
+      "missedRefreshes": 148,
+      "switchToContentPresentedMs": {
+       "max": 73.9,
+       "p50": 60.6,
+       "p95": 73.9,
+       "p99": 73.9
+      },
+      "switchToFocusedMs": {
+       "max": 36.1,
+       "p50": 25.8,
+       "p95": 36,
+       "p99": 36.1
+      },
+      "contentIntervalMs": {
+       "max": 191.7,
+       "p50": 183.3,
+       "p95": 191.7,
+       "p99": 191.7
+      },
+      "mainThreadStallMs": {
+       "max": 33.7,
+       "over8ms": 193,
+       "over16ms": 87,
+       "p50": 0,
+       "p95": 12.5,
+       "p99": 25.2
+      },
+      "presentationTimeouts": 1,
+      "failures": [
+       {
+        "index": 5,
+        "parsed": 9,
+        "presented": 7,
+        "requested": 9,
+        "stage": "presentation"
+       }
+      ],
+      "presentedSwitches": 17,
+      "switchToContentPresentedSamplesMs": [
+       63.004375086165965,
+       60.309624997898936,
+       51.32666660938412,
+       59.8094166489318,
+       51.658416632562876,
+       61.29991670604795,
+       60.11945835780352,
+       59.95350005105138,
+       73.94375000149012,
+       61.29516661167145,
+       66.93441665265709,
+       72.93362496420741,
+       60.264583327807486,
+       69.90454171318561,
+       73.9245000295341,
+       59.259874979034066,
+       60.5818749172613
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 27.4,
+      "footprintMB": 242.1,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 32.9,
+       "p50": 26.9,
+       "p95": 32.8,
+       "p99": 32.9
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.5,
+       "p99": 1.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 80.6,
+      "footprintMB": 273,
+      "missedRefreshes": 210,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 433.4,
+       "over8ms": 1115,
+       "over16ms": 793,
+       "p50": 9.3,
+       "p95": 222.9,
+       "p99": 392.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 12,
+     "valid": true,
+     "seconds": 81.1,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.6,
+      "footprintMB": 229,
+      "missedRefreshes": 20,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 19.8,
+       "over8ms": 6,
+       "over16ms": 2,
+       "p99": 4.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 28.4,
+      "footprintMB": 239.3,
+      "missedRefreshes": 126,
+      "switchToContentPresentedMs": {
+       "max": 78.7,
+       "p50": 64.6,
+       "p95": 78.7,
+       "p99": 78.7
+      },
+      "switchToFocusedMs": {
+       "max": 51.8,
+       "p50": 31.2,
+       "p95": 43.6,
+       "p99": 51.8
+      },
+      "contentIntervalMs": {
+       "max": 191.7,
+       "p50": 183.3,
+       "p95": 191.7,
+       "p99": 191.7
+      },
+      "mainThreadStallMs": {
+       "max": 39.4,
+       "over8ms": 263,
+       "over16ms": 108,
+       "p99": 27.4
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 7.8,
+      "footprintMB": 259.3,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 64.7,
+       "p50": 52.1,
+       "p95": 64.7,
+       "p99": 64.7
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 41.7,
+       "over8ms": 13,
+       "over16ms": 4,
+       "p99": 1.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 4.7,
+      "footprintMB": 244.1,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 2.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 2.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "native",
+     "index": 13,
+     "valid": true,
+     "seconds": 33.7,
+     "droppedDrawables": 40,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 38.6,
+      "footprintMB": 231.4,
+      "missedRefreshes": 15,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 11.9,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.6,
+       "p99": 3.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 22.1,
+      "footprintMB": 272.1,
+      "missedRefreshes": 147,
+      "switchToContentPresentedMs": {
+       "max": 76.5,
+       "p50": 61.6,
+       "p95": 76.5,
+       "p99": 76.5
+      },
+      "switchToFocusedMs": {
+       "max": 37.1,
+       "p50": 17.3,
+       "p95": 34.7,
+       "p99": 37.1
+      },
+      "contentIntervalMs": {
+       "max": 183.3,
+       "p50": 183.3,
+       "p95": 183.3,
+       "p99": 183.3
+      },
+      "mainThreadStallMs": {
+       "max": 35.9,
+       "over8ms": 190,
+       "over16ms": 86,
+       "p50": 0,
+       "p95": 14,
+       "p99": 24.6
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       61.7648750776425,
+       61.54029176104814,
+       60.85004168562591,
+       58.18775005172938,
+       59.5446249935776,
+       60.85895840078592,
+       76.46400004159659,
+       66.5267501026392,
+       61.56133336480707,
+       61.12349999602884,
+       67.18529167119414,
+       60.52404164802283,
+       76.13449997734278,
+       68.17683333065361,
+       61.507000005804,
+       71.18520827498287,
+       66.81754172313958,
+       60.79329166095704
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 17.2,
+      "footprintMB": 271.9,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 45.8,
+       "p50": 43.8,
+       "p95": 44.9,
+       "p99": 45.8
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.2,
+       "p99": 1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 83.9,
+      "footprintMB": 274.8,
+      "missedRefreshes": 201,
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 37.5
+      },
+      "mainThreadStallMs": {
+       "max": 164.8,
+       "over8ms": 1030,
+       "over16ms": 637,
+       "p50": 7.8,
+       "p95": 74.2,
+       "p99": 124.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 14,
+     "valid": true,
+     "seconds": 35.9,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 36.6,
+      "footprintMB": 229,
+      "missedRefreshes": 17,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 9,
+       "over8ms": 1,
+       "over16ms": 0,
+       "p99": 3.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 28.3,
+      "footprintMB": 268.9,
+      "missedRefreshes": 159,
+      "switchToContentPresentedMs": {
+       "max": 89.4,
+       "p50": 76.7,
+       "p95": 89.4,
+       "p99": 89.4
+      },
+      "switchToFocusedMs": {
+       "max": 44,
+       "p50": 33.9,
+       "p95": 39.2,
+       "p99": 44
+      },
+      "contentIntervalMs": {
+       "max": 200,
+       "p50": 200,
+       "p95": 200,
+       "p99": 200
+      },
+      "mainThreadStallMs": {
+       "max": 41.4,
+       "over8ms": 283,
+       "over16ms": 142,
+       "p99": 29.4
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": null,
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 17.4,
+      "footprintMB": 268.6,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 49.3,
+       "p50": 44.3,
+       "p95": 49.2,
+       "p99": 49.3
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 4.5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 2.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 92.7,
+      "footprintMB": 275.6,
+      "missedRefreshes": 415,
+      "contentIntervalMs": {
+       "max": 83.3,
+       "p50": 25,
+       "p95": 33.3,
+       "p99": 45.8
+      },
+      "mainThreadStallMs": {
+       "max": 125,
+       "over8ms": 2051,
+       "over16ms": 1364,
+       "p99": 77.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 15,
+     "valid": true,
+     "seconds": 34.0,
+     "droppedDrawables": 116,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "render-motion": {
+      "cpuPercent": 37.2,
+      "footprintMB": 232,
+      "missedRefreshes": 23,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 11.4,
+       "over8ms": 2,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.6,
+       "p99": 3.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-tabs": {
+      "cpuPercent": 26.9,
+      "footprintMB": 271.9,
+      "missedRefreshes": 152,
+      "switchToContentPresentedMs": {
+       "max": 84.2,
+       "p50": 67.8,
+       "p95": 84.2,
+       "p99": 84.2
+      },
+      "switchToFocusedMs": {
+       "max": 37.2,
+       "p50": 33.9,
+       "p95": 37.1,
+       "p99": 37.2
+      },
+      "contentIntervalMs": {
+       "max": 191.7,
+       "p50": 183.3,
+       "p95": 191.7,
+       "p99": 191.7
+      },
+      "mainThreadStallMs": {
+       "max": 35,
+       "over8ms": 277,
+       "over16ms": 170,
+       "p50": 0,
+       "p95": 21,
+       "p99": 30.6
+      },
+      "presentationTimeouts": 0,
+      "failures": [],
+      "presentedSwitches": 18,
+      "switchToContentPresentedSamplesMs": [
+       81.84945839457214,
+       67.52958323340863,
+       60.85733324289322,
+       81.18049998302013,
+       58.53099992964417,
+       59.84054156579077,
+       82.20033335965127,
+       61.50258332490921,
+       58.83833335246891,
+       81.17787505034357,
+       68.83512495551258,
+       58.08504170272499,
+       82.50558329746127,
+       68.1480000494048,
+       67.81287502963096,
+       84.15879169479012,
+       67.82737502362579,
+       61.13966670818627
+      ],
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-highlights": {
+      "cpuPercent": 21.8,
+      "footprintMB": 271.7,
+      "missedRefreshes": 0,
+      "highlightToPresentedMs": {
+       "max": 49.5,
+       "p50": 44,
+       "p95": 45.4,
+       "p99": 49.5
+      },
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 3.7,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.1,
+       "p99": 0.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "ui-resize": {
+      "cpuPercent": 83.7,
+      "footprintMB": 275.2,
+      "missedRefreshes": 209,
+      "contentIntervalMs": {
+       "max": 66.7,
+       "p50": 16.7,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 248.5,
+       "over8ms": 1135,
+       "over16ms": 718,
+       "p50": 9.4,
+       "p95": 109.5,
+       "p99": 209.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     }
+    }
+   ]
+  },
+  {
+   "matrix": "matrix2b editor input/scroll (final candidate binary)",
+   "hashes": {
+    "b29": "a9ea61d2b6739ecdc88663a5cdf2f1834255459b07b86fe58b93418adefb3fd6",
+    "candidate": "dc1c26b2369805e92271382ee6ff376daec5d4b9494435d3331448cc80b01002"
+   },
+   "scenarios": "editor-open,editor-type,editor-cursor,editor-scroll,editor-flick",
+   "runs": [
+    {
+     "arm": "tui",
+     "index": 1,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 81,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 14.6,
+      "footprintMB": 239.4,
+      "missedRefreshes": 1,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 16.7,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 43.6,
+       "over8ms": 30,
+       "over16ms": 16,
+       "p50": 0,
+       "p95": 0.1,
+       "p99": 11.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 30.5,
+      "footprintMB": 211.9,
+      "missedRefreshes": 277,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 61.4,
+       "p50": 29.9,
+       "p95": 33.2,
+       "p99": 61.4
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 32.7,
+       "over8ms": 109,
+       "over16ms": 9,
+       "p50": 0,
+       "p95": 9.2,
+       "p99": 10.8
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 43.7,
+      "footprintMB": 218.7,
+      "missedRefreshes": 72,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 40.1,
+       "p50": 30,
+       "p95": 33.4,
+       "p99": 36.7
+      },
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 15.3,
+       "over8ms": 11,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 3.9,
+       "p99": 7.2
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.4,
+      "footprintMB": 219.8,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.7,
+       "p99": 4.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.02,
+       "positionErrorLinesP95": 0.018,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 28.6,
+      "footprintMB": 220,
+      "missedRefreshes": 37,
+      "contentIntervalMs": {
+       "max": 33.3,
+       "p50": 8.3,
+       "p95": 25,
+       "p99": 33.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.8,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.9,
+       "p99": 2.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 97,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 45,
+       "missedRefreshesWhileMoving": 24,
+       "positionErrorLinesMax": 0.776,
+       "positionErrorLinesP95": 0.585,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 8,
+       "velocityErrorP95": 86.4
+      }
+     }
+    },
+    {
+     "arm": "native",
+     "index": 2,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 41,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 13.8,
+      "footprintMB": 239.6,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 27.9,
+       "over8ms": 25,
+       "over16ms": 11,
+       "p50": 0,
+       "p95": 0.7,
+       "p99": 8.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 27.7,
+      "footprintMB": 212.4,
+      "missedRefreshes": 277,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 61.4,
+       "p50": 29.8,
+       "p95": 33.2,
+       "p99": 61.4
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 30.5,
+       "over8ms": 77,
+       "over16ms": 7,
+       "p50": 0,
+       "p95": 8,
+       "p99": 10.1
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 40.1,
+      "footprintMB": 218.8,
+      "missedRefreshes": 69,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 40.1,
+       "p50": 30,
+       "p95": 33.4,
+       "p99": 35
+      },
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 15.2,
+       "over8ms": 7,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.7,
+       "p99": 5
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 34.2,
+      "footprintMB": 219.4,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.5,
+       "p99": 4.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.006,
+       "positionErrorLinesP95": 0.006,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.3
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 27.8,
+      "footprintMB": 219.5,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 9.5,
+       "over8ms": 1,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1,
+       "p99": 3.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 41,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.073,
+       "positionErrorLinesP95": 0.055,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6.1
+      }
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 3,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 17.5,
+      "footprintMB": 240,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 50.9,
+       "over8ms": 42,
+       "over16ms": 20,
+       "p99": 13.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 35.8,
+      "footprintMB": 212.3,
+      "missedRefreshes": 276,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 75.6,
+       "p50": 29,
+       "p95": 32.4,
+       "p99": 75.6
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.1,
+       "over8ms": 201,
+       "over16ms": 2,
+       "p99": 13.5
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 44.5,
+      "footprintMB": 218.3,
+      "missedRefreshes": 89,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 50.9,
+       "p50": 30.9,
+       "p95": 35.9,
+       "p99": 40.9
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 20.9,
+       "over8ms": 45,
+       "over16ms": 3,
+       "p99": 9.9
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 34.5,
+      "footprintMB": 218.9,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6.4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 4.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.008,
+       "positionErrorLinesP95": 0.002,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.3
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 29.1,
+      "footprintMB": 219,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 6.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 2.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 34,
+       "missedRefreshesWhileMoving": 5,
+       "positionErrorLinesMax": 0.449,
+       "positionErrorLinesP95": 0.364,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 6.6
+      }
+     }
+    },
+    {
+     "arm": "native",
+     "index": 4,
+     "valid": true,
+     "seconds": 32.5,
+     "droppedDrawables": 14,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 15.2,
+      "footprintMB": 239.9,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 39.6,
+       "over8ms": 28,
+       "over16ms": 15,
+       "p50": 0,
+       "p95": 0.2,
+       "p99": 9.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 30.9,
+      "footprintMB": 214.7,
+      "missedRefreshes": 166,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 44.7,
+       "p50": 29.7,
+       "p95": 41.4,
+       "p99": 44.7
+      },
+      "contentIntervalMs": {
+       "max": 75,
+       "p50": 8.3,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 28.5,
+       "over8ms": 36,
+       "over16ms": 6,
+       "p50": 0,
+       "p95": 6.3,
+       "p99": 9.7
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 39.5,
+      "footprintMB": 221.5,
+      "missedRefreshes": 17,
+      "keyToDisplayMs": {
+       "count": 366,
+       "max": 40.9,
+       "p50": 29.2,
+       "p95": 32.6,
+       "p99": 34.2
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 10.5,
+       "over8ms": 2,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.5,
+       "p99": 3.2
+      },
+      "keyAnswered": 366,
+      "keyUnmatched": 0
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.4,
+      "footprintMB": 221.7,
+      "missedRefreshes": 10,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 7.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.3,
+       "p99": 4.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 301,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 28,
+       "missedRefreshesWhileMoving": 1,
+       "positionErrorLinesMax": 0.011,
+       "positionErrorLinesP95": 0.011,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 28,
+      "footprintMB": 221.6,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 3.8,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.7,
+       "p99": 2.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 39,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.057,
+       "positionErrorLinesP95": 0.053,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6.2
+      }
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 5,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 18.8,
+      "footprintMB": 209.7,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 45.6,
+       "over8ms": 33,
+       "over16ms": 16,
+       "p99": 10.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 35.9,
+      "footprintMB": 211.2,
+      "missedRefreshes": 278,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 55.2,
+       "p50": 29.5,
+       "p95": 32.9,
+       "p99": 55.2
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.1,
+       "over8ms": 197,
+       "over16ms": 2,
+       "p99": 12.8
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 40.9,
+      "footprintMB": 217,
+      "missedRefreshes": 93,
+      "keyToDisplayMs": {
+       "count": 331,
+       "max": 60.5,
+       "p50": 33.8,
+       "p95": 50.5,
+       "p99": 52.1
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 21.9,
+       "over8ms": 51,
+       "over16ms": 4,
+       "p99": 10.2
+      },
+      "keyAnswered": 331,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 28.6,
+      "footprintMB": 247.1,
+      "missedRefreshes": 13,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 10.3,
+       "over8ms": 2,
+       "over16ms": 0,
+       "p99": 4.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 299,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 36,
+       "missedRefreshesWhileMoving": 4,
+       "positionErrorLinesMax": 0.37,
+       "positionErrorLinesP95": 0.368,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 29.6,
+      "footprintMB": 218,
+      "missedRefreshes": 17,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 4.5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 3.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 114,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 34,
+       "missedRefreshesWhileMoving": 4,
+       "positionErrorLinesMax": 0.06,
+       "positionErrorLinesP95": 0.055,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 2,
+       "velocityErrorP95": 5.9
+      }
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 6,
+     "valid": true,
+     "seconds": 32.8,
+     "droppedDrawables": 12,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 15,
+      "footprintMB": 239.2,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 46.8,
+       "over8ms": 32,
+       "over16ms": 21,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 11.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 30.5,
+      "footprintMB": 211.9,
+      "missedRefreshes": 277,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 61.2,
+       "p50": 29.6,
+       "p95": 32.9,
+       "p99": 61.2
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 33.6,
+       "over8ms": 86,
+       "over16ms": 9,
+       "p50": 0,
+       "p95": 8.8,
+       "p99": 10.2
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 43.7,
+      "footprintMB": 218.1,
+      "missedRefreshes": 88,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 48.7,
+       "p50": 30.4,
+       "p95": 37.1,
+       "p99": 40.4
+      },
+      "contentIntervalMs": {
+       "max": 20.8,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 25.4,
+       "over8ms": 17,
+       "over16ms": 6,
+       "p50": 0,
+       "p95": 3.3,
+       "p99": 7.7
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 33,
+      "footprintMB": 219.4,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.5,
+       "p99": 4.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 301,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 33,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.331,
+       "positionErrorLinesP95": 0.33,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 28.7,
+      "footprintMB": 219.6,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 5.1,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.9,
+       "p99": 2.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.059,
+       "positionErrorLinesP95": 0.055,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6.1
+      }
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 7,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 15.2,
+      "footprintMB": 239.4,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 28.8,
+       "over8ms": 28,
+       "over16ms": 7,
+       "p99": 8.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 36,
+      "footprintMB": 211.9,
+      "missedRefreshes": 276,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 71.3,
+       "p50": 29.7,
+       "p95": 33,
+       "p99": 71.3
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.1,
+       "over8ms": 213,
+       "over16ms": 2,
+       "p99": 12.9
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 46.1,
+      "footprintMB": 217.4,
+      "missedRefreshes": 89,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 54.4,
+       "p50": 31,
+       "p95": 36.1,
+       "p99": 44.4
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 20.2,
+       "over8ms": 47,
+       "over16ms": 3,
+       "p99": 10.1
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 33,
+      "footprintMB": 218.2,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.8,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 3.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.025,
+       "positionErrorLinesP95": 0.022,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 29.3,
+      "footprintMB": 218.4,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 5.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 2.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.105,
+       "positionErrorLinesP95": 0.083,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6.4
+      }
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 8,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 9,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 7.7,
+      "footprintMB": 239.1,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 42.6,
+       "over8ms": 25,
+       "over16ms": 14,
+       "p50": 0,
+       "p95": 0,
+       "p99": 8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 30.4,
+      "footprintMB": 211.8,
+      "missedRefreshes": 278,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 59.1,
+       "p50": 30.8,
+       "p95": 34.2,
+       "p99": 59.1
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 30.6,
+       "over8ms": 96,
+       "over16ms": 7,
+       "p50": 0,
+       "p95": 8.6,
+       "p99": 10.5
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 43.9,
+      "footprintMB": 218.2,
+      "missedRefreshes": 89,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 45.1,
+       "p50": 30.1,
+       "p95": 36.8,
+       "p99": 40.1
+      },
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 23.5,
+       "over8ms": 17,
+       "over16ms": 4,
+       "p50": 0,
+       "p95": 3.2,
+       "p99": 7.9
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 33.3,
+      "footprintMB": 219.4,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.7,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.3,
+       "p99": 4.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.019,
+       "positionErrorLinesP95": 0.017,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 28.1,
+      "footprintMB": 219.7,
+      "missedRefreshes": 17,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 6.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.7,
+       "p99": 2.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 113,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 5,
+       "positionErrorLinesMax": 0.059,
+       "positionErrorLinesP95": 0.055,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 6.1
+      }
+     }
+    },
+    {
+     "arm": "native",
+     "index": 9,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 93,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 15.2,
+      "footprintMB": 239.4,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 45.8,
+       "over8ms": 29,
+       "over16ms": 19,
+       "p50": 0,
+       "p95": 0.2,
+       "p99": 11.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 28.7,
+      "footprintMB": 212.5,
+      "missedRefreshes": 277,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 63.1,
+       "p50": 29.9,
+       "p95": 33.2,
+       "p99": 63.1
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 31.1,
+       "over8ms": 83,
+       "over16ms": 8,
+       "p50": 0,
+       "p95": 8.3,
+       "p99": 9.9
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 43.5,
+      "footprintMB": 218.8,
+      "missedRefreshes": 81,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 51.7,
+       "p50": 43.4,
+       "p95": 50.1,
+       "p99": 50.1
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 21.6,
+       "over8ms": 10,
+       "over16ms": 3,
+       "p50": 0,
+       "p95": 1.4,
+       "p99": 5.3
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 32.9,
+      "footprintMB": 219.4,
+      "missedRefreshes": 8,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.2,
+       "p99": 4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 1,
+       "lagMs": 40,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.355,
+       "positionErrorLinesP95": 0.355,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.3
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 29.9,
+      "footprintMB": 219.4,
+      "missedRefreshes": 19,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 7.2,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.8,
+       "p99": 2.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 111,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 30,
+       "missedRefreshesWhileMoving": 7,
+       "positionErrorLinesMax": 0.115,
+       "positionErrorLinesP95": 0.089,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6.3
+      }
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 10,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 8,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 15.3,
+      "footprintMB": 238.9,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 29,
+       "over8ms": 26,
+       "over16ms": 11,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 8.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 29.9,
+      "footprintMB": 211.6,
+      "missedRefreshes": 277,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 64.1,
+       "p50": 29.2,
+       "p95": 32.6,
+       "p99": 64.1
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 33.6,
+       "over8ms": 95,
+       "over16ms": 9,
+       "p50": 0,
+       "p95": 8.6,
+       "p99": 10.7
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 44.5,
+      "footprintMB": 217.9,
+      "missedRefreshes": 88,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 52.8,
+       "p50": 30.3,
+       "p95": 36.9,
+       "p99": 40.3
+      },
+      "contentIntervalMs": {
+       "max": 29.2,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 25.8,
+       "over8ms": 17,
+       "over16ms": 6,
+       "p50": 0,
+       "p95": 3.4,
+       "p99": 7.8
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 34.1,
+      "footprintMB": 219,
+      "missedRefreshes": 8,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.5,
+       "p99": 4.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.024,
+       "positionErrorLinesP95": 0.024,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 28.5,
+      "footprintMB": 219.4,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 5.2,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.9,
+       "p99": 3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.105,
+       "positionErrorLinesP95": 0.085,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 6
+      }
+     }
+    },
+    {
+     "arm": "native",
+     "index": 11,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 9,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 14.6,
+      "footprintMB": 239.4,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 23.9,
+       "over8ms": 26,
+       "over16ms": 9,
+       "p50": 0,
+       "p95": 0.1,
+       "p99": 8.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 29.1,
+      "footprintMB": 212.1,
+      "missedRefreshes": 277,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 65.4,
+       "p50": 30.4,
+       "p95": 33.8,
+       "p99": 65.4
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 33,
+       "over8ms": 68,
+       "over16ms": 9,
+       "p50": 0,
+       "p95": 8,
+       "p99": 10.1
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 44,
+      "footprintMB": 218.6,
+      "missedRefreshes": 69,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 41.5,
+       "p50": 31.5,
+       "p95": 34.8,
+       "p99": 34.8
+      },
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 15.1,
+       "over8ms": 7,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.7,
+       "p99": 5
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.4,
+      "footprintMB": 219.3,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.2,
+       "p99": 3.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 28,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.01,
+       "positionErrorLinesP95": 0.01,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 29.8,
+      "footprintMB": 219.4,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 7.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1,
+       "p99": 2.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 111,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.326,
+       "positionErrorLinesP95": 0.251,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 6.8
+      }
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 12,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 14.8,
+      "footprintMB": 239.1,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 43.6,
+       "over8ms": 36,
+       "over16ms": 15,
+       "p99": 11.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 36.4,
+      "footprintMB": 211.6,
+      "missedRefreshes": 276,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 70.7,
+       "p50": 29.1,
+       "p95": 32.5,
+       "p99": 70.7
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 19.5,
+       "over8ms": 185,
+       "over16ms": 3,
+       "p99": 13.5
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 45.6,
+      "footprintMB": 217.2,
+      "missedRefreshes": 89,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 57.3,
+       "p50": 30.6,
+       "p95": 37.3,
+       "p99": 40.7
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 21.3,
+       "over8ms": 47,
+       "over16ms": 4,
+       "p99": 9.9
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.1,
+      "footprintMB": 218.1,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 4.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.005,
+       "positionErrorLinesP95": 0.002,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 27.1,
+      "footprintMB": 218.3,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 4.8,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 2.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 40,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.074,
+       "positionErrorLinesP95": 0.063,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6.4
+      }
+     }
+    }
+   ]
+  },
+  {
+   "matrix": "matrix2 editor input/scroll (6ba19d38\u2026; native key echo unmatched: bug fixed afterwards)",
+   "hashes": {
+    "b29": "a9ea61d2b6739ecdc88663a5cdf2f1834255459b07b86fe58b93418adefb3fd6",
+    "candidate": "6ba19d38504bbf16c3c4e8007368c09e1d1a20530ee16852f780178827affadd"
+   },
+   "scenarios": "editor-open,editor-type,editor-cursor,editor-scroll,editor-flick",
+   "runs": [
+    {
+     "arm": "tui",
+     "index": 1,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 121,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 19.3,
+      "footprintMB": 209.9,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 48,
+       "over8ms": 32,
+       "over16ms": 20,
+       "p50": 0,
+       "p95": 0.4,
+       "p99": 12.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 30.1,
+      "footprintMB": 211.8,
+      "missedRefreshes": 277,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 67.7,
+       "p50": 32.9,
+       "p95": 49.5,
+       "p99": 67.7
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 31.8,
+       "over8ms": 107,
+       "over16ms": 8,
+       "p50": 0,
+       "p95": 9.1,
+       "p99": 10.7
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 43.2,
+      "footprintMB": 218,
+      "missedRefreshes": 87,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 56.5,
+       "p50": 31.5,
+       "p95": 36.5,
+       "p99": 44.8
+      },
+      "contentIntervalMs": {
+       "max": 33.3,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 20.8
+      },
+      "mainThreadStallMs": {
+       "max": 25.3,
+       "over8ms": 17,
+       "over16ms": 5,
+       "p50": 0,
+       "p95": 3.1,
+       "p99": 7.8
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 34.1,
+      "footprintMB": 219.3,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6.2,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.4,
+       "p99": 4.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.02,
+       "positionErrorLinesP95": 0.017,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 27.4,
+      "footprintMB": 219.4,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 5.7,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.1,
+       "p99": 3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 40,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.114,
+       "positionErrorLinesP95": 0.091,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6.1
+      }
+     }
+    },
+    {
+     "arm": "native",
+     "index": 2,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 16,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 18.9,
+      "footprintMB": 210.3,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 41.2,
+       "over8ms": 29,
+       "over16ms": 17,
+       "p50": 0,
+       "p95": 0.9,
+       "p99": 11.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 29.6,
+      "footprintMB": 212.3,
+      "missedRefreshes": 279,
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 29.3,
+       "over8ms": 86,
+       "over16ms": 7,
+       "p50": 0,
+       "p95": 8.4,
+       "p99": 10.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 62
+     },
+     "editor-cursor": {
+      "cpuPercent": 41.6,
+      "footprintMB": 218.8,
+      "missedRefreshes": 68,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 14.9,
+       "over8ms": 6,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.1,
+       "p99": 4.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 349
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.3,
+      "footprintMB": 219.3,
+      "missedRefreshes": 8,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.5,
+       "p99": 4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 31,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.014,
+       "positionErrorLinesP95": 0.009,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.3
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 29.6,
+      "footprintMB": 219.5,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.1,
+       "p99": 3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 36,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.089,
+       "positionErrorLinesP95": 0.055,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 5.8
+      }
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 3,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 22.9,
+      "footprintMB": 209.9,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 66.6,
+       "over8ms": 45,
+       "over16ms": 26,
+       "p99": 16.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 36,
+      "footprintMB": 211.3,
+      "missedRefreshes": 278,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 54.9,
+       "p50": 29.2,
+       "p95": 32.5,
+       "p99": 54.9
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.6,
+       "over8ms": 200,
+       "over16ms": 2,
+       "p99": 13.4
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 45.6,
+      "footprintMB": 217,
+      "missedRefreshes": 89,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 50.3,
+       "p50": 30.3,
+       "p95": 35.3,
+       "p99": 40.3
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 19.2,
+       "over8ms": 45,
+       "over16ms": 2,
+       "p99": 10
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.4,
+      "footprintMB": 217.8,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6.5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 4.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.017,
+       "positionErrorLinesP95": 0.016,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 26.9,
+      "footprintMB": 218,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 5.4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 3.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 113,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 36,
+       "missedRefreshesWhileMoving": 5,
+       "positionErrorLinesMax": 0.136,
+       "positionErrorLinesP95": 0.088,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 5.9
+      }
+     }
+    },
+    {
+     "arm": "native",
+     "index": 4,
+     "valid": true,
+     "seconds": 32.5,
+     "droppedDrawables": 15,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 18.5,
+      "footprintMB": 210.2,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 40,
+       "over8ms": 25,
+       "over16ms": 12,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 8.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 29,
+      "footprintMB": 212.4,
+      "missedRefreshes": 279,
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 29.5,
+       "over8ms": 78,
+       "over16ms": 7,
+       "p50": 0,
+       "p95": 8.2,
+       "p99": 10.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 62
+     },
+     "editor-cursor": {
+      "cpuPercent": 41.5,
+      "footprintMB": 218.6,
+      "missedRefreshes": 69,
+      "contentIntervalMs": {
+       "max": 16.7,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 12.2,
+       "over8ms": 3,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.6,
+       "p99": 4.3
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 350
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.3,
+      "footprintMB": 219.3,
+      "missedRefreshes": 8,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.3,
+       "p99": 4.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 39,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.011,
+       "positionErrorLinesP95": 0.01,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.3
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 29,
+      "footprintMB": 219.3,
+      "missedRefreshes": 19,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 6.2,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.9,
+       "p99": 3.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 27,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.06,
+       "positionErrorLinesP95": 0.056,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 6
+      }
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 5,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 20.4,
+      "footprintMB": 210,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 29,
+       "over8ms": 33,
+       "over16ms": 9,
+       "p99": 10.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 35.7,
+      "footprintMB": 211.6,
+      "missedRefreshes": 278,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 58.4,
+       "p50": 30.3,
+       "p95": 33.6,
+       "p99": 58.4
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 20,
+       "over8ms": 210,
+       "over16ms": 4,
+       "p99": 13.3
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 43.9,
+      "footprintMB": 246.5,
+      "missedRefreshes": 90,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 51.4,
+       "p50": 31.4,
+       "p95": 48.1,
+       "p99": 51.4
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 12.7,
+       "over8ms": 53,
+       "over16ms": 0,
+       "p99": 10.2
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 31,
+      "footprintMB": 218,
+      "missedRefreshes": 10,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 6.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 4.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 300,
+       "idealLines": 0,
+       "jumpFrames": 1,
+       "lagMs": 39,
+       "missedRefreshesWhileMoving": 1,
+       "positionErrorLinesMax": 0.194,
+       "positionErrorLinesP95": 0.192,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.1
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 28.5,
+      "footprintMB": 218.2,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 7.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 3.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 111,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 36,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.514,
+       "positionErrorLinesP95": 0.465,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 7.1
+      }
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 6,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 8,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 16.2,
+      "footprintMB": 210.4,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 46.9,
+       "over8ms": 32,
+       "over16ms": 17,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 11.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 30.9,
+      "footprintMB": 212,
+      "missedRefreshes": 279,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 44.9,
+       "p50": 30,
+       "p95": 33.4,
+       "p99": 44.9
+      },
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 32.7,
+       "over8ms": 112,
+       "over16ms": 9,
+       "p50": 0,
+       "p95": 9,
+       "p99": 11
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 42.8,
+      "footprintMB": 218.4,
+      "missedRefreshes": 82,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 42.4,
+       "p50": 31.6,
+       "p95": 36.6,
+       "p99": 41.6
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 16.7,
+       "over8ms": 10,
+       "over16ms": 1,
+       "p50": 0,
+       "p95": 3.1,
+       "p99": 7.4
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.7,
+      "footprintMB": 219.6,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.6,
+       "p99": 4.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.008,
+       "positionErrorLinesP95": 0.005,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 25.4,
+      "footprintMB": 219.8,
+      "missedRefreshes": 19,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 6.2,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.2,
+       "p99": 2.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 111,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 7,
+       "positionErrorLinesMax": 0.079,
+       "positionErrorLinesP95": 0.067,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 5.6
+      }
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 7,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 19.1,
+      "footprintMB": 210.4,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 46.6,
+       "over8ms": 40,
+       "over16ms": 22,
+       "p99": 12.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 35.6,
+      "footprintMB": 212,
+      "missedRefreshes": 278,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 55.6,
+       "p50": 29.9,
+       "p95": 33.3,
+       "p99": 55.6
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.7,
+       "over8ms": 207,
+       "over16ms": 3,
+       "p99": 13.6
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 44,
+      "footprintMB": 217.6,
+      "missedRefreshes": 90,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 52.3,
+       "p50": 30.7,
+       "p95": 37.4,
+       "p99": 42.3
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 20.4,
+       "over8ms": 47,
+       "over16ms": 2,
+       "p99": 10.1
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 35.4,
+      "footprintMB": 218.5,
+      "missedRefreshes": 8,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.7,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 4.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 40,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.025,
+       "positionErrorLinesP95": 0.025,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 27.3,
+      "footprintMB": 218.7,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 5.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 2.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 39,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.092,
+       "positionErrorLinesP95": 0.074,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6
+      }
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 8,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 8,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 20.3,
+      "footprintMB": 210.3,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 48.4,
+       "over8ms": 34,
+       "over16ms": 22,
+       "p50": 0,
+       "p95": 0.4,
+       "p99": 13.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 30.3,
+      "footprintMB": 212,
+      "missedRefreshes": 280,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 40.5,
+       "p50": 28.9,
+       "p95": 32.3,
+       "p99": 40.5
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 14.7,
+       "over8ms": 101,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 8.7,
+       "p99": 10.6
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 42.2,
+      "footprintMB": 218.2,
+      "missedRefreshes": 90,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 58,
+       "p50": 31.3,
+       "p95": 38,
+       "p99": 41.3
+      },
+      "contentIntervalMs": {
+       "max": 33.3,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.9,
+       "over8ms": 14,
+       "over16ms": 2,
+       "p50": 0,
+       "p95": 3.2,
+       "p99": 7.8
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 34,
+      "footprintMB": 219.5,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.7,
+       "p99": 4.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 34,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.018,
+       "positionErrorLinesP95": 0.014,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 28.6,
+      "footprintMB": 219.8,
+      "missedRefreshes": 17,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 7.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.9,
+       "p99": 2.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 34,
+       "missedRefreshesWhileMoving": 5,
+       "positionErrorLinesMax": 0.517,
+       "positionErrorLinesP95": 0.451,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 2,
+       "velocityErrorP95": 7.1
+      }
+     }
+    },
+    {
+     "arm": "native",
+     "index": 9,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 17,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 18.4,
+      "footprintMB": 210.4,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 38.8,
+       "over8ms": 26,
+       "over16ms": 16,
+       "p50": 0,
+       "p95": 0.3,
+       "p99": 8.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 28.9,
+      "footprintMB": 212.3,
+      "missedRefreshes": 279,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 28.7,
+       "over8ms": 83,
+       "over16ms": 7,
+       "p50": 0,
+       "p95": 8,
+       "p99": 9.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 62
+     },
+     "editor-cursor": {
+      "cpuPercent": 44.4,
+      "footprintMB": 218.6,
+      "missedRefreshes": 70,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 23.7,
+       "over8ms": 10,
+       "over16ms": 4,
+       "p50": 0,
+       "p95": 1.6,
+       "p99": 5.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 350
+     },
+     "editor-scroll": {
+      "cpuPercent": 34.9,
+      "footprintMB": 219.3,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.9,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.6,
+       "p99": 4.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 37,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.016,
+       "positionErrorLinesP95": 0.015,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 27.9,
+      "footprintMB": 219.3,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 8.8,
+       "over8ms": 1,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.1,
+       "p99": 2.9
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 111,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.567,
+       "positionErrorLinesP95": 0.45,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 1,
+       "velocityErrorP95": 7.1
+      }
+     }
+    },
+    {
+     "arm": "tui",
+     "index": 10,
+     "valid": true,
+     "seconds": 32.7,
+     "droppedDrawables": 12,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 19,
+      "footprintMB": 209.7,
+      "missedRefreshes": 2,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 25,
+       "p95": 25,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 49.1,
+       "over8ms": 32,
+       "over16ms": 19,
+       "p50": 0,
+       "p95": 1.3,
+       "p99": 12.4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 30,
+      "footprintMB": 211.6,
+      "missedRefreshes": 279,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 46.2,
+       "p50": 29.7,
+       "p95": 33.1,
+       "p99": 46.2
+      },
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 50
+      },
+      "mainThreadStallMs": {
+       "max": 32,
+       "over8ms": 88,
+       "over16ms": 8,
+       "p50": 0,
+       "p95": 8.4,
+       "p99": 10.3
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 44.8,
+      "footprintMB": 217.7,
+      "missedRefreshes": 90,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 48.7,
+       "p50": 30.3,
+       "p95": 35.4,
+       "p99": 38.7
+      },
+      "contentIntervalMs": {
+       "max": 33.3,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.1,
+       "over8ms": 13,
+       "over16ms": 1,
+       "p50": 0,
+       "p95": 3.2,
+       "p99": 7.9
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 16
+     },
+     "editor-scroll": {
+      "cpuPercent": 36.7,
+      "footprintMB": 219.1,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.4,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.6,
+       "p99": 4.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.004,
+       "positionErrorLinesP95": 0.003,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 27,
+      "footprintMB": 219.3,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 6.5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1,
+       "p99": 2.6
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 40,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.058,
+       "positionErrorLinesP95": 0.054,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 5.9
+      }
+     }
+    },
+    {
+     "arm": "native",
+     "index": 11,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": 14,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 18.9,
+      "footprintMB": 210.5,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 41,
+       "over8ms": 27,
+       "over16ms": 17,
+       "p50": 0,
+       "p95": 0.5,
+       "p99": 9.2
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 28.7,
+      "footprintMB": 212.5,
+      "missedRefreshes": 279,
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 29,
+       "over8ms": 68,
+       "over16ms": 7,
+       "p50": 0,
+       "p95": 8.1,
+       "p99": 10
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 62
+     },
+     "editor-cursor": {
+      "cpuPercent": 43.5,
+      "footprintMB": 218.7,
+      "missedRefreshes": 72,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 15.9,
+       "over8ms": 6,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 1.5,
+       "p99": 4.7
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 349
+     },
+     "editor-scroll": {
+      "cpuPercent": 30.8,
+      "footprintMB": 219.5,
+      "missedRefreshes": 8,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.3,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 2.1,
+       "p99": 4.1
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 40,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.015,
+       "positionErrorLinesP95": 0.014,
+       "receivedLines": 0,
+       "settleLines": 0.375,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 29.5,
+      "footprintMB": 219.6,
+      "missedRefreshes": 17,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 7.6,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p50": 0,
+       "p95": 0.9,
+       "p99": 2.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 36,
+       "missedRefreshesWhileMoving": 5,
+       "positionErrorLinesMax": 0.44,
+       "positionErrorLinesP95": 0.372,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 2,
+       "velocityErrorP95": 6.9
+      }
+     }
+    },
+    {
+     "arm": "b29",
+     "index": 12,
+     "valid": true,
+     "seconds": 32.6,
+     "droppedDrawables": null,
+     "editorGrid": "156x58",
+     "shellGrid": "155x59",
+     "editor-open": {
+      "cpuPercent": 23.9,
+      "footprintMB": 209.8,
+      "missedRefreshes": 0,
+      "contentIntervalMs": {
+       "max": 0,
+       "p50": 0,
+       "p95": 0,
+       "p99": 0
+      },
+      "mainThreadStallMs": {
+       "max": 67.2,
+       "over8ms": 46,
+       "over16ms": 30,
+       "p99": 20.8
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0
+     },
+     "editor-type": {
+      "cpuPercent": 35.3,
+      "footprintMB": 211.5,
+      "missedRefreshes": 278,
+      "keyToDisplayMs": {
+       "count": 75,
+       "max": 53.6,
+       "p50": 30.4,
+       "p95": 33.7,
+       "p99": 53.6
+      },
+      "contentIntervalMs": {
+       "max": 41.7,
+       "p50": 41.7,
+       "p95": 41.7,
+       "p99": 41.7
+      },
+      "mainThreadStallMs": {
+       "max": 18.7,
+       "over8ms": 191,
+       "over16ms": 3,
+       "p99": 12.9
+      },
+      "keyAnswered": 75,
+      "keyUnmatched": 0
+     },
+     "editor-cursor": {
+      "cpuPercent": 47.5,
+      "footprintMB": 217,
+      "missedRefreshes": 89,
+      "keyToDisplayMs": {
+       "count": 334,
+       "max": 50.5,
+       "p50": 30.5,
+       "p95": 37.1,
+       "p99": 40.5
+      },
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 16.7
+      },
+      "mainThreadStallMs": {
+       "max": 18,
+       "over8ms": 46,
+       "over16ms": 1,
+       "p99": 9.9
+      },
+      "keyAnswered": 334,
+      "keyUnmatched": 15
+     },
+     "editor-scroll": {
+      "cpuPercent": 34,
+      "footprintMB": 218,
+      "missedRefreshes": 9,
+      "contentIntervalMs": {
+       "max": 50,
+       "p50": 8.3,
+       "p95": 8.3,
+       "p99": 8.3
+      },
+      "mainThreadStallMs": {
+       "max": 5.8,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 4
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": 0,
+       "frames": 302,
+       "idealLines": 0,
+       "jumpFrames": 0,
+       "lagMs": 38,
+       "missedRefreshesWhileMoving": 0,
+       "positionErrorLinesMax": 0.006,
+       "positionErrorLinesP95": 0.002,
+       "receivedLines": 0,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 0.2
+      }
+     },
+     "editor-flick": {
+      "cpuPercent": 28.6,
+      "footprintMB": 218.3,
+      "missedRefreshes": 18,
+      "contentIntervalMs": {
+       "max": 25,
+       "p50": 8.3,
+       "p95": 16.7,
+       "p99": 25
+      },
+      "mainThreadStallMs": {
+       "max": 5.5,
+       "over8ms": 0,
+       "over16ms": 0,
+       "p99": 3.5
+      },
+      "keyAnswered": 0,
+      "keyUnmatched": 0,
+      "scroll": {
+       "drawnLines": -41,
+       "frames": 112,
+       "idealLines": -41.018,
+       "jumpFrames": 0,
+       "lagMs": 41,
+       "missedRefreshesWhileMoving": 6,
+       "positionErrorLinesMax": 0.06,
+       "positionErrorLinesP95": 0.055,
+       "receivedLines": -41,
+       "settleLines": 0,
+       "settleMs": 0,
+       "settleReversal": 0,
+       "stallFrames": 0,
+       "velocityErrorP95": 6.1
+      }
+     }
+    }
+   ]
+  }
+ ]
+}
