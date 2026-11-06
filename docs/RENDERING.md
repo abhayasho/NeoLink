@@ -6,6 +6,22 @@
 
 [Build 26 explorer and tab interaction changes, measurements and limits](INTERACTIONS.md). Highlight composition now retains the text strip independently; historical whole-strip invalidation descriptions below apply to their original builds.
 
+## Scroll resampling (display-rate trackpad motion)
+
+`SmoothScrollDriver` used to draw each trackpad event's distance the moment it arrived and nothing in between. Input slower than the display (a slowly moving finger reports about 60 Hz; arrival times also jitter) therefore repeated frames every other refresh on a 120 Hz display. `ScrollResampler` keeps the recent history of the accumulated input and, on every display frame of the shared NeoGPU clock, draws the position it had `delay` seconds earlier by linear interpolation. For input slower than 1.5 display frames the delay is one input interval plus 6 ms; for input at the display's rate it is half an interval plus 2 ms. It is capped at 30 ms, never draws ahead of the fingers, never overshoots, and drops input the content had no room for (an end of the buffer) so reversing does not jump. It applies to program scrolling (the editor) and to local scrollback; the animation stops when the remainder has been drawn, so no extra clock or timer is introduced.
+
+Same-binary-source A/B, release, native full screen, unlocked, native editor client, 5 alternating rounds of synthetic scroll events (not a trackpad). Per-run values in run order:
+
+| Scenario / metric | Before | After |
+| --- | --- | --- |
+| `editor-slow`: refreshes skipped while the finger moved at least one device pixel per refresh | 86 / 92 / 91 / 86 / 82 | **0 / 0 / 0 / 27 / 1** |
+| `editor-slow`: best-fit input-to-display lag (ms) | 38 / 38 / 41 / 36 / 35 | 53 / 54 / 58 / 62 / 54 |
+| `editor-flick` (120 Hz input): stall frames | 1 / 0 / 1 / 2 / 2 | 0 / 0 / 0 / 0 / 0 |
+| `editor-flick`: lag (ms) | 38 / 31 / 37 / 34 / 34 | 41 / 40 / 40 / 49 / 40 |
+| `terminal-scroll` (scrollback): lag (ms) | 46 / 40 / 26 / 39 / 41 | 32 / 33 / 32 / 33 / 36 |
+
+The slow-scroll gap is the intended effect: content now moves on (almost) every refresh instead of every other one. The cost is about 15 ms more input-to-display latency for slow 60 Hz input and 3–6 ms for 120 Hz input. The harness's per-frame velocity error against its input timeline is higher after the change for flicks (about 8–12 vs 6 lines/s, with one 40 lines/s outlier run with 3 jump frames) and reversals (4–15 vs 0.2 lines/s) because the drawn motion is a delayed, interpolated copy of the input, which the benchmark scores against the raw trajectory. The unmodified baseline also has outlier runs (a 28-jump `terminal-scroll` run and an 8.8 lines/s `editor-reversal` run). Whether this feels smoother on a real trackpad, and how it feels at the start and end of a gesture, is not established by these runs.
+
 ## Continuous workspace refresh (1.11.1, build 25)
 
 The saved **View → Continuous High Refresh** preference defaults on. Shared coding panes reuse their retained textures and submit once per owning CAMetalDisplayLink deadline, up to the display rate capped at 120 Hz, even between content changes. There is no additional timer, independent animation phase, synchronous GPU wait or unbounded frame queue. Hidden/minimized windows pause. Turning the preference off restores demand-driven operation; native panels and macOS 13 retain their existing paths. This increases idle GPU work and does not force the panel’s physical refresh or guarantee no missed frames.
