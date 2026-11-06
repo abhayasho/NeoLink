@@ -63,7 +63,7 @@ final class NativeGridPresenter {
         flushIfAllowed()
     }
 
-    private func apply(_ item: GridItem) {
+    private func apply(_ item: NativeGridItem) {
         switch item {
         case .frame(let frame): absorb(frame)
         case .selection(let token, let path): acknowledge(token: token, path: path)

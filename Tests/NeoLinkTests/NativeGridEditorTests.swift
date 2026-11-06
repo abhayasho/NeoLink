@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import NeoLink
 
@@ -9,7 +10,7 @@ final class NativeNvim {
     let client: NeovimGridClient
     let control: EditorControlChannel
     var image = GridImage(cols: 1, rows: 1)
-    var items: [GridItem] = []
+    var items: [NativeGridItem] = []
     var selections: [(token: UInt64, path: String, screen: [String])] = []
     var leaves: [(path: String, mode: String, popup: Bool, screen: [String])] = []
     var touches: [String] = []
@@ -165,12 +166,84 @@ final class NativeGridEditorTests: XCTestCase {
         XCTAssertTrue(ok162)
         nvim.touches.removeAll()
         // Edit the inactive buffer behind the editor's back (an LSP workspace edit does exactly this).
-        let result = try await nvim.dispatch(["method": "action", "action": "format"])
-        _ = result
-        let command = "NeoLink.dispatch"; _ = command
-        let edit = try await nvim.client_exec("vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 0, 1, false, {'changed'})", [a])
-        _ = edit
+        _ = try await nvim.client_exec("vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 0, 1, false, {'changed'})", [a])
         let ok171 = await nvim.wait { nvim.touches.contains(a) }
         XCTAssertTrue(ok171, "an inactive buffer's edit must reach the host: \(nvim.touches)")
+    }
+
+    @MainActor
+    func testNativeSessionSwitchesBuffersEditsSavesAndReusesValidatedImages() async throws {
+        guard CommandRunner.executable("nvim") != nil else { throw XCTSkip("Neovim is optional") }
+        _ = NSApplication.shared
+        setenv("NEOLINK_NATIVE_GRID", "1", 1)
+        defer { unsetenv("NEOLINK_NATIVE_GRID") }
+        let (root, urls) = try files(["a.txt": "ALPHA line one\nsecond\n", "b.txt": "BRAVO line one\nsecond\n"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let controller = TabsController()
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: TabbedTerminalView(controller: controller))
+        defer { controller.codeSession.shutdown(); controller.tabs.compactMap(\.terminal).forEach { $0.state.close() }; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        controller.openFile(urls["a.txt"]!)
+        let first = try XCTUnwrap(controller.selectedTabID)
+        try await settleEditor(controller)
+        controller.openFile(urls["b.txt"]!)
+        let second = try XCTUnwrap(controller.selectedTabID)
+        try await settleEditor(controller)
+        let session = controller.codeSession
+        XCTAssertTrue(session.usesNativeGrid, "native client active: \(session.nativeFallbackReason ?? "no fallback")")
+        let terminal = try XCTUnwrap(session.terminal)
+        XCTAssertFalse(terminal.process.running, "No PTY process exists in native mode")
+        func screen() -> String { (0..<terminal.getTerminal().rows).map { terminal.getTerminal().externalGridRowText($0) }.joined(separator: "\n") }
+        for round in 0..<14 {
+            let (target, marker, other) = round % 2 == 0 ? (first, "ALPHA", "BRAVO") : (second, "BRAVO", "ALPHA")
+            controller.selectedTabID = target
+            try await settleEditor(controller)
+            XCTAssertEqual(session.parsedSelection, session.selectionToken)
+            XCTAssertTrue(screen().contains(marker), "round \(round)\n\(screen())")
+            XCTAssertFalse(screen().contains(other), "round \(round) shows the other buffer\n\(screen())")
+        }
+        let presenter = try XCTUnwrap(session.nativeGrid)
+        XCTAssertGreaterThan(presenter.speculations, 0, "switch-backs reuse validated images: \(presenter.speculationRejections)")
+        // After the confirmation the terminal equals Neovim's own screen, whichever path showed it.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        presenter.drain()
+        XCTAssertEqual(presenter.phase, .live)
+        let mirrorText = presenter.mirror.rows.map { $0.map(\.text).joined().trimmingCharacters(in: .whitespaces) }
+        let shownText = (0..<terminal.getTerminal().rows).map { terminal.getTerminal().externalGridRowText($0).trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(shownText, mirrorText)
+        // Typing reaches the active buffer and only that buffer; saving writes it.
+        controller.selectedTabID = first
+        try await settleEditor(controller)
+        terminal.send(txt: "typed<in>")
+        try await settleEditor(controller) { controller.selectedTab?.document?.isModified == true && screen().contains("typed<in>") }
+        let saved = await session.save(urls["a.txt"]!)
+        XCTAssertTrue(saved)
+        XCTAssertTrue(try String(contentsOf: urls["a.txt"]!).hasPrefix("typed<in>ALPHA"))
+        XCTAssertEqual(try String(contentsOf: urls["b.txt"]!), "BRAVO line one\nsecond\n")
+        // A change on disk invalidates the cached image: returning must show the new contents.
+        controller.selectedTabID = second
+        try await settleEditor(controller)
+        try Data("BRAVO rewritten by an agent\n".utf8).write(to: urls["b.txt"]!)
+        controller.selectedTabID = first
+        try await settleEditor(controller)
+        controller.selectedTabID = second
+        try await settleEditor(controller) { controller.selectedTabID == second && session.requestedPath == nil && screen().contains("rewritten by an agent") }
+        XCTAssertTrue(screen().contains("rewritten by an agent"), screen())
+        XCTAssertNil(session.error)
+    }
+
+    @MainActor
+    private func settleEditor(_ controller: TabsController, extra: () -> Bool = { true }) async throws {
+        let deadline = Date().addingTimeInterval(8)
+        func ready() -> Bool {
+            controller.codeSession.requestedPath == nil && controller.codeSession.terminal?.isHidden == false
+                && controller.tabs.compactMap(\.document).allSatisfy { !$0.isLoading } && controller.codeSession.isReady
+                && controller.codeSession.nativeGrid?.phase != .some(.speculative(token: controller.codeSession.selectionToken)) && extra()
+        }
+        while !ready(), Date() < deadline { try await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertTrue(ready(), "Editor did not settle")
+        try await Task.sleep(nanoseconds: 40_000_000)
     }
 }

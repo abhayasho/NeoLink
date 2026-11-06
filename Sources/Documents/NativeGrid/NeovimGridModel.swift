@@ -37,7 +37,8 @@ struct GridHighlight: Equatable, Sendable {
 struct GridDefaults: Equatable, Sendable {
     var foreground: UInt32 = 0xd8d8d8
     var background: UInt32 = 0x181818
-    var special: UInt32 = 0xff0000
+    /// nil when Neovim sends -1: underlines then follow the cell's foreground.
+    var special: UInt32?
 }
 
 enum GridCursorShape: Equatable, Sendable { case block, horizontal, vertical }
@@ -259,7 +260,7 @@ final class NeovimGridModel {
         var next = defaults
         if let value = a[0].uint32Value { next.foreground = value & 0xffffff }
         if let value = a[1].uint32Value { next.background = value & 0xffffff }
-        if let value = a[2].uint32Value { next.special = value & 0xffffff }
+        next.special = a[2].uint32Value.map { $0 & 0xffffff }
         if next != defaults { defaults = next; styleEpoch += 1 }
         defaultsChanged = true; hasChanges = true
     }
