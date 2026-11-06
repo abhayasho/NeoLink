@@ -30,7 +30,11 @@ final class NativeGridPresenter {
     private var modeInfos: [GridModeInfo] = []
     private var modeIndex = 0
     private var busy = false
-    private(set) var cache = GridSnapshotCache()
+    private(set) var cache = GridSnapshotCache() { didSet { retainCachedRows() } }
+    /// Rows displaced by a speculative install: they still show the previous buffer's image, which the
+    /// editor reports (`neolink_leave`) a moment later, and then become that buffer's cached rows.
+    private var parked: (lines: [BufferLine], image: GridImage?)?
+    private(set) var geometryReuses = 0
     private var diagnosticsEnabled = true
     private var queuedInput: [String] = []
     private var queuedInputBytes = 0
@@ -104,14 +108,29 @@ final class NativeGridPresenter {
 
     private func recordLeave(path: String, mode: String, popupVisible: Bool, diagnostics: Bool) {
         diagnosticsEnabled = diagnostics
+        defer { parked = nil }
         guard let view else { return }
         let terminal = view.getTerminal()
-        guard mode.hasPrefix("i"), !popupVisible, phase == .live,
-              mirror.cols == terminal.cols, mirror.rowCount == terminal.rows else {
+        guard mode.hasPrefix("i"), !popupVisible, mirror.cols == terminal.cols, mirror.rowCount == terminal.rows else {
             cache.remove(path); return
         }
+        var lines: [BufferLine] = []
+        if let parked, parked.image?.rows == mirror.rows, parked.image?.cols == mirror.cols {
+            lines = parked.lines   // detached when the next buffer's image replaced it
+        } else if phase == .live, !isVisible, let shown = displayed, shown.rows == mirror.rows {
+            // The screen is hidden and about to be replaced by the next buffer: detach the rows that show
+            // this buffer instead of overwriting them, and give the terminal blank rows to draw into.
+            let spares = (0..<terminal.rows).map { _ in BufferLine(cols: terminal.cols) }
+            var detached: [BufferLine]?
+            view.externalGridUpdate { _ in detached = view.externalGridExchange(spares) }
+            if let detached { lines = detached; displayed = nil; pendingScrolls.removeAll() }
+        }
         cache.store(.init(image: mirror, styleEpoch: styles.epoch, diagnosticsEnabled: diagnostics,
-                          signature: FileSignature.current(path: path)), for: path)
+                          signature: FileSignature.current(path: path), lines: lines), for: path)
+    }
+
+    private func retainCachedRows() {
+        view?.metalRetainedLines = cache.entries.values.flatMap(\.lines)
     }
 
     /// Shows the cached image of `path` immediately when it is provably what Neovim will draw.
@@ -127,6 +146,18 @@ final class NativeGridPresenter {
         guard entry.signature == FileSignature.current(path: path), entry.signature != nil else { return reject("file") }
         phase = .speculative(token: token)
         pendingScrolls.removeAll()
+        cache.remove(path)   // consumed: its rows are about to be live (or are rewritten below)
+        // Always install a separate set of rows for the shown image: the rows currently displayed belong to
+        // the buffer being left, and become its cached rows when the editor reports the leave.
+        let reuse = entry.lines.count == terminal.rows
+        let replacement = reuse ? entry.lines : (0..<terminal.rows).map { _ in BufferLine(cols: terminal.cols) }
+        var displaced: [BufferLine]?
+        view.externalGridUpdate { _ in displaced = view.externalGridExchange(replacement) }
+        if let displaced {
+            parked = (displaced, displayed)
+            displayed = reuse ? entry.image : nil   // fresh rows are written below
+            if reuse { geometryReuses += 1 }
+        } else { parked = nil }
         present(entry.image, cursorModeName: "insert", force: true)
         speculations += 1
         return true
@@ -268,12 +299,14 @@ final class NativeGridPresenter {
     func viewResized(cols: Int, rows: Int) {
         guard cols > 0, rows > 0, (cols, rows) != (requestedSize.cols, requestedSize.rows) else { return }
         requestedSize = (cols, rows)
+        cache.removeAll(); parked = nil   // images and rows of another size can never be shown
         client.resize(cols: cols, rows: rows)
     }
 
     func prepareTerminal(_ view: CodeTerminalView) {
         self.view = view
         view.getTerminal().externalGridEnter()
+        retainCachedRows()
     }
 
     func forget(_ path: String) { cache.remove(path) }

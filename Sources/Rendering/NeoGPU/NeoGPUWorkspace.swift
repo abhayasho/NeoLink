@@ -57,6 +57,9 @@ struct NeoGPUNode {
     var needsAnotherFrame = false
     var traceSelection: UInt64 = 0
     let presented: (Double) -> Void
+    /// Run instead of `presented` when the drawable reached the display after the workspace's client set
+    /// changed: only the truthful "this content was presented" acknowledgement, never ownership changes.
+    var acknowledged: ((Double) -> Void)?
 }
 
 extension Notification.Name {
@@ -157,7 +160,7 @@ final class NeoGPUWorkspace: NSView {
         let id = ObjectIdentifier(client)
         clients = clients.filter { $0.value.value != nil }
         let first = clients.isEmpty
-        if clients[id] == nil { generation &+= 1; clients[id] = Client(client); client.gpuSetHosted(true) }
+        if clients[id] == nil { generation &+= 1; SelectionTrace.mark(SelectionTrace.current, "workspace.generation", once: false, fields: ["reason": "register \(type(of: client))"]); clients[id] = Client(client); client.gpuSetHosted(true) }
         if first {
             isHidden = false
             (window as? WorkspaceWindow)?.frames.setWorkspaceDriver { [weak self] in self?.wake() }
@@ -167,6 +170,7 @@ final class NeoGPUWorkspace: NSView {
     func unregister(_ client: any NeoGPUClient) {
         if clients.removeValue(forKey: ObjectIdentifier(client)) != nil {
             generation &+= 1
+            SelectionTrace.mark(SelectionTrace.current, "workspace.generation", once: false, fields: ["reason": "unregister \(type(of: client))"])
             client.gpuSetHosted(false)
             if clients.isEmpty {
                 isHidden = true; source?.stop()
@@ -271,10 +275,12 @@ final class NeoGPUWorkspace: NSView {
         }
         guard slot.acquire() else { return true }
         let callbacks = nodes.map { $0.0.presented }, generation = self.generation
+        let acknowledgements = nodes.compactMap { $0.0.acknowledged }
         drawable.addPresentedHandler { [weak self] drawable in
             let time = drawable.presentedTime
             DispatchQueue.main.async {
                 guard let self else { return }
+
                 guard time > 0 else {
                     // The compositor dropped this drawable (presentedTime == 0). Its
                     // pane textures are retained, so the next drawable that really
@@ -289,7 +295,11 @@ final class NeoGPUWorkspace: NSView {
                 self.presentedFrames &+= 1
                 // Completion can arrive after an overlay, fallback or tab change.
                 // It must not hide a surface that has returned to native ownership.
-                guard self.enabled, !self.suspended, self.generation == generation else { self.deferredPresentations.discard(); return }
+                guard self.enabled, !self.suspended, self.generation == generation else {
+                    self.deferredPresentations.discard()
+                    acknowledgements.forEach { $0(time) }
+                    return
+                }
                 // Visibility transitions explicitly pause this series. Keep even
                 // long visible-window stalls instead of silently filtering them.
                 self.presentationTiming.record(timestamp: time, work: 0, includeLongIntervals: true)
