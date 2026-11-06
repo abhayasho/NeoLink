@@ -35,6 +35,9 @@ final class NativeGridPresenter {
     /// editor reports (`neolink_leave`) a moment later, and then become that buffer's cached rows.
     private var parked: (lines: [BufferLine], image: GridImage?)?
     private(set) var geometryReuses = 0
+    /// Rows Neovim's confirmation had to rewrite after a cached image was shown (0 when the image was exact).
+    private(set) var speculationCorrections = 0
+    private(set) var confirmedSpeculations = 0
     private var diagnosticsEnabled = true
     private var queuedInput: [String] = []
     private var queuedInputBytes = 0
@@ -92,14 +95,18 @@ final class NativeGridPresenter {
 
     private func acknowledge(token: UInt64, path: String) {
         cache.remove(path)
+        var confirming = false
         if case .speculative(let expected) = phase {
             // An echo for an older selection must neither end the current speculation nor
             // replace the cached image that is on screen with an intermediate buffer.
             guard expected == token else { return }
             phase = .live
+            confirming = true
         }
         pendingScrolls.removeAll()
+        let writtenBefore = rowsWritten
         flushIfAllowed(force: true)
+        if confirming { confirmedSpeculations += 1; speculationCorrections += rowsWritten - writtenBefore }
         let queued = queuedInput
         queuedInput.removeAll(); queuedInputBytes = 0
         session?.nativeSelectionAcknowledged(token)
