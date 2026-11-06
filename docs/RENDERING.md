@@ -6,6 +6,23 @@
 
 [Build 26 explorer and tab interaction changes, measurements and limits](INTERACTIONS.md). Highlight composition now retains the text strip independently; historical whole-strip invalidation descriptions below apply to their original builds.
 
+## Trackpad axis locking and explorer glide
+
+**Diagonal editor scrolling.** A finger scrolling "vertically" drifts sideways. With `nowrap` every sideways column made Neovim redraw the whole screen (each row rebuilt), so diagonal input put heavy frames and jumps into otherwise smooth vertical motion. `ScrollAxisLock` follows Zed's `OngoingScroll` (gpui `gestures.rs`): a trackpad gesture locks to its dominant axis on its first event (or after a 28 ms pause). It switches only when an event of at least 6 points moves 1.9× further along the other axis. Mouse wheels are not filtered. This applies to the editor and terminal panes (`InteractiveTerminalView`), before the smooth-scroll driver.
+
+**Explorer.** `ExplorerScrollView` moved the clip view once per trackpad event. A finger reports about 60 Hz, so the explorer held every other 120 Hz frame still and stepped by whole event distances. It now feeds the same `ScrollResampler` as the editor and glides at the display's cadence, snapped to device pixels. Programmatic scrolling and other origin changes cancel the glide, and the live-scroll end notification waits until the glide finishes.
+
+New benchmark scenarios: `editor-diagonal` (60 Hz finger events with sinusoidal sideways drift up to 35 %) and `explorer-steady` / `explorer-flick` (wheel events delivered to the explorer, with the clip origin sampled at every display frame). Baseline before the change, two valid runs:
+
+| Scenario | Baseline |
+| --- | --- |
+| `editor-diagonal`: horizontal steps sent to Neovim | 25 / 25 |
+| `editor-diagonal`: stall / jump frames | 32 / 4; 74 / 13 |
+| `explorer-steady` (60 Hz events): display frames with no motion while scrolling | 248 of 337; 266 of 355 |
+| `explorer-flick` (120 Hz events): frames with no motion | 18 of 125; 18 of 126 |
+
+After the change, only one run completed, and it may have been disturbed: other apps were active and four of five runs in that matrix could not get the full-screen window. In it, `editor-diagonal` sent **0** horizontal steps with 1 stall and 2 jumps. Its explorer scenarios recorded no motion, and `editor-slow` reported 90 skipped refreshes (0 in every earlier undisturbed run), consistent with the window not being frontmost. The after-change explorer numbers and a clean A/B are **still to be measured** on an idle machine.
+
 ## Direct workspace presentation (input-to-photon latency)
 
 Per-frame traces showed every workspace frame was scheduled by `CAMetalDisplayLink` for a target **about 24 ms (3 refreshes at 120 Hz) after its callback**, and about 41 ms (5 refreshes) in later runs. Frames then often arrived 2–18 ms after that target. That fixed delay sits under every keypress, click, hover and scroll, and it is why typing in the editor and terminal measured about 30 ms key→display even when the editor did almost no work. It does not show up as a dropped frame.
