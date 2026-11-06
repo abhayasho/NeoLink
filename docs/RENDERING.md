@@ -12,16 +12,22 @@
 
 **Explorer.** `ExplorerScrollView` moved the clip view once per trackpad event. A finger reports about 60 Hz, so the explorer held every other 120 Hz frame still and stepped by whole event distances. It now feeds the same `ScrollResampler` as the editor and glides at the display's cadence, snapped to device pixels. Programmatic scrolling and other origin changes cancel the glide, and the live-scroll end notification waits until the glide finishes.
 
-New benchmark scenarios: `editor-diagonal` (60 Hz finger events with sinusoidal sideways drift up to 35 %) and `explorer-steady` / `explorer-flick` (wheel events delivered to the explorer, with the clip origin sampled at every display frame). Baseline before the change, two valid runs:
+New benchmark scenarios: `editor-diagonal` (60 Hz finger events with sinusoidal sideways drift up to 35 %) and `explorer-steady` / `explorer-flick` (wheel events delivered to the explorer, with the clip origin sampled at every display frame; the steady profile is analysed only where the content can move).
 
-| Scenario | Baseline |
-| --- | --- |
-| `editor-diagonal`: horizontal steps sent to Neovim | 25 / 25 |
-| `editor-diagonal`: stall / jump frames | 32 / 4; 74 / 13 |
-| `explorer-steady` (60 Hz events): display frames with no motion while scrolling | 248 of 337; 266 of 355 |
-| `explorer-flick` (120 Hz events): frames with no motion | 18 of 125; 18 of 126 |
+Release builds, alternating before/after, native full screen, unlocked, native editor client. Seven of 14 runs failed setup because other apps (other NeoLink windows, another agent) kept the full-screen window from becoming key. They are excluded, and the 4 valid baseline and 3 valid new runs are listed in run order:
 
-After the change, only one run completed, and it may have been disturbed: other apps were active and four of five runs in that matrix could not get the full-screen window. In it, `editor-diagonal` sent **0** horizontal steps with 1 stall and 2 jumps. Its explorer scenarios recorded no motion, and `editor-slow` reported 90 skipped refreshes (0 in every earlier undisturbed run), consistent with the window not being frontmost. The after-change explorer numbers and a clean A/B are **still to be measured** on an idle machine.
+| Metric | Before | After |
+| --- | --- | --- |
+| `editor-diagonal`: horizontal steps sent to Neovim | 25 / 25 / 25 / 25 | **0 / 0 / 0** |
+| `editor-diagonal`: stall frames | 143 / 65 / 75 / 70 | 78 / **0 / 1** |
+| `editor-diagonal`: jump frames | 31 / 12 / 15 / 17 | **1 / 0 / 1** |
+| `editor-diagonal`: per-frame velocity error p95 (lines/s) | 97.5 / 41.3 / 45.0 / 59.9 | 22.5 / 3.8 / 3.8 |
+| `explorer-steady` (60 Hz finger events): frames with no motion while it should move | 89 / 89 / 86 / 86 (of ~175) | **0 / 0 / 1** |
+| `explorer-steady`: ratio between consecutive frame steps p50 / p95 | 1.00 / 1.00 (alternating 10 pt and 0) | 1.86 / 4.50; 1.10 / 1.25; 3.25 / 10.67 |
+| `explorer-flick` (120 Hz events): frames with no motion | 18 / 18 / 18 / 18 | 15 / 4 / 15 |
+| `editor-flick`: stalls / jumps | 0 / 1; 0 / 0; 15 / 9; 0 / 0 | 0 / 0 in all three |
+
+The first new `editor-diagonal` run (78 stalls, 80 ms best-fit lag) and the third new `explorer-steady` run (131 instead of ~175 display frames sampled) look disturbed by the same competing apps. The explorer now moves on every frame, but how evenly varies between runs: one run was even (p50 1.10), and the others mixed short and long steps. Measured unevenness could come from the display-link callbacks the sampler sees, so this is not established as visual unevenness. A physical trackpad check is still needed. `editor-slow` skipped 86–95 refreshes in both arms in this session (0 in earlier sessions), so it is environmental here, not a difference between the builds.
 
 ## Direct workspace presentation (input-to-photon latency)
 

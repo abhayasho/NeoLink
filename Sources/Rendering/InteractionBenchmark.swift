@@ -258,7 +258,8 @@ final class InteractionBenchmark {
                 // The clip view's origin at every display frame (what the next presented frame shows).
                 var clip: [[Double]] = []
                 var sampling = true
-                window.frames.animate(ObjectIdentifier(scroll)) { _ in
+                // Keyed by the benchmark, not the scroll view: the scroll view's own glide uses that key.
+                window.frames.animate(ObjectIdentifier(self)) { _ in
                     clip.append([(CACurrentMediaTime() - start) * 1000, Double(scroll.contentView.bounds.origin.y)])
                     return sampling
                 }
