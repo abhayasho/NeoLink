@@ -13,9 +13,16 @@ struct ScrollbackMotion {
         return Int(min(80, max(-80, offset)).rounded(.towardZero))
     }
 
+    /// How far the last `moved` had to pull the offset back into range (input the content has no room for).
+    private(set) var clamped = 0.0
+
     mutating func moved(_ lines: Int, range: ClosedRange<Double>) {
-        offset = min(range.upperBound, max(range.lowerBound, offset - Double(lines)))
+        let wanted = offset - Double(lines)
+        offset = min(range.upperBound, max(range.lowerBound, wanted))
+        clamped += offset - wanted
     }
+
+    mutating func takeClamped() -> Double { defer { clamped = 0 }; return clamped }
 }
 
 /// Pixel-smooth trackpad scrolling over a grid that only moves by whole lines.
@@ -255,8 +262,94 @@ struct SmoothScrollModel {
     private mutating func clamp(to range: ClosedRange<Double>) {
         let lower = range.lowerBound + Double(min(0, pending))
         let upper = range.upperBound + Double(max(0, pending))
+        let wanted = offset
         offset = min(max(offset, lower), upper)
+        clamped += offset - wanted
     }
+
+    /// Input the content had no room for since the last call (so the resampler can forget it).
+    private(set) var clamped = 0.0
+    mutating func takeClamped() -> Double { defer { clamped = 0 }; return clamped }
+}
+
+/// Draws trackpad input at the display's cadence instead of the input's.
+///
+/// Scroll events arrive when the hardware reports them (often about 60 Hz, with jitter and bursts), not
+/// when the display refreshes (up to 120 Hz). Applying each event's distance the moment it arrives moves
+/// the content in uneven steps and repeats frames in between. The resampler keeps the recent history of the
+/// accumulated input and, on every display frame, draws the position it had `delay` seconds ago by linear
+/// interpolation. For steady input that is exactly uniform motion; the delay is about one input interval
+/// plus a small jitter margin, so a late event does not stall the motion. The drawn position is never ahead
+/// of the fingers and never overshoots: when the events stop, it simply reaches the last position.
+/// `lag` is the part of the input not drawn yet (in lines). Whole-line moves of the grid shift the offset and
+/// the input together, so they do not change it.
+struct ScrollResampler {
+    private(set) var lag = 0.0
+    private var history: [(time: Double, position: Double)] = []
+    private var total = 0.0
+    private var interval = 1.0 / 60
+    static let jitterMargin = 0.006
+    static let minimumDelay = 0.008
+    static let maximumDelay = 0.030
+    static let epsilon = 0.003
+
+    /// Seconds between display frames; input at about this rate already moves every frame and needs little help.
+    var framePeriod = 1.0 / 120
+
+    var delay: Double {
+        // Input slower than the display repeats frames between events: trail by one interval to interpolate them.
+        // Input at the display's rate only needs enough slack for arrival jitter.
+        let slower = interval >= 1.5 * framePeriod
+        let value = slower ? interval + Self.jitterMargin : 0.5 * interval + 0.002
+        return min(Self.maximumDelay, max(Self.minimumDelay * 0.5, value))
+    }
+    var isCatchingUp: Bool { lag != 0 }
+
+    mutating func input(_ lines: Double, at time: Double) {
+        guard lines.isFinite, lines != 0 else { return }
+        if let last = history.last {
+            let gap = time - last.time
+            // Events within 4 ms of each other are one report split in two: not a faster input rate.
+            if gap >= 0.004, gap < 0.1 { interval = 0.7 * interval + 0.3 * gap }
+            else if gap >= 0.1 { interval = 1.0 / 60; history.removeAll() }
+        }
+        if history.isEmpty { history.append((time - interval, total)) }   // the gesture starts from rest
+        total += lines
+        history.append((time, total))
+        advance(to: time)
+    }
+
+    /// Position of the drawn content at `now`; returns whether it still trails the input.
+    @discardableResult
+    mutating func advance(to now: Double) -> Bool {
+        guard let last = history.last else { lag = 0; return false }
+        let at = now - delay
+        var drawn = last.position
+        if at < last.time {
+            if at <= history[0].time { drawn = history[0].position }
+            else if let upper = history.firstIndex(where: { $0.time >= at }), upper > 0 {
+                let a = history[upper - 1], b = history[upper]
+                drawn = b.time > a.time ? a.position + (b.position - a.position) * (at - a.time) / (b.time - a.time) : b.position
+            }
+        }
+        // Keep only what a later frame can still need.
+        if let keep = history.firstIndex(where: { $0.time >= at }), keep > 1 { history.removeFirst(keep - 1) }
+        lag = last.position - drawn
+        if abs(lag) < Self.epsilon { lag = 0 }
+        if lag == 0, at >= last.time { history.removeAll() }
+        return lag != 0
+    }
+
+    /// The content could not follow `amount` lines of the latest input (it hit an end): forget them, so a
+    /// later reversal starts from where the content actually is.
+    mutating func absorb(_ amount: Double, at now: Double) {
+        guard amount != 0, !history.isEmpty else { return }
+        total += amount
+        history[history.count - 1].position += amount
+        advance(to: now)
+    }
+
+    mutating func reset() { lag = 0; history.removeAll(); total = 0 }
 }
 
 /// Connects `SmoothScrollModel` to a terminal view, its Metal renderer and the window clock.
@@ -265,6 +358,7 @@ final class SmoothScrollDriver {
     private unowned let view: InteractiveTerminalView
     private var model = SmoothScrollModel()
     private var scrollback = ScrollbackMotion()
+    private var resampler = ScrollResampler()
     private var movingScrollback = false
     private var scrollbackRow: Int?
     private var source: SmoothScrollSource?
@@ -331,6 +425,7 @@ final class SmoothScrollDriver {
         if source == .scrollback {
             // Apply all input before the next display-paced frame. A parked fraction is a
             // valid viewport, not an animation that should keep the display clock awake.
+            resampler.input(lines, at: now)
             let request = scrollback.input(lines)
             movingScrollback = true
             let moved = request == 0 ? 0 : (move(request) ?? 0)
@@ -338,10 +433,14 @@ final class SmoothScrollDriver {
             scrollbackRow = view.getTerminal().buffer.yDisp
             traceGrid += Double(moved)
             scrollback.moved(moved, range: range)
+            resampler.absorb(scrollback.takeClamped(), at: now)
             apply()
+            startAnimating()
             return
         }
+        resampler.input(lines, at: now)
         perform(model.input(lines, at: now, phase: phase, range: range), at: now)
+        resampler.absorb(model.takeClamped(), at: now)
         apply()
         startAnimating()
     }
@@ -369,6 +468,7 @@ final class SmoothScrollDriver {
 
     func reset() {
         model.reset()
+        resampler.reset()
         scrollback = ScrollbackMotion()
         scrollbackRow = nil
         lastStep = nil
@@ -403,7 +503,10 @@ final class SmoothScrollDriver {
     }
 
     private func apply() {
-        let offset = CGFloat(source == .scrollback ? scrollback.offset : model.offset) * cellHeight
+        // The program moved on its own (nothing of the gesture left to draw): drop the undrawn remainder too.
+        if source == .program, !model.isScrolling { resampler.reset() }
+        let drawn = (source == .scrollback ? scrollback.offset : model.offset) - resampler.lag
+        let offset = CGFloat(drawn) * cellHeight
         // Whole device pixels keep glyphs on the pixel grid.
         let scale = view.window?.backingScaleFactor ?? 2
         let snapped = (offset * scale).rounded() / scale
@@ -413,16 +516,25 @@ final class SmoothScrollDriver {
     private func startAnimating() {
         guard !animating, let frames = WindowFrameScheduler.forWindow(view.window) else { return }
         animating = true
+        resampler.framePeriod = 1.0 / Double(max(30, frames.targetRate))
         frames.animate(ObjectIdentifier(self), surface: ObjectIdentifier(view)) { [weak self] time in
             guard let self else { return false }
-            guard self.source == .program else { self.animating = false; return false }
             guard time.isFinite else { self.reset(); self.animating = false; return false }
             let interval = self.lastStep.map { min(0.05, time - $0) } ?? 1.0 / Double(frames.targetRate)
             self.lastStep = time
+            let catchingUp = self.resampler.advance(to: CACurrentMediaTime())
+            if self.source != .program {
+                // Local scrollback has no program to wait for: only the undrawn remainder animates.
+                self.apply()
+                if !catchingUp { self.lastStep = nil; self.animating = false }
+                return catchingUp
+            }
             let now = CACurrentMediaTime()
-            let (active, move) = self.model.step(at: now, interval: interval, range: self.range)
+            let (modelActive, move) = self.model.step(at: now, interval: interval, range: self.range)
             self.perform(move, at: now)
+            self.resampler.absorb(self.model.takeClamped(), at: now)
             self.apply()
+            let active = modelActive || catchingUp
             if !active { self.lastStep = nil; self.animating = false }
             return active
         }
