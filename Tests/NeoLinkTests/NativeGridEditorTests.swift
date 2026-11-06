@@ -274,6 +274,53 @@ final class NativeGridEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testResizeFollowsTheWindowAndNeverDrawsAStaleSizedGrid() async throws {
+        guard CommandRunner.executable("nvim") != nil else { throw XCTSkip("Neovim is optional") }
+        _ = NSApplication.shared
+        setenv("NEOLINK_NATIVE_GRID", "1", 1)
+        defer { unsetenv("NEOLINK_NATIVE_GRID") }
+        let text = (1...80).map { "row \($0) — 界 ünïcode and a reasonably long line of text to fill the width" }.joined(separator: "\n") + "\n"
+        let (root, urls) = try files(["a.txt": text, "b.txt": "BRAVO\n"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let controller = TabsController()
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: TabbedTerminalView(controller: controller))
+        defer { controller.codeSession.shutdown(); controller.tabs.compactMap(\.terminal).forEach { $0.state.close() }; window.close() }
+        window.makeKeyAndOrderFront(nil)
+        controller.openFile(urls["a.txt"]!); let first = try XCTUnwrap(controller.selectedTabID); try await settleEditor(controller)
+        controller.openFile(urls["b.txt"]!); let second = try XCTUnwrap(controller.selectedTabID); try await settleEditor(controller)
+        let session = controller.codeSession, presenter = try XCTUnwrap(session.nativeGrid), terminal = try XCTUnwrap(session.terminal)
+        func agreed() -> Bool {
+            let size = terminal.getTerminal()
+            return presenter.mirror.cols == size.cols && presenter.mirror.rowCount == size.rows && presenter.requestedSize == (size.cols, size.rows)
+        }
+        func screen() -> [String] { (0..<terminal.getTerminal().rows).map { terminal.getTerminal().externalGridRowText($0) } }
+        XCTAssertTrue(agreed())
+        controller.selectedTabID = first; try await settleEditor(controller)
+        XCTAssertTrue(screen().contains { $0.contains("row 1 ") })
+        controller.selectedTabID = second; try await settleEditor(controller)   // leaves an image of `a.txt` behind
+        let before = (terminal.getTerminal().cols, terminal.getTerminal().rows)
+        for size in [NSSize(width: 1180, height: 760), NSSize(width: 700, height: 420), NSSize(width: 1000, height: 640)] {
+            window.setContentSize(size)
+            let deadline = Date().addingTimeInterval(6)
+            while Date() < deadline, !(agreed() && presenter.phase == .live && presenter.framesApplied > 0) { try await Task.sleep(nanoseconds: 10_000_000) }
+            try await Task.sleep(nanoseconds: 200_000_000); presenter.drain()
+            XCTAssertTrue(agreed(), "terminal \(terminal.getTerminal().cols)x\(terminal.getTerminal().rows) mirror \(presenter.mirror.cols)x\(presenter.mirror.rowCount)")
+            XCTAssertTrue(screen().contains { $0.contains("BRAVO") }, "content survives a resize to \(size)")
+            XCTAssertNil(session.error)
+        }
+        XCTAssertNotEqual(before.0, terminal.getTerminal().cols, "the window size changed the grid")
+        // Images from before the resizes have the wrong size and are gone; a switch back waits for Neovim.
+        XCTAssertTrue(presenter.cache.entries.values.allSatisfy { $0.image.cols == terminal.getTerminal().cols && $0.lines.allSatisfy { $0.count == terminal.getTerminal().cols } },
+                      "no cached image or retained row of another size survives a resize")
+        controller.selectedTabID = first
+        try await settleEditor(controller)
+        XCTAssertTrue(screen().contains { $0.contains("row 1 ") })
+        XCTAssertTrue(agreed())
+    }
+
+    @MainActor
     private func settleEditor(_ controller: TabsController, extra: () -> Bool = { true }) async throws {
         let deadline = Date().addingTimeInterval(8)
         func ready() -> Bool {
