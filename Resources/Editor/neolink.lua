@@ -94,6 +94,48 @@ local api, uv = vim.api, vim.uv
 local M = {baseline={}, previous={}, closed={}, pending=false}
 _G.NeoLink = M
 local status_path = vim.env.NEOLINK_STATUS_FILE
+
+-- Native grid client support. When NeoLink attaches its own ext_linegrid UI (instead of
+-- running this editor's TUI in a PTY) it registers that RPC channel here. Selection
+-- acknowledgements and "buffer left/touched" facts then travel on the same ordered
+-- channel as the redraw events, so the host can prove which buffer a flush belongs to.
+M.gen, M.views, M.touched, M.attached = {}, {}, {}, {}
+function M.attach_ui(channel) M.ui_channel = channel; return true end
+function M.detach_ui() M.ui_channel = nil; return true end
+local function notify_ui(name, ...)
+  if M.ui_channel then pcall(vim.rpcnotify, M.ui_channel, name, ...) end
+end
+-- A change to a buffer that is not displayed invalidates the host's cached image of it.
+local function touch(buf)
+  if not buf or not api.nvim_buf_is_valid(buf) then return end
+  M.gen[buf] = (M.gen[buf] or 0) + 1
+  if M.ui_channel and buf ~= api.nvim_get_current_buf() and not M.touched[buf] then
+    M.touched[buf] = true
+    notify_ui('neolink_touch', api.nvim_buf_get_name(buf))
+  end
+end
+local function touch_all() notify_ui('neolink_touch', '') end
+local function watch(buf)
+  if M.attached[buf] or not api.nvim_buf_is_valid(buf) then return end
+  M.attached[buf] = true
+  api.nvim_buf_attach(buf, false, {
+    on_lines = function(_, b) touch(b) end,
+    on_reload = function(_, b) touch(b) end,
+    on_detach = function(_, b) M.attached[b] = nil end,
+  })
+end
+-- Record the displayed buffer's view and tell the host exactly what is on screen.
+function M.leave()
+  if not M.ui_channel then return end
+  local cur = api.nvim_get_current_buf()
+  local path = api.nvim_buf_get_name(cur)
+  if path == '' or vim.bo[cur].buftype ~= '' then return end
+  M.views[cur] = vim.fn.winsaveview()
+  vim.cmd('redraw')
+  notify_ui('neolink_leave', path, api.nvim_get_mode().mode, vim.fn.pumvisible() == 1,
+    vim.diagnostic.is_enabled({bufnr = cur}))
+  M.touched[cur] = false
+end
 local function signature(path)
   local s = uv.fs_stat(path)
   return s and table.concat({s.dev,s.ino,s.size,s.mtime.sec,s.mtime.nsec}, ':') or 'missing'
@@ -146,6 +188,7 @@ function M.open(path, line, activate)
   local b=vim.fn.bufadd(path)
   vim.fn.bufload(b)
   vim.bo[b].buflisted=true
+  watch(b)
   if not M.baseline[b] then M.baseline[b]=signature(path) end
   if activate~=false then
     -- Agents edit files on disk. Refresh only clean buffers when returning to a tab.
@@ -162,7 +205,10 @@ function M.open(path, line, activate)
       end)
       M.baseline[b]=signature(path)
     end
+    if M.ui_channel and b ~= api.nvim_get_current_buf() then M.leave() end
     api.nvim_set_current_buf(b)
+    if M.ui_channel and M.views[b] then pcall(vim.fn.winrestview, M.views[b]) end
+    M.touched[b] = false
     if M.trace then M.trace.bufferActivated=uv.hrtime()/1e9 end
     if line and line>0 then api.nvim_win_set_cursor(0,{math.min(line,api.nvim_buf_line_count(b)),0}) end
     vim.cmd('startinsert')
@@ -228,7 +274,12 @@ function M.dispatch(json)
         M.selection=request.selection
         vim.cmd('redraw')
         if M.trace then M.trace.redraw=uv.hrtime()/1e9 end
-        if api.nvim_ui_send then
+        if M.ui_channel then
+          -- The native client receives this after the redraw/flush events on the same
+          -- ordered channel, so everything it has applied belongs to this buffer.
+          notify_ui('neolink_selection', request.selection, api.nvim_buf_get_name(0))
+          if M.trace then M.trace.markerQueued=uv.hrtime()/1e9 end
+        elseif api.nvim_ui_send then
           api.nvim_ui_send('\27]2;neolink-selection:'..tostring(request.selection)..'\7')
           if M.trace then M.trace.markerQueued=uv.hrtime()/1e9 end
           -- ui_send is an ordered UI event, not a PTY flush. Flush that event
@@ -245,6 +296,7 @@ function M.dispatch(json)
         end
         if M.trace then M.trace.markerFlushed=uv.hrtime()/1e9 end
       end
+    elseif request.method=='leave' then M.leave()
     elseif request.method=='save' then M.save(request.path)
     elseif request.method=='close' then M.close(request.path)
     elseif request.method=='action' then M.action(request.action) end
@@ -316,6 +368,11 @@ vim.keymap.set('n','gr',vim.lsp.buf.references)
 vim.keymap.set('n','K',vim.lsp.buf.hover)
 vim.keymap.set('n','<F2>',vim.lsp.buf.rename)
 vim.keymap.set('i','<C-Space>',function() if #vim.lsp.get_clients({bufnr=0})>0 then vim.lsp.completion.get() else api.nvim_feedkeys(api.nvim_replace_termcodes('<C-n>',true,false,true),'n',false) end end)
+api.nvim_create_autocmd({'BufWritePost','BufModifiedSet','DiagnosticChanged','LspAttach','LspDetach'},
+  {callback=function(ev) touch(ev.buf) end})
+api.nvim_create_autocmd({'WinNew','WinClosed','VimResized','ColorScheme'},{callback=touch_all})
+api.nvim_create_autocmd('OptionSet',{pattern={'number','relativenumber','wrap','cursorline','signcolumn','foldcolumn',
+  'list','laststatus','statusline','background','colorcolumn','conceallevel','scrolloff','cmdheight','winbar','showtabline'},callback=touch_all})
 api.nvim_create_autocmd('VimEnter',{callback=M.publish})
 
 -- Private newline-delimited JSON control channel. This removes one subprocess per

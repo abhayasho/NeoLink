@@ -29,6 +29,16 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     private var fontObservation: AnyCancellable?
     private var wheelMonitor: Any?
     private lazy var smoothScroll = SmoothScrollDriver(view: self)
+    /// Set by a native Neovim UI client: wheel steps (flags 64 up, 65 down, 66 left, 67 right at a
+    /// cell) go to Neovim instead of to a PTY as mouse reports.
+    var nativeWheelReporter: ((_ flag: Int, _ column: Int, _ row: Int) -> Void)?
+
+    /// Drains output queued for this surface: PTY chunks, or the native client's mailbox. Called
+    /// on the owning display deadline, before encoding.
+    func servicePendingOutput() {
+        process?.servicePendingOutput()
+        (self as? CodeTerminalView)?.nativeGrid?.drain()
+    }
     /// For measurement: lines the input and the last drawn frame moved the content since the
     /// first smooth-scroll gesture, or nil if this terminal never smooth-scrolled.
     func scrollTraceSample() -> (input: Double, drawn: Double)? {
@@ -107,7 +117,8 @@ class InteractiveTerminalView: LocalProcessTerminalView {
 
     private func forwardWheel(_ event: NSEvent) -> Bool {
         let terminal = getTerminal()
-        guard allowMouseReporting, terminal.mouseMode != .off else {
+        let native = nativeWheelReporter
+        guard native != nil || (allowMouseReporting && terminal.mouseMode != .off) else {
             return false
         }
         let pixels = cellSizeInPixels(source: terminal) ?? (width: 8, height: 16)
@@ -125,6 +136,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
         let row = min(max(0, Int(topY / max(1, cell.height))), max(0, terminal.rows - 1))
         func report(_ flag: Int, count: Int) {
             for _ in 0..<abs(count) {
+                if let native { native(flag, col, row); continue }
                 terminal.sendEvent(buttonFlags: flag, x: col, y: row,
                                    pixelX: max(0, Int(point.x)), pixelY: max(0, Int(topY)))
             }
@@ -134,6 +146,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
             smoothScroll.scroll(event, source: .program) { [weak self] lines in
                 guard let terminal = self?.getTerminal() else { return nil }
                 for _ in 0..<min(80, abs(lines)) {
+                    if let native { native(lines > 0 ? 64 : 65, col, row); continue }
                     terminal.sendEvent(buttonFlags: lines > 0 ? 64 : 65, x: col, y: row,
                                        pixelX: max(0, Int(point.x)), pixelY: max(0, Int(topY)))
                 }

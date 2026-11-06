@@ -70,8 +70,22 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         }
     }
 
-    init(executable: String? = CommandRunner.executable("nvim")) {
+    /// Opt-in native `ext_linegrid` client instead of a TUI in a PTY (`NEOLINK_NATIVE_GRID=1`).
+    nonisolated static func nativeGridRequested(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        environment["NEOLINK_NATIVE_GRID"] == "1"
+    }
+    private var nativeRequested: Bool
+    private(set) var nativeGrid: NativeGridPresenter?
+    var usesNativeGrid: Bool { nativeGrid != nil }
+    private(set) var nativeFallbackReason: String?
+    private var nativeProcess: Process?
+    private var tearingDownNative = false
+    /// The token whose cached image is on screen while Neovim's own confirmation is pending.
+    private var speculativeToken: UInt64?
+
+    init(executable: String? = CommandRunner.executable("nvim"), nativeGrid: Bool = NeovimSession.nativeGridRequested()) {
         self.executable = executable
+        nativeRequested = nativeGrid
         super.init()
     }
 
@@ -89,62 +103,173 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         guard !isStarted, let executable else { return }
         PhaseTrace.mark("editor.start")
         do {
-            // Unix-domain socket paths have a short length limit on macOS.
-            let directory = URL(fileURLWithPath: "/tmp").appendingPathComponent("neolink-\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-            self.directory = directory
-            control = EditorControlChannel(path: directory.appendingPathComponent("control.sock").path)
-            let descriptor = Darwin.open(directory.path, O_EVTONLY)
-            if descriptor >= 0 {
-                let watcher = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: [.write], queue: .main)
-                watcher.setEventHandler { [weak self] in self?.readPublishedState() }
-                watcher.setCancelHandler { Darwin.close(descriptor) }
-                watcher.resume()
-                self.watcher = watcher
+            let directory = try prepareDirectory()
+            let terminal = self.terminal ?? PhaseTrace.measure("editor.viewCreation") { CodeTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500)) }
+            if self.terminal == nil {
+                terminal.session = self
+                terminal.onActivate = { [weak self] in self?.onEditorFocus?() }
+                terminal.processDelegate = self
+                if SelectionTrace.enabled { terminal.process.outputEventHandler = { SelectionTrace.pty($0) } }
+                TerminalAppearance.apply(to: terminal)
+                terminal.observeTextSize()
+                self.terminal = terminal
             }
-            let terminal = PhaseTrace.measure("editor.viewCreation") { CodeTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500)) }
-            terminal.session = self
-            terminal.onActivate = { [weak self] in self?.onEditorFocus?() }
-            terminal.processDelegate = self
-            if SelectionTrace.enabled { terminal.process.outputEventHandler = { SelectionTrace.pty($0) } }
-            TerminalAppearance.apply(to: terminal)
-            terminal.observeTextSize()
-            self.terminal = terminal
-            var environment = ProcessInfo.processInfo.environment
-            environment["TERM"] = "xterm-256color"
-            environment["COLORTERM"] = "truecolor"
-            environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (environment["PATH"] ?? "")
-            environment["NEOLINK_STATUS_FILE"] = directory.appendingPathComponent("status.json").path
-            environment["NEOLINK_CONTROL_SOCKET"] = directory.appendingPathComponent("control.sock").path
-            let state = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("NeoLink/EditorState", isDirectory: true)
-            try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
-            environment["XDG_STATE_HOME"] = state.path
-            PhaseTrace.measure("editor.spawn") {
-                terminal.startProcess(executable: executable,
-                    args: ["--noplugin", "-u", Self.configurationURL.path, "-i", "NONE", "--listen", directory.appendingPathComponent("editor.sock").path],
-                    environment: environment.map { "\($0.key)=\($0.value)" },
-                    currentDirectory: WorkspaceAccess.shared.projectURL?.path ?? FileManager.default.homeDirectoryForCurrentUser.path)
-            }
+            let native = nativeRequested
+            if native { try launchNative(executable: executable, directory: directory) }
+            else { try launchTUI(executable: executable, directory: directory, terminal: terminal) }
             isStarted = true
             startup = Task { [weak self] in
-                // status.json appears when Neovim has loaded neolink.lua (about 120 ms). A
-                // 5 ms poll notices it within a frame; each check is one stat.
-                for _ in 0..<1_000 {
-                    guard !Task.isCancelled else { return }
-                    if await Task.detached(priority: .userInitiated, operation: {
-                        FileManager.default.fileExists(atPath: directory.appendingPathComponent("status.json").path)
-                        && FileManager.default.fileExists(atPath: directory.appendingPathComponent("control.sock").path)
-                    }).value {
+                guard let self else { return }
+                var directory = directory
+                var native = native
+                if native {
+                    do {
+                        try await self.waitForEditor(directory: directory, socket: true)
+                        try await self.attachNative(terminal: terminal, directory: directory)
                         PhaseTrace.mark("editor.neovimReady")
-                        self?.readPublishedState()
-                        self?.isReady = true
+                        self.readPublishedState()
+                        self.isReady = true
                         return
+                    } catch {
+                        // Missing/old Neovim features, a refused attach or a startup failure: use the TUI.
+                        guard !Task.isCancelled else { return }
+                        self.nativeFallbackReason = error.localizedDescription
+                        NSLog("NeoLink: native editor grid unavailable (%@); using the terminal UI", error.localizedDescription)
+                        do { directory = try self.fallBackToTUI(executable: executable, terminal: terminal) } catch { self.error = error.localizedDescription; return }
+                        native = false
                     }
-                    try? await Task.sleep(nanoseconds: 5_000_000)
                 }
-                self?.error = "Neovim did not finish starting. Close and reopen NeoLink to retry."
+                do {
+                    try await self.waitForEditor(directory: directory, socket: false)
+                    PhaseTrace.mark("editor.neovimReady")
+                    self.readPublishedState()
+                    self.isReady = true
+                } catch {
+                    if !Task.isCancelled { self.error = "Neovim did not finish starting. Close and reopen NeoLink to retry." }
+                }
             }
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func prepareDirectory() throws -> URL {
+        // Unix-domain socket paths have a short length limit on macOS.
+        let directory = URL(fileURLWithPath: "/tmp").appendingPathComponent("neolink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        self.directory = directory
+        control = EditorControlChannel(path: directory.appendingPathComponent("control.sock").path)
+        let descriptor = Darwin.open(directory.path, O_EVTONLY)
+        if descriptor >= 0 {
+            let watcher = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: [.write], queue: .main)
+            watcher.setEventHandler { [weak self] in self?.readPublishedState() }
+            watcher.setCancelHandler { Darwin.close(descriptor) }
+            watcher.resume()
+            self.watcher = watcher
+        }
+        return directory
+    }
+
+    private func editorEnvironment(directory: URL) throws -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["TERM"] = "xterm-256color"
+        environment["COLORTERM"] = "truecolor"
+        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (environment["PATH"] ?? "")
+        environment["NEOLINK_STATUS_FILE"] = directory.appendingPathComponent("status.json").path
+        environment["NEOLINK_CONTROL_SOCKET"] = directory.appendingPathComponent("control.sock").path
+        let state = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("NeoLink/EditorState", isDirectory: true)
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        environment["XDG_STATE_HOME"] = state.path
+        return environment
+    }
+
+    private var workingDirectory: String { WorkspaceAccess.shared.projectURL?.path ?? FileManager.default.homeDirectoryForCurrentUser.path }
+
+    private func launchTUI(executable: String, directory: URL, terminal: CodeTerminalView) throws {
+        let environment = try editorEnvironment(directory: directory)
+        PhaseTrace.measure("editor.spawn") {
+            terminal.startProcess(executable: executable,
+                args: ["--noplugin", "-u", Self.configurationURL.path, "-i", "NONE", "--listen", directory.appendingPathComponent("editor.sock").path],
+                environment: environment.map { "\($0.key)=\($0.value)" },
+                currentDirectory: workingDirectory)
+        }
+    }
+
+    /// A headless server with no PTY, TUI client or VT parser; NeoLink attaches as its UI.
+    private func launchNative(executable: String, directory: URL) throws {
+        let environment = try editorEnvironment(directory: directory)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = ["--headless", "--noplugin", "-u", Self.configurationURL.path, "-i", "NONE", "--listen", directory.appendingPathComponent("editor.sock").path]
+        process.environment = environment
+        process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.nativeProcessExited() } }
+        }
+        try PhaseTrace.measure("editor.spawn") { try process.run() }
+        nativeProcess = process
+    }
+
+    private func nativeProcessExited() {
+        guard !tearingDownNative else { return }
+        isReady = false
+        error = "The coding engine exited. Close and reopen NeoLink to start it again."
+    }
+
+    /// status.json appears when Neovim has loaded neolink.lua (about 120 ms). A 5 ms poll
+    /// notices it within a frame; each check is one stat.
+    private func waitForEditor(directory: URL, socket: Bool) async throws {
+        for _ in 0..<1_000 {
+            try Task.checkCancellation()
+            if await Task.detached(priority: .userInitiated, operation: {
+                let manager = FileManager.default
+                return manager.fileExists(atPath: directory.appendingPathComponent("status.json").path)
+                    && manager.fileExists(atPath: directory.appendingPathComponent("control.sock").path)
+                    && (!socket || manager.fileExists(atPath: directory.appendingPathComponent("editor.sock").path))
+            }).value { return }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        throw CocoaError(.fileReadUnknown)
+    }
+
+    private func attachNative(terminal: CodeTerminalView, directory: URL) async throws {
+        let client = NeovimGridClient(socketPath: directory.appendingPathComponent("editor.sock").path)
+        let presenter = NativeGridPresenter(client: client)
+        presenter.session = self
+        presenter.prepareTerminal(terminal)
+        presenter.onClosed = { [weak self] reason in
+            guard let self, !self.tearingDownNative, self.epoch != UUID() else { return }
+            self.isReady = false
+            self.error = "The coding engine connection closed (\(reason)). Close and reopen NeoLink to start it again."
+        }
+        let size = terminal.getTerminal()
+        try await client.attach(cols: size.cols, rows: size.rows)
+        presenter.viewResized(cols: size.cols, rows: size.rows)
+        nativeGrid = presenter
+        terminal.nativeGrid = presenter
+        presenter.drain()
+    }
+
+    private func fallBackToTUI(executable: String, terminal: CodeTerminalView) throws -> URL {
+        tearDownNativeProcess()
+        nativeRequested = false
+        control?.close(); control = nil
+        watcher?.cancel(); watcher = nil
+        if let directory { try? FileManager.default.removeItem(at: directory) }
+        directory = nil
+        let directory = try prepareDirectory()
+        try launchTUI(executable: executable, directory: directory, terminal: terminal)
+        return directory
+    }
+
+    private func tearDownNativeProcess() {
+        tearingDownNative = true
+        nativeGrid?.shutdown(); nativeGrid = nil
+        terminal?.nativeGrid = nil
+        if let process = nativeProcess, process.isRunning { process.terminate() }
+        nativeProcess = nil
+        tearingDownNative = false
     }
 
     private func readPublishedState() {
@@ -199,6 +324,28 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         parsedSelection = token
         guard requestedPath == selectedPath?() else { return }
         if requestedPath != nil { requestedPath = nil }
+        host?.selectionReady(session: self)
+    }
+
+    /// Neovim's UI channel confirmed `token`: every frame applied so far belongs to that buffer.
+    func nativeSelectionAcknowledged(_ token: UInt64) {
+        guard token == selection else { return }
+        SelectionTrace.mark(token, "native.echo")
+        // A validated cached image already exposed this selection; the confirmation only
+        // reconciles any differing rows (done by the presenter) and ends speculation.
+        if speculativeToken == token { speculativeToken = nil; return }
+        selectionParsed(token)
+    }
+
+    /// Shows the cached image of the selected buffer at once when it is provably current.
+    private func speculateSelection(_ path: String) {
+        guard let nativeGrid, requestedPath == path, selectedPath?() == path else { return }
+        let token = selection
+        guard nativeGrid.speculate(path: path, token: token) else { return }
+        SelectionTrace.mark(token, "native.speculated")
+        speculativeToken = token
+        parsedSelection = token
+        requestedPath = nil
         host?.selectionReady(session: self)
     }
 
@@ -288,6 +435,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     func select(_ path: String) {
         let token = selection
         _ = enqueue(["method": "open", "path": path, "selectionOnly": token])
+        speculateSelection(path)
     }
 
     func action(_ name: String) { _ = enqueue(["method":"action", "action":name]) }
@@ -299,8 +447,13 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
            selectionBegan - event.timestamp >= 0, selectionBegan - event.timestamp < 0.5 {
             SelectionTrace.mark(selection, "input.event", at: event.timestamp, fields: ["type": event.type.rawValue])
         }
+        nativeGrid?.cancelSpeculation()
+        speculativeToken = nil
         host?.selectionChanging()
         if requestedPath != path { requestedPath = path }
+        // Leaving the editor for another kind of tab: record exactly what is on screen so the
+        // buffer can be shown at once on return. (An editor→editor switch does this in its open.)
+        if path == nil, usesNativeGrid, isReady { _ = enqueue(["method": "leave"]) }
     }
     var selectionToken: UInt64 { selection }
     func canAdoptSelection(_ state: NeovimSnapshot) -> Bool {
@@ -308,6 +461,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
     }
     func closeBuffer(_ url: URL) {
         closedPaths.insert(url.path)
+        nativeGrid?.forget(url.path)
         _ = enqueue(["method":"close", "path":url.path])
     }
     func save(_ url: URL) async -> Bool { await request(["method":"save", "path":url.path]) }
@@ -320,6 +474,7 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         watcher?.cancel()
         watcher = nil
         terminal?.processDelegate = nil
+        tearDownNativeProcess()
         if terminal?.process.running == true { terminal?.terminate() }
         terminal = nil
         if let directory { try? FileManager.default.removeItem(at: directory) }
@@ -343,6 +498,88 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
 
 final class CodeTerminalView: InteractiveTerminalView {
     weak var session: NeovimSession?
+    /// Set when the editor is a native Neovim UI client instead of a TUI in a PTY.
+    var nativeGrid: NativeGridPresenter? {
+        didSet {
+            nativeWheelReporter = nativeGrid == nil ? nil : { [weak self] flag, column, row in self?.reportNativeWheel(flag, column: column, row: row) }
+        }
+    }
+    private var lastMouseCell: (row: Int, column: Int)?
+
+    override func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        guard let nativeGrid else { super.send(source: source, data: data); return }
+        // Text from the input system (typing, IME commits, dead keys). Escape sequences the terminal
+        // would have produced for a PTY are meaningless to Neovim's API and are dropped.
+        nativeGrid.send(keys: NeovimKeyEncoder.escape(text: String(decoding: data, as: UTF8.self)))
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard let nativeGrid else { super.keyDown(with: event); return }
+        if hasMarkedText() { interpretKeyEvents([event]); return }
+        if let keys = NeovimKeyEncoder.encode(keyCode: event.keyCode, modifiers: event.modifierFlags,
+                                              charactersIgnoringModifiers: event.charactersIgnoringModifiers) {
+            nativeGrid.send(keys: keys)
+            return
+        }
+        interpretKeyEvents([event])
+    }
+
+    override func paste(_ sender: Any) {
+        guard let nativeGrid else { super.paste(sender); return }
+        if let text = NSPasteboard.general.string(forType: .string) { nativeGrid.paste(text) }
+    }
+
+    override func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        guard let nativeGrid else { super.sizeChanged(source: source, newCols: newCols, newRows: newRows); return }
+        nativeGrid.viewResized(cols: newCols, rows: newRows)
+    }
+
+    /// Row and column (0-based, clamped) of an event's location.
+    private func nativeCell(_ event: NSEvent) -> (row: Int, column: Int) {
+        let terminal = getTerminal()
+        let pixels = cellSizeInPixels(source: terminal) ?? (width: 8, height: 16)
+        let scale = window?.backingScaleFactor ?? 1
+        let width = max(1, CGFloat(pixels.width) / scale), height = max(1, CGFloat(pixels.height) / scale)
+        let point = convert(event.locationInWindow, from: nil)
+        let top = isFlipped ? point.y : bounds.height - point.y
+        return (min(max(0, Int(top / height)), max(0, terminal.rows - 1)), min(max(0, Int(point.x / width)), max(0, terminal.cols - 1)))
+    }
+
+    private func sendMouse(_ event: NSEvent, button: String, action: String) {
+        guard let nativeGrid else { return }
+        let cell = nativeCell(event)
+        if action == "drag", let last = lastMouseCell, last == cell { return }
+        lastMouseCell = action == "release" ? nil : cell
+        nativeGrid.mouse(button: button, action: action, modifier: NeovimKeyEncoder.mouseModifiers(event.modifierFlags), row: cell.row, column: cell.column)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard nativeGrid != nil else { super.mouseDown(with: event); return }
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        sendMouse(event, button: "left", action: "press")
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard nativeGrid != nil else { super.mouseDragged(with: event); return }
+        sendMouse(event, button: "left", action: "drag")
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard nativeGrid != nil else { super.mouseUp(with: event); return }
+        sendMouse(event, button: "left", action: "release")
+    }
+    override func rightMouseDown(with event: NSEvent) {
+        guard nativeGrid != nil else { super.rightMouseDown(with: event); return }
+        sendMouse(event, button: "right", action: "press")
+    }
+    override func rightMouseUp(with event: NSEvent) {
+        guard nativeGrid != nil else { super.rightMouseUp(with: event); return }
+        sendMouse(event, button: "right", action: "release")
+    }
+
+    /// Wheel steps from the shared accumulator/smooth-scroll driver: 64 up, 65 down, 66 left, 67 right.
+    private func reportNativeWheel(_ flag: Int, column: Int, row: Int) {
+        let direction = ["up", "down", "left", "right"][max(0, min(3, flag - 64))]
+        nativeGrid?.mouse(button: "wheel", action: direction, modifier: "", row: row, column: column)
+    }
     @objc func undo(_ sender: Any?) { session?.action("undo") }
     @objc func redo(_ sender: Any?) { session?.action("redo") }
     @objc func selectCode(_ sender: Any?) { session?.action("selectAll") }
