@@ -280,6 +280,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var metalMovedLines = Set<ObjectIdentifier>()
     /// NeoLink: lines a host keeps for later (for example another buffer's rows). Their cached geometry survives frames that do not draw them.
     public var metalRetainedLines: [BufferLine] = []
+    /// NeoLink: a horizontally scrolled band drawn by the Metal renderer (see `ExternalHorizontalScroll`).
+    public var externalHorizontalScroll: ExternalHorizontalScroll? {
+        didSet { requestMetalDisplay() }
+    }
 #endif
 
     var pendingDisplay: Bool = false

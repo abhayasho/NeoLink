@@ -513,6 +513,79 @@ final class NativeGridRenderingTests: XCTestCase {
         XCTAssertEqual(backToB.pixels, bravo.pixels)
         XCTAssertEqual(backToB.rebuilt, 0)
     }
+
+    @MainActor
+    func testHorizontalBandWithARetainedLayerMatchesTheScrolledContentPixelForPixel() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        let gpuPreference = TerminalRenderingPreferences.shared.useGPU
+        TerminalRenderingPreferences.shared.setUseGPU(false)
+        defer { TerminalView.allowsMetalFrameCapture = false; TerminalRenderingPreferences.shared.setUseGPU(gpuPreference) }
+        let banded = TerminalView(frame: .zero), reference = TerminalView(frame: .zero)
+        let windows = [window(banded), window(reference)]
+        defer { windows.forEach { $0.close() } }
+        for view in [banded, reference] {
+            view.nativeForegroundColor = NSColor(hex: 0xd8d8d8); view.nativeBackgroundColor = NSColor(hex: 0x181818)
+            try view.setUseMetal(true)
+        }
+        let cols = banded.getTerminal().cols, rows = banded.getTerminal().rows, gutter = 4
+        func text(row: Int, leftcol: Int) -> String {
+            let long = (0..<20).map { "r\(row)w\($0)\u{1b}[38;2;204;149;149m界\u{1b}[0m-" }.joined()
+            // Strip to the visible slice by columns, counting the double-width character as two.
+            var visible = "", column = 0, skipping = leftcol
+            var index = long.startIndex
+            while index < long.endIndex, column < cols - gutter {
+                if long[index] == "\u{1b}" {
+                    let end = long[index...].firstIndex(of: "m")!
+                    visible += long[index...end]; index = long.index(after: end); continue
+                }
+                let width = long[index] == "界" ? 2 : 1
+                if skipping > 0 { skipping -= width; index = long.index(after: index); if skipping < 0 { visible += " "; column += 1 }; continue }
+                if column + width > cols - gutter { break }
+                visible.append(long[index]); column += width; index = long.index(after: index)
+            }
+            return visible
+        }
+        func screen(leftcol: Int) -> String {
+            "\u{1b}[?1049h\u{1b}[?25l\u{1b}[2J\u{1b}[H" + (0..<rows).map { row in "\u{1b}[0m" + String(format: "%3d ", row + 1) + text(row: row, leftcol: leftcol) }.joined(separator: "\r\n")
+        }
+        // The band shows leftcol 10, those rows are retained, and Neovim's answer for leftcol 18 is written.
+        banded.feed(text: screen(leftcol: 10))
+        _ = try capture(banded)
+        var retained: [BufferLine] = []
+        banded.externalGridUpdate { terminal in
+            retained = banded.externalGridExchange((0..<rows).map { _ in BufferLine(cols: cols) }) ?? []
+        }
+        banded.feed(text: "\u{1b}[H" + (0..<rows).map { row in "\u{1b}[0m" + String(format: "%3d ", row + 1) + text(row: row, leftcol: 18) }.joined(separator: "\r\n"))
+        XCTAssertEqual(retained.count, rows)
+        // Drawn at leftcol 13: the current rows move right by 5 columns, the retained rows fill the 5 exposed columns.
+        let cell = CGFloat(try XCTUnwrap(banded.cellSizeInPixels(source: banded.getTerminal())).width) / (banded.window?.backingScaleFactor ?? 2)
+        let start = CGFloat(gutter) * cell, end = CGFloat(cols) * cell
+        banded.externalHorizontalScroll = ExternalHorizontalScroll(rows: 0...(rows - 1), textStart: gutter, textEnd: cols, layers: [
+            .init(lines: nil, offset: 5 * cell, clipFrom: start + 5 * cell, clipTo: end),
+            .init(lines: retained, offset: -3 * cell, clipFrom: start, clipTo: start + 5 * cell),
+        ])
+        reference.feed(text: screen(leftcol: 13))
+        let expected = pixels(try capture(reference)), actual = pixels(try capture(banded))
+        let differing = zip(actual, expected).filter { $0 != $1 }.count
+        if differing > 0 {
+            let width = Int(banded.bounds.width * (banded.window?.backingScaleFactor ?? 2))
+            var cells = Set<String>()
+            let cw = Int(cell * 2), ch = try XCTUnwrap(banded.cellSizeInPixels(source: banded.getTerminal())).height
+            for index in 0..<actual.count where actual[index] != expected[index] { let p = index / 4; cells.insert("\(p % width / cw),\(p / width / ch)") }
+            print("BANDDIFF", cells.sorted().prefix(40))
+        }
+        XCTAssertEqual(differing, 0, "\(differing) bytes differ between the banded composite and the directly drawn scrolled content")
+        // With the band removed, the view shows exactly Neovim's answer (leftcol 18).
+        banded.externalHorizontalScroll = nil
+        let other = TerminalView(frame: .zero)
+        let third = window(other); defer { third.close() }
+        other.nativeForegroundColor = NSColor(hex: 0xd8d8d8); other.nativeBackgroundColor = NSColor(hex: 0x181818)
+        try other.setUseMetal(true)
+        other.feed(text: screen(leftcol: 18))
+        XCTAssertEqual(pixels(try capture(banded)), pixels(try capture(other)))
+    }
 }
 
 extension Array where Element == UInt8 {

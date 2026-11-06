@@ -1,8 +1,8 @@
-# Native Neovim grid client (opt-in, `NEOLINK_NATIVE_GRID=1`)
+# Native Neovim grid client (default; `NEOLINK_NATIVE_GRID=0` or the View menu selects the TUI)
 
 By default the shared editor is a Neovim TUI in a pseudo-terminal: Neovim renders its UI to escape sequences, the PTY carries them, SwiftTerm's VT parser rebuilds a cell grid on the main thread, and the Metal renderer draws that grid. The native client removes the TUI process, the PTY and the VT parser. NeoLink starts a **headless** Neovim server (same `--listen` socket, same `Resources/Editor/neolink.lua`) and attaches to it as an `ext_linegrid` UI over msgpack-RPC. The editor's cells then go straight into SwiftTerm's existing buffer, so the glyph atlas, 16 raster phases, integer-pixel quads, row cache, cursor drawing, IME/marked text, accessibility, NeoGPU hosting, VSync and the single NeoGPU display link are the terminal path's, unchanged.
 
-The TUI path stays the default and the fallback. Set `NEOLINK_NATIVE_GRID=1` to select the native client. If `nvim` is missing, does not advertise `ext_linegrid`/`rgb` UI options, fails to attach, or the editor configuration lacks the native hooks, the session logs the reason (`NeovimSession.nativeFallbackReason`) and starts the TUI instead; queued commands wait for whichever engine becomes ready. A View-menu preference is deliberately not added yet (a change needs an editor restart; see the limits below).
+The native client is the default (since the horizontal-scrolling work; see [RENDERING.md](RENDERING.md#pixel-smooth-horizontal-editor-scrolling-native-client)). The TUI path is the fallback and can be selected with **View → Native Editor Rendering (after Restart)** or `NEOLINK_NATIVE_GRID=0`. If `nvim` is missing, does not advertise `ext_linegrid`/`rgb` UI options, fails to attach, or the editor configuration lacks the native hooks, the session logs the reason (`NeovimSession.nativeFallbackReason`) and starts the TUI instead; queued commands wait for whichever engine becomes ready. A View-menu preference is deliberately not added yet (a change needs an editor restart; see the limits below).
 
 ## Pipeline
 
@@ -49,8 +49,8 @@ A speculative image is a display optimisation, not a source of truth. Neovim's o
 
 ## Limits
 
-- Opt-in only; no View-menu preference. Changing engines needs an editor restart.
-- Native-path scrolling follows whole Neovim lines through `nvim_input_mouse` with the same trackpad accumulator and smooth-scroll driver; the interpolated sub-line region draws from lines retained by `grid_scroll`. Physical trackpad feel, momentum and keyboard-repeat feel are **not verified** (procedural events only).
+- Changing engines (View menu) applies after a restart.
+- Vertical scrolling uses `nvim_input_mouse` whole-line steps with the smooth-scroll driver drawing the sub-line remainder from lines retained by `grid_scroll`; horizontal scrolling is pixel-smooth through `NeoLink.hscroll` chunks and a translated text band (see RENDERING.md). Physical trackpad feel, momentum and keyboard-repeat feel are **not verified** (procedural events only).
 - `ext_multigrid`, `ext_popupmenu`, `ext_cmdline`, `ext_messages`, `win_viewport` and `winblend` blending are not used; popup menus, floats and the command line are drawn by Neovim into the one grid. Cursor blink phase, `cell_percentage` and the cursor highlight attribute are approximated by the terminal's cursor styles.
 - Option-as-Meta is not implemented; Option composes characters through the input system, Option plus Control/special keys sends `M-`.
 - A cached image can precede Neovim's confirmation by one round trip. The window in which a change reaches Neovim but its `neolink_touch` has not yet reached the host is under a millisecond on the local socket, but it exists.

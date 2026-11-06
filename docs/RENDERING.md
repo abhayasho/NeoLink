@@ -6,6 +6,34 @@
 
 [Build 26 explorer and tab interaction changes, measurements and limits](INTERACTIONS.md). Highlight composition now retains the text strip independently; historical whole-strip invalidation descriptions below apply to their original builds.
 
+## Pixel-smooth horizontal editor scrolling (native client)
+
+**Why it was choppy.** Neovim shows whole columns, and each column it scrolls horizontally rewrites every row of the window. In the native client each column step was a wheel event to Neovim. Neovim then sent a full redraw, and the renderer rebuilt every row. Horizontal motion therefore advanced in whole-column jumps at most every other refresh, with heavy frames.
+
+**How it works now** (`NativeHorizontalScroll`, `NeoLink.hscroll` in `neolink.lua`, `ExternalHorizontalScroll` in the renderer). This follows the same design as the vertical smooth scroll. Zed's editor scrolls at fractional pixel positions in both axes; this is the closest equivalent while Neovim owns the viewport:
+
+1. Finger input, in columns, is resampled at the display's cadence (`ScrollResampler`).
+2. Neovim is asked, about 24 columns at a time, to put the window's leftcol ahead of the fingers. `NeoLink.hscroll` reproduces Neovim's own mouse-scroll rules: a cursor line shorter than the view moves to the longest visible line, and the cursor stays in view. It then redraws and reports on the ordered UI channel. The host shows those frames together with the report, never before it.
+3. The renderer draws the window's text area translated by the sub-column remainder, in whole device pixels. The gutter (numbers, signs, folds) and other windows stay put. The strip a translation exposes is drawn from the rows that showed the previous chunks; those rows were detached, not overwritten, and keep their geometry.
+4. Retained rows are preferred. Right after a chunk arrives they still cover the view, so the new rows are built six per frame in the background and only drawn where nothing older reaches. No frame rebuilds the whole window.
+5. When the gesture and its momentum end, the drawn position glides to a whole column in the direction of travel and Neovim is asked for exactly that column. At rest the screen is Neovim's own grid, which a real-Neovim test checks row by row. Typing, clicks, vertical scrolling, tab changes and resizes end a session on the nearest column first.
+
+`NEOLINK_HSCROLL=0` restores column steps for comparison. Same-binary A/B, release, native full screen, unlocked, native editor, 4 alternating rounds of `editor-horizontal`: 60 Hz sideways finger events over a file of long lines, scrolled right and back for 3 s. The pointer is over the editor; without that, Neovim ignores the wheel and the old path never moved.
+
+| Metric (per run) | Column steps (`NEOLINK_HSCROLL=0`) | Pixel-smooth (default) |
+| --- | --- | --- |
+| Changed-content interval p50 / p95 | 16.7 / 16.7 ms (all four) | **8.3 / 8.3 ms (all four)** |
+| Missed refreshes while scrolling | 179 / 177 / 179 / 179 | **0 / 1 / 0 / 3** |
+| Display frames with no horizontal motion while scrolling | (whole-column jumps) | **0 of ~353** in every run |
+| Ratio between consecutive frame steps, p50 / p95 | n/a | 1.01–1.03 / 1.07–1.22 |
+| Neovim redraws / rows rewritten | 180 / 10,350 | 19 / 754 |
+| Process CPU (% of one core) | 40.8 / 42.4 / 35.4 / 41.5 | 30.5 / 29.3 / 32.1 / 34.3 |
+| Longest main-thread stall | 6.7 / 13.4 / 10.4 / 9.0 ms | 8.4 / 10.6 / 9.1 / 19.8 ms |
+
+`editor-diagonal` and `editor-flick` did not change: 0 stalls and 0 jumps in nearly every run of both arms. One run of the new arm had a 19.8 ms longest stall, with 11 samples over 8 ms; the other three stayed at or under 10.6 ms. Starting a session still builds the window's rows once when the first chunk arrives. Physical trackpad feel is not established by these runs.
+
+**The native editor is now the default.** All of this, the cached tab images and the faster presentation only reach the editor through the native client. The TUI-in-PTY path is now the fallback: it is used automatically when Neovim cannot attach natively, under **View → Native Editor Rendering (after Restart)**, or with `NEOLINK_NATIVE_GRID=0`. `NEOLINK_NATIVE_GRID=1` forces the native client. Note that `open NeoLink.app` does not pass shell variables to the app; use `open --env NAME=value -n NeoLink.app` or run the binary directly.
+
 ## Trackpad axis locking and explorer glide
 
 **Diagonal editor scrolling.** A finger scrolling "vertically" drifts sideways. With `nowrap` every sideways column made Neovim redraw the whole screen (each row rebuilt), so diagonal input put heavy frames and jumps into otherwise smooth vertical motion. `ScrollAxisLock` follows Zed's `OngoingScroll` (gpui `gestures.rs`): a trackpad gesture locks to its dominant axis on its first event (or after a 28 ms pause). It switches only when an event of at least 6 points moves 1.9× further along the other axis. Mouse wheels are not filtered. This applies to the editor and terminal panes (`InteractiveTerminalView`), before the smooth-scroll driver.
