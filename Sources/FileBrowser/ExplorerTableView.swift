@@ -548,6 +548,13 @@ final class ExplorerRowView: NSTableRowView {
 /// separately animated native layer. macOS still supplies trackpad momentum deltas.
 final class ExplorerScrollView: NSScrollView {
     var usesMetalScrolling = false
+    /// Trackpad input is drawn at the display's cadence (see `ScrollResampler`): a finger reports about 60 times
+    /// a second, so moving the clip view on each event alone held every other 120 Hz frame still.
+    private var resampler = ScrollResampler()
+    private var targetY: CGFloat?
+    private var drawnY: CGFloat?
+    private var animating = false
+    private var endPending = false
 
     override func scrollWheel(with event: NSEvent) {
         guard usesMetalScrolling, event.hasPreciseScrollingDeltas,
@@ -558,23 +565,81 @@ final class ExplorerScrollView: NSScrollView {
         }
         let center = NotificationCenter.default
         if event.phase.contains(.began) || event.momentumPhase.contains(.began) {
-            center.post(name: NSScrollView.willStartLiveScrollNotification, object: self)
+            // A new gesture while the previous one is still gliding continues the same live scroll.
+            if endPending { endPending = false } else { center.post(name: NSScrollView.willStartLiveScrollNotification, object: self) }
         }
-        scrollPrecisely(by: event.scrollingDeltaY)
-        center.post(name: NSScrollView.didLiveScrollNotification, object: self)
+        queue(event.scrollingDeltaY, at: CACurrentMediaTime())
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) {
-            center.post(name: NSScrollView.didEndLiveScrollNotification, object: self)
+            if animating { endPending = true } else { center.post(name: NSScrollView.didEndLiveScrollNotification, object: self) }
         }
     }
 
+    /// Moves immediately (programmatic scrolling and tests).
     func scrollPrecisely(by delta: CGFloat) {
         guard delta.isFinite, delta != 0 else { return }
+        cancelGlide()
         var target = contentView.bounds
         target.origin.y -= delta
         target = contentView.constrainBoundsRect(target)
         guard target.origin != contentView.bounds.origin else { return }
         contentView.scroll(to: target.origin)
         reflectScrolledClipView(contentView)
+    }
+
+    private func cancelGlide() { resampler.reset(); targetY = nil; drawnY = nil }
+
+    private func queue(_ delta: CGFloat, at time: Double) {
+        guard delta.isFinite, delta != 0 else { return }
+        let current = contentView.bounds.origin.y
+        // Something else moved the content (keyboard, reveal, resize): start from where it is.
+        if let drawnY, abs(current - drawnY) > 0.5 { cancelGlide() }
+        let base = targetY ?? current
+        var target = contentView.bounds
+        target.origin.y = base - delta
+        target = contentView.constrainBoundsRect(target)
+        let applied = target.origin.y - base
+        guard applied != 0 else { return }
+        if targetY == nil { resampler.reset() }
+        targetY = target.origin.y
+        resampler.input(Double(applied), at: time)
+        apply()
+        startGliding()
+    }
+
+    private func apply() {
+        guard let targetY else { return }
+        let scale = window?.backingScaleFactor ?? 2
+        // Whole device pixels keep text on the pixel grid, like the terminal's smooth scrolling.
+        let y = ((targetY - CGFloat(resampler.lag)) * scale).rounded() / scale
+        if y != contentView.bounds.origin.y {
+            contentView.scroll(to: NSPoint(x: contentView.bounds.origin.x, y: y))
+            reflectScrolledClipView(contentView)
+            NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: self)
+        }
+        drawnY = contentView.bounds.origin.y
+    }
+
+    private func startGliding() {
+        guard !animating, let frames = WindowFrameScheduler.forWindow(window) else { return }
+        animating = true
+        resampler.framePeriod = 1.0 / Double(max(30, frames.targetRate))
+        frames.animate(ObjectIdentifier(self)) { [weak self] time in
+            guard let self else { return false }
+            guard time.isFinite, self.targetY != nil else { self.finishGlide(); return false }
+            let active = self.resampler.advance(to: CACurrentMediaTime())
+            self.apply()
+            if !active { self.finishGlide() }
+            return active
+        }
+    }
+
+    private func finishGlide() {
+        animating = false
+        targetY = nil
+        if endPending {
+            endPending = false
+            NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: self)
+        }
     }
 }
 

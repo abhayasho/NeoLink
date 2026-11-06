@@ -32,6 +32,17 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     /// Set by a native Neovim UI client: wheel steps (flags 64 up, 65 down, 66 left, 67 right at a
     /// cell) go to Neovim instead of to a PTY as mouse reports.
     var nativeWheelReporter: ((_ flag: Int, _ column: Int, _ row: Int) -> Void)?
+    /// For measurement: horizontal wheel steps sent to a program (each makes it redraw every row).
+    private(set) var horizontalWheelSteps = 0
+    private var axisLock = ScrollAxisLock()
+    /// The current event's deltas after axis locking (trackpads only).
+    private var filtered: (dx: CGFloat, dy: CGFloat) = (0, 0)
+    private func filterAxes(_ event: NSEvent) {
+        guard event.hasPreciseScrollingDeltas else { filtered = (event.scrollingDeltaX, event.scrollingDeltaY); return }
+        let began = event.phase.contains(.began) || event.phase.contains(.mayBegin)
+        let ended = event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled)
+        filtered = axisLock.filter(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY, began: began, ended: ended, at: event.timestamp)
+    }
 
     /// Drains output queued for this surface: PTY chunks, or the native client's mailbox. Called
     /// on the owning display deadline, before encoding.
@@ -59,15 +70,15 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     /// Precise vertical scrolling, including the zero-delta events that end a gesture or its momentum.
     private func isSmoothVerticalScroll(_ event: NSEvent) -> Bool {
         guard event.hasPreciseScrollingDeltas, smoothScroll.isAvailable else { return false }
-        if event.scrollingDeltaY == 0 {
-            return event.scrollingDeltaX == 0 && SmoothScrollDriver.phase(of: event) != .changed
+        if filtered.dy == 0 {
+            return filtered.dx == 0 && SmoothScrollDriver.phase(of: event) != .changed
         }
-        return abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+        return abs(filtered.dy) >= abs(filtered.dx)
     }
 
     private func smoothScrollback(_ event: NSEvent) -> Bool {
         guard !isDisplayingAlternateScreen, isSmoothVerticalScroll(event) else { return false }
-        smoothScroll.scroll(event, source: .scrollback) { [weak self] lines in self?.scrollViewport(towardTop: lines) ?? 0 }
+        smoothScroll.scroll(event, source: .scrollback, deltaY: filtered.dy) { [weak self] lines in self?.scrollViewport(towardTop: lines) ?? 0 }
         return true
     }
 
@@ -112,6 +123,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
                     if window.firstResponder !== self { self.onActivate?() }
                     return event
                 }
+                self.filterAxes(event)
                 return self.forwardWheel(event) || self.smoothScrollback(event) ? nil : event
             }
         }
@@ -120,7 +132,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     deinit { if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) } }
 
     /// The wheel path for an event already known to target this view (used by the benchmark).
-    func deliverWheel(_ event: NSEvent) { if !forwardWheel(event), !smoothScrollback(event) { scrollWheel(with: event) } }
+    func deliverWheel(_ event: NSEvent) { filterAxes(event); if !forwardWheel(event), !smoothScrollback(event) { scrollWheel(with: event) } }
 
     private func forwardWheel(_ event: NSEvent) -> Bool {
         let terminal = getTerminal()
@@ -134,7 +146,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
         // Trackpad scrolling in a full-screen program follows the fingers pixel by pixel:
         // the program scrolls whole lines ahead and the renderer draws the remainder.
         let smooth = isDisplayingAlternateScreen && isSmoothVerticalScroll(event)
-        let steps = wheel.consume(x: event.scrollingDeltaX, y: smooth ? 0 : event.scrollingDeltaY,
+        let steps = wheel.consume(x: filtered.dx, y: smooth ? 0 : filtered.dy,
                                   precise: event.hasPreciseScrollingDeltas, cell: cell,
                                   newGesture: event.phase == .began)
         let point = convert(event.locationInWindow, from: nil)
@@ -150,7 +162,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
         }
         if smooth {
             // Later requests (settling) report at the same cell.
-            smoothScroll.scroll(event, source: .program) { [weak self] lines in
+            smoothScroll.scroll(event, source: .program, deltaY: filtered.dy) { [weak self] lines in
                 guard let terminal = self?.getTerminal() else { return nil }
                 for _ in 0..<min(80, abs(lines)) {
                     if let native { native(lines > 0 ? 64 : 65, col, row); continue }
@@ -163,6 +175,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
             report(steps.y > 0 ? 64 : 65, count: steps.y)
         }
         report(steps.x > 0 ? 66 : 67, count: steps.x)
+        horizontalWheelSteps += abs(steps.x)
         return true
     }
 }

@@ -60,7 +60,7 @@ final class InteractionBenchmark {
         // Surrounding-UI scenarios need a project. A development build may not resolve the
         // installed app's folder bookmarks; use the checkout and restore the setting at the end.
         let savedProject = UserDefaults.standard.string(forKey: "activeProjectPath")
-        if scenarios.contains(where: { $0.hasPrefix("ui-") || $0 == "render-motion" }), WorkspaceAccess.shared.projectURL == nil {
+        if scenarios.contains(where: { $0.hasPrefix("ui-") || $0.hasPrefix("explorer-") || $0 == "render-motion" }), WorkspaceAccess.shared.projectURL == nil {
             WorkspaceAccess.shared.select(Self.repositoryRoot)
             await sleep(1.0)
         }
@@ -225,6 +225,56 @@ final class InteractionBenchmark {
                     await self.sleep(1.5)
                     self.environment["footprintAfterFirstOpenMB"] = (Self.footprintMB() * 10).rounded() / 10
                 }
+            case "editor-diagonal":
+                guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
+                await home(view)
+                let before = view.horizontalWheelSteps
+                await measureScroll(scenario, view: view, profile: .diagonal())
+                if var last = results.last, last["scenario"] as? String == scenario {
+                    last["horizontalStepsSent"] = view.horizontalWheelSteps - before
+                    results[results.count - 1] = last
+                }
+            case "explorer-steady", "explorer-flick":
+                guard let scroll = Self.explorerScrollView(in: window), let table = scroll.documentView as? ExplorerNSTableView,
+                      let coordinator = table.coordinator else { fail(scenario, "native explorer unavailable"); continue }
+                _ = await wait(8) { !coordinator.rows.isEmpty }
+                for name in ["Sources", "Documents", "FileBrowser", "Rendering", "Terminal", "Tests", "NeoLinkTests", "docs", "scripts"] {
+                    if let row = coordinator.rows.first(where: { $0.name == name && !$0.expanded && $0.item.isDirectory }) {
+                        coordinator.parent.onToggle(row)
+                        _ = await wait(3) { coordinator.rows.contains { $0.name == name && $0.expanded } }
+                        await sleep(0.2)
+                    }
+                }
+                _ = await wait(5) { (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height > 400 }
+                await sleep(0.8)
+                guard let surface = Self.find(ExplorerMetalView.self, in: scroll, where: { _ in true }),
+                      await wait(8, { surface.isCoveringNativeRows }) else { fail(scenario, "explorer Metal surface did not present"); continue }
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: 0)); scroll.reflectScrolledClipView(scroll.contentView)
+                await sleep(0.4)
+                let profile: ScrollProfile = scenario == "explorer-flick" ? .flick(towardTop: false) : .steady60(pointsPerSecond: 600, seconds: 3)
+                surface.recordsMotionSamples = true
+                let start = CACurrentMediaTime()
+                var timeline: [(Double, Double)] = []
+                // The clip view's origin at every display frame (what the next presented frame shows).
+                var clip: [[Double]] = []
+                var sampling = true
+                window.frames.animate(ObjectIdentifier(scroll)) { _ in
+                    clip.append([(CACurrentMediaTime() - start) * 1000, Double(scroll.contentView.bounds.origin.y)])
+                    return sampling
+                }
+                let range = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height)
+                await measure(scenario, extra: {
+                    let samples = surface.motionSamples.filter { $0.time >= start }
+                    return ["inputDriver": "synthesized trackpad scroll events delivered to the explorer scroll view",
+                            "inputIntervalMs": profile.interval * 1000, "scrollableRangePoints": Double(range),
+                            "explorerFrameSamples": samples.map { [($0.time - start) * 1000, $0.y, $0.changed ? 1 : 0] },
+                            "clipFrameSamples": clip,
+                            "inputTimeline": timeline.map { [($0.0 - start) * 1000, $0.1] }]
+                }) {
+                    timeline = await self.play(profile, cell: 1) { event in scroll.scrollWheel(with: event) }
+                    sampling = false
+                }
+                surface.recordsMotionSamples = false
             case "editor-scroll", "editor-slow", "editor-flick", "editor-reversal":
                 guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
                 await home(view)
@@ -599,8 +649,36 @@ final class InteractionBenchmark {
     /// A trackpad gesture: one event per 1/120 s with a delta in points (positive moves the
     /// content toward the top) and its gesture and momentum phases.
     struct ScrollProfile {
-        struct Event { var delta: Double; var phase: Int64; var momentum: Int64 }
+        struct Event { var delta: Double; var phase: Int64; var momentum: Int64; var deltaX: Double = 0 }
         var events: [Event]
+        /// Seconds between events (trackpads report a moving finger at about 60 Hz; momentum follows the display).
+        var interval = 1.0 / 120
+
+        /// A finger moving mostly vertically at 60 Hz reports, drifting sideways the way a real hand does
+        /// (a slow sinusoid of up to 35% of the vertical motion). Used to check that diagonal noise does not
+        /// make vertical scrolling jump.
+        static func diagonal(pointsPerSecond: Double = 360, seconds: Double = 3) -> ScrollProfile {
+            let count = Int(seconds * 60), step = pointsPerSecond / 60
+            var events: [Event] = []
+            for i in 0..<count {
+                let drift = 0.35 * step * sin(Double(i) / 9)
+                events.append(Event(delta: -step, phase: i == 0 ? 1 : (i == count - 1 ? 4 : 2), momentum: 0, deltaX: drift))
+            }
+            var profile = ScrollProfile(events: events)
+            profile.interval = 1.0 / 60
+            return profile
+        }
+
+        /// Constant finger speed at the 60 Hz report rate of a moving finger, one direction then the other.
+        static func steady60(pointsPerSecond: Double, seconds: Double) -> ScrollProfile {
+            let perDirection = Int(seconds * 30), step = pointsPerSecond / 60
+            let events = [step, -step].flatMap { delta in
+                (0..<perDirection).map { i in Event(delta: delta, phase: i == 0 ? 1 : (i == perDirection - 1 ? 4 : 2), momentum: 0) }
+            }
+            var profile = ScrollProfile(events: events)
+            profile.interval = 1.0 / 60
+            return profile
+        }
 
         /// Constant finger speed in one direction, then the other.
         static func steady(pointsPerSecond: Double, seconds: Double, towardTopFirst: Bool) -> ScrollProfile {
@@ -647,13 +725,13 @@ final class InteractionBenchmark {
         let frames = window.frames
         let timeline = TimelineRecorder()
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            var index = 0, position = 0.0, carried = 0.0
+            var index = 0, position = 0.0, carried = 0.0, carriedX = 0.0
             let timer = DispatchSource.makeTimerSource(flags: .strict, queue: eventQueue)
-            timer.schedule(deadline: .now(), repeating: 1.0 / 120, leeway: .nanoseconds(0))
+            timer.schedule(deadline: .now(), repeating: profile.interval, leeway: .nanoseconds(0))
             timer.setEventHandler {
                 guard index < profile.events.count else { timer.cancel(); done.resume(); return }
                 let step = profile.events[index]; index += 1
-                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 0, wheel2: 0, wheel3: 0) else { return }
+                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: 0, wheel3: 0) else { return }
                 // AppKit reports synthesized continuous deltas in whole points; carry the
                 // fraction so the delivered total matches the profile. The ideal position
                 // below stays continuous, so the comparison includes this ±0.5 pt rounding.
@@ -663,6 +741,11 @@ final class InteractionBenchmark {
                 cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
                 cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: whole)
                 cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: whole)
+                carriedX += step.deltaX
+                let wholeX = carriedX.rounded(.towardZero)
+                carriedX -= wholeX
+                cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: wholeX)
+                cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: wholeX)
                 cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: step.phase)
                 cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: step.momentum)
                 position += step.delta / cell

@@ -272,6 +272,52 @@ struct SmoothScrollModel {
     mutating func takeClamped() -> Double { defer { clamped = 0 }; return clamped }
 }
 
+/// Keeps a trackpad gesture on the axis it started on, the way Zed's `OngoingScroll` does.
+///
+/// A finger moving "vertically" drifts sideways by a fraction of its motion. In an editor without line
+/// wrapping every sideways column makes the program redraw the whole screen, so that drift turned smooth
+/// vertical scrolling into a stream of heavy frames and jumps. A gesture locks to its dominant axis on its
+/// first event (or after a pause of 28 ms); it switches only when an event of at least 6 points moves 1.9
+/// times further along the other axis. Mouse wheels (imprecise deltas) are not filtered.
+struct ScrollAxisLock {
+    enum Axis { case horizontal, vertical }
+    private(set) var axis: Axis?
+    private var lastEvent: Double?
+    static let separation = 0.028
+    static let unlockRatio: CGFloat = 1.9
+    static let unlockMinimum: CGFloat = 6
+
+    mutating func filter(dx: CGFloat, dy: CGFloat, began: Bool, ended: Bool, at time: Double) -> (dx: CGFloat, dy: CGFloat) {
+        if ended {
+            // The end of the finger's contact; whatever this event carries still follows the current lock.
+            let result = apply(dx, dy)
+            axis = nil; lastEvent = nil
+            return result
+        }
+        if dx == 0, dy == 0 {
+            if began { axis = nil; lastEvent = nil }
+            return (0, 0)
+        }
+        let newGesture = began || lastEvent.map { time - $0 >= Self.separation } ?? true
+        if newGesture {
+            axis = abs(dx) > abs(dy) ? .horizontal : .vertical
+        } else if max(abs(dx), abs(dy)) >= Self.unlockMinimum {
+            if axis == .vertical, abs(dx) > Self.unlockRatio * abs(dy) { axis = .horizontal }
+            else if axis == .horizontal, abs(dy) > Self.unlockRatio * abs(dx) { axis = .vertical }
+        }
+        lastEvent = time
+        return apply(dx, dy)
+    }
+
+    private func apply(_ dx: CGFloat, _ dy: CGFloat) -> (dx: CGFloat, dy: CGFloat) {
+        switch axis {
+        case .vertical: return (0, dy)
+        case .horizontal: return (dx, 0)
+        case nil: return (dx, dy)
+        }
+    }
+}
+
 /// Draws trackpad input at the display's cadence instead of the input's.
 ///
 /// Scroll events arrive when the hardware reports them (often about 60 Hz, with jitter and bursts), not
@@ -411,16 +457,17 @@ final class SmoothScrollDriver {
 
     /// Handles a precise vertical scroll. `move` asks the grid to move whole lines toward the
     /// top and returns how many it moved synchronously (`nil` when it will report later).
-    func scroll(_ event: NSEvent, source: SmoothScrollSource, move: @escaping (Int) -> Int?) {
+    func scroll(_ event: NSEvent, source: SmoothScrollSource, deltaY: CGFloat? = nil, move: @escaping (Int) -> Int?) {
+        let deltaY = deltaY ?? event.scrollingDeltaY
         let now = CACurrentMediaTime()
         if self.source != source { reset(); self.source = source; view.smoothScrollSource = source }
         let phase = Self.phase(of: event)
-        if source == .program, now - model.lastInput > 0.3, !model.isScrolling, event.scrollingDeltaY != 0 {
+        if source == .program, now - model.lastInput > 0.3, !model.isScrolling, deltaY != 0 {
             model.beginGesture()
             view.discardRetainedScrollLines()
         }
         mover = move
-        let lines = Double(event.scrollingDeltaY * view.scrollSensitivity / max(1, cellHeight))
+        let lines = Double(deltaY * view.scrollSensitivity / max(1, cellHeight))
         traced = true; traceInput += lines
         if source == .scrollback {
             // Apply all input before the next display-paced frame. A parked fraction is a
