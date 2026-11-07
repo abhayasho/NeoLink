@@ -49,12 +49,27 @@ enum WorkspaceTab: Identifiable {
     }
 }
 
+/// The selected tab, published on its own. A tab switch then invalidates only the views that show the selection
+/// (the tab strip and panes, the editor toolbar, the explorer's active file, the window title, the agent's context)
+/// instead of every view that observes `TabsController`: the root SwiftUI transaction and layout that followed each
+/// switch kept the main thread from drawing the (already cached) next buffer for about 15 ms.
+@MainActor
+final class TabSelection: ObservableObject {
+    @Published fileprivate(set) var id: UUID?
+    init(id: UUID?) { self.id = id }
+}
+
 @MainActor
 final class TabsController: ObservableObject {
-    @Published var tabs: [WorkspaceTab]
-    @Published var selectedTabID: UUID? {
-        didSet {
-            guard selectedTabID != oldValue else { return }
+    @Published var tabs: [WorkspaceTab] { didSet { updateBrowserTab() } }
+    let selection: TabSelection
+    var selectedTabID: UUID? {
+        get { selection.id }
+        set {
+            let oldValue = selection.id
+            guard newValue != oldValue else { return }
+            selection.id = newValue
+            updateBrowserTab()
             if tabs.first(where: { $0.id == oldValue })?.terminal?.agentName != nil { fileRefreshRevision += 1 }
             guard let document = selectedTab?.document, case .local(let url) = document.source else {
                 codeSession.prepareSelection(nil)
@@ -68,6 +83,13 @@ final class TabsController: ObservableObject {
             codeSession.prepareSelection(url.path)
             if !document.isLoading { codeSession.select(url.path) }
         }
+    }
+    /// The terminal tab whose file browser is shown (`browserTab`); published only when it changes, so the
+    /// workspace layout follows a change of browser but not every tab switch.
+    @Published private(set) var browserTabID: UUID?
+    private func updateBrowserTab() {
+        let id = browserTab?.id
+        if browserTabID != id { browserTabID = id }
     }
     @Published private(set) var isConfirmingClose = false
     @Published private(set) var fileRefreshRevision = 0
@@ -87,8 +109,9 @@ final class TabsController: ObservableObject {
             configuration: TerminalConfiguration(backend: .localShell),
             currentDirectory: FileManager.default.homeDirectoryForCurrentUser.path
         )
+        selection = TabSelection(id: initial.id)
         tabs = [.terminal(initial)]
-        selectedTabID = initial.id
+        browserTabID = initial.id
         codeSession.onSnapshot = { [weak self] snapshot in self?.syncEditor(snapshot) }
         codeSession.onEditorFocus = { [weak self] in
             guard let self, (!self.agentPanelTabs.isEmpty || !self.acpSessions.isEmpty) else { return }

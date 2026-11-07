@@ -92,6 +92,7 @@ struct ContentView: View {
         workspaceLayout
         .environmentObject(sessionManager)
         .environmentObject(tabsController)
+        .environmentObject(tabsController.selection)
         .environmentObject(sftpConnectionPool)
         .disabled(tabsController.isConfirmingClose)
         .tint(NeoLinkTheme.accent)
@@ -266,19 +267,7 @@ struct ContentView: View {
     }
 
     private var workspaceFooter: some View {
-        HStack(spacing: 7) {
-            Image(systemName: tabsController.selectedTab?.document == nil ? "terminal" : "doc.text")
-            Text(tabsController.selectedTab?.document?.title ?? "NeoLink")
-            Spacer()
-            Text("\(tabsController.tabs.count) \(tabsController.tabs.count == 1 ? "tab" : "tabs")")
-            Rectangle().fill(NeoLinkTheme.separator).frame(width: 1, height: 10)
-            Text("⌘T  New tab")
-        }
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(NeoLinkTheme.textSecondary)
-        .padding(.horizontal, 14)
-        .frame(height: 22)
-        .background(NeoLinkTheme.sidebarBackground)
+        WorkspaceFooter(selection: tabsController.selection, controller: tabsController, tabCount: tabsController.tabs.count)
     }
 
     private func selectTab(offset: Int) {
@@ -303,5 +292,29 @@ struct ContentView: View {
     private func showSearch(contents: Bool) {
         if let root = access.projectURL { search = SearchPresentation(root: root, contents: contents) }
         else { access.chooseFolder { root in search = SearchPresentation(root: root, contents: contents) } }
+    }
+}
+
+/// The footer follows the selected tab on its own, so a tab switch does not re-evaluate the workspace root.
+private struct WorkspaceFooter: View {
+    @ObservedObject var selection: TabSelection
+    let controller: TabsController
+    let tabCount: Int
+
+    var body: some View {
+        let document = controller.selectedTab?.document
+        HStack(spacing: 7) {
+            Image(systemName: document == nil ? "terminal" : "doc.text")
+            Text(document?.title ?? "NeoLink")
+            Spacer()
+            Text("\(tabCount) \(tabCount == 1 ? "tab" : "tabs")")
+            Rectangle().fill(NeoLinkTheme.separator).frame(width: 1, height: 10)
+            Text("⌘T  New tab")
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(NeoLinkTheme.textSecondary)
+        .padding(.horizontal, 14)
+        .frame(height: 22)
+        .background(NeoLinkTheme.sidebarBackground)
     }
 }

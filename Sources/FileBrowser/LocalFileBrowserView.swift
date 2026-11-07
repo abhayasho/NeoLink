@@ -354,6 +354,8 @@ final class LocalFileBrowserViewModel: ObservableObject {
 
 struct LocalFileBrowserView: View {
     @EnvironmentObject private var tabsController: TabsController
+    /// The active file (explorer highlight and reveal) follows the selection, published apart from the controller.
+    @EnvironmentObject private var selection: TabSelection
     @ObservedObject var viewModel: LocalFileBrowserViewModel
     let directoryReportRevision: Int
     @State private var renameItem: LocalFileItem?

@@ -3,6 +3,7 @@ import SwiftUI
 struct CodeWorkspaceView: View {
     @ObservedObject var session: NeovimSession
     @ObservedObject var controller: TabsController
+    @ObservedObject var selection: TabSelection
     private var document: WorkspaceDocument? { controller.selectedTab?.document }
 
     var body: some View {
