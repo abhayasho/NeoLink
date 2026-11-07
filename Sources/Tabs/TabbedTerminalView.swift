@@ -2,6 +2,13 @@ import SwiftUI
 
 struct TabbedTerminalView: View {
     @ObservedObject var controller: TabsController
+    /// The selection is published separately from the controller (see `TabSelection`).
+    @ObservedObject private var selection: TabSelection
+
+    init(controller: TabsController) {
+        _controller = ObservedObject(wrappedValue: controller)
+        _selection = ObservedObject(wrappedValue: controller.selection)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,7 +30,7 @@ struct TabbedTerminalView: View {
                 .allowsHitTesting(controller.selectedTab?.document == nil)
                 .accessibilityHidden(controller.selectedTab?.document != nil)
 
-                EditorPane(controller: controller, session: controller.codeSession)
+                EditorPane(controller: controller, selection: selection, session: controller.codeSession)
                 if let document = controller.selectedTab?.document, !document.usesNeovim {
                     DocumentTabView(document: document).id(document.id)
                 }
@@ -39,18 +46,19 @@ struct TabbedTerminalView: View {
             let widths = presentations.map(\.width)
             let offsets = widths.reduce(into: [CGFloat(0)]) { $0.append($0.last! + $1) }
             let frames = Dictionary(uniqueKeysWithValues: tabs.indices.map { (tabs[$0].id, CGRect(x: offsets[$0], y: 0, width: widths[$0], height: 34)) })
-            TabStripViewport(selected: controller.selectedTabID, frames: frames, width: offsets.last ?? 0,
+            TabStripViewport(selected: selection.id, frames: frames, width: offsets.last ?? 0,
                 content: HStack(spacing: 0) {
                     ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
                         Group {
                             if let document = tab.document {
-                                DocumentTabButton(document: document, controller: controller, presentation: presentations[index])
+                                DocumentTabButton(document: document, controller: controller, presentation: presentations[index],
+                                                  isSelected: selection.id == document.id)
                             } else {
                                 WorkspaceTabButton(
                                     title: tab.title, presentation: presentations[index],
                                     icon: tab.terminal?.agentName != nil ? "sparkles" : (tab.terminal?.configuration.backend == .localShell ? "terminal" : "network"),
                                     detail: "\(tab.title) terminal",
-                                    isSelected: controller.selectedTabID == tab.id,
+                                    isSelected: selection.id == tab.id,
                                     isModified: false,
                                     select: { controller.selectedTabID = tab.id },
                                     close: { controller.requestCloseTab(tab.id) }
@@ -81,10 +89,11 @@ struct TabbedTerminalView: View {
 /// the terminal host and every tab-strip button.
 private struct EditorPane: View {
     @ObservedObject var controller: TabsController
+    @ObservedObject var selection: TabSelection
     @ObservedObject var session: NeovimSession
     var body: some View {
         if session.isStarted || controller.selectedTab?.document?.usesNeovim == true {
-            CodeWorkspaceView(session: session, controller: controller)
+            CodeWorkspaceView(session: session, controller: controller, selection: selection)
                 .opacity(controller.selectedTab?.document?.usesNeovim == true ? 1 : 0)
                 .allowsHitTesting(controller.selectedTab?.document?.usesNeovim == true)
                 .accessibilityHidden(controller.selectedTab?.document?.usesNeovim != true)
@@ -94,12 +103,14 @@ private struct EditorPane: View {
 
 private struct DocumentTabButton: View {
     @ObservedObject var document: WorkspaceDocument
-    @ObservedObject var controller: TabsController
+    /// For actions only: the button depends on the controller through `isSelected`, not on all of its state.
+    let controller: TabsController
     let presentation: TabPresentation
+    let isSelected: Bool
 
     var body: some View {
         WorkspaceTabButton(title: document.title, presentation: presentation, icon: document.icon, detail: document.source.displayPath,
-                           isSelected: controller.selectedTabID == document.id, isModified: document.isModified,
+                           isSelected: isSelected, isModified: document.isModified,
                            select: { controller.selectedTabID = document.id }, close: { controller.requestCloseTab(document.id) })
     }
 }

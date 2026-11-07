@@ -4,11 +4,6 @@ struct AgentPanelView: View {
     @ObservedObject var controller: TabsController
     let launch: () -> Void
 
-    private var selectedFileURL: URL? {
-        if case .local(let url) = controller.selectedTab?.document?.source { return url }
-        return nil
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -38,10 +33,7 @@ struct AgentPanelView: View {
                         .help("Close agent session").accessibilityLabel("Close agent session")
                 }.buttonStyle(.borderless).padding(.horizontal, 10).frame(height: 32)
                 if let session = controller.selectedACP {
-                    ACPConversationView(session: session, contextURL: selectedFileURL, focusChanged: { focused in
-                        if focused { controller.focusedACPID = session.id }
-                        else if controller.focusedACPID == session.id { controller.focusedACPID = nil }
-                    }).id(session.id)
+                    ACPConversationHost(selection: controller.selection, controller: controller, session: session).id(session.id)
                 } else {
                     TerminalViewRepresentable(tabs: controller.agentPanelTabs, selectedTabID: controller.agentPanelTabID)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -71,5 +63,24 @@ struct AgentPanelView: View {
         }
         .foregroundStyle(NeoLinkTheme.textPrimary)
         .background(NeoLinkTheme.editorBackground)
+    }
+}
+
+/// The conversation's context is the selected file: only this view follows tab switches, not the whole panel.
+private struct ACPConversationHost: View {
+    @ObservedObject var selection: TabSelection
+    let controller: TabsController
+    let session: ACPSession
+
+    private var selectedFileURL: URL? {
+        if case .local(let url) = controller.selectedTab?.document?.source { return url }
+        return nil
+    }
+
+    var body: some View {
+        ACPConversationView(session: session, contextURL: selectedFileURL, focusChanged: { focused in
+            if focused { controller.focusedACPID = session.id }
+            else if controller.focusedACPID == session.id { controller.focusedACPID = nil }
+        })
     }
 }
