@@ -85,7 +85,7 @@ extension Terminal {
         let line = buffer.lines[buffer.yBase + y]
         for x in 0..<cols { line[x] = cells[x] }
         line.isWrapped = false
-        updateRange(y)
+        markingExternalRows { updateRange(y) }
     }
 
     /// Scrolls rows `top..<bottom` by whole lines through the terminal's own region scroll (the
@@ -97,7 +97,11 @@ extension Terminal {
         let savedTop = buffer.scrollTop, savedBottom = buffer.scrollBottom
         buffer.scrollTop = top
         buffer.scrollBottom = bottom - 1
-        if lines > 0 { cmdScrollUp([lines], []) } else { cmdScrollDown([-lines]) }
+        markingExternalRows {
+            if lines > 0 { cmdScrollUp([lines], []) } else { cmdScrollDown([-lines]) }
+            // The whole region is what a region scroll marks (its moved rows keep their geometry).
+            externalUpdateRows?.insert(integersIn: top..<bottom)
+        }
         buffer.scrollTop = savedTop
         buffer.scrollBottom = savedBottom
     }
@@ -111,14 +115,14 @@ extension Terminal {
         var displaced: [BufferLine] = []
         displaced.reserveCapacity(rows)
         for y in 0..<rows { displaced.append(buffer.lines[y]); buffer.lines[y] = lines[y] }
-        updateRange(startLine: 0, endLine: rows - 1)
+        markingExternalRows { updateRange(startLine: 0, endLine: rows - 1) }
         return displaced
     }
 
     public func externalGridSetCursor(column: Int, row: Int) {
         buffer.x = min(max(0, column), cols - 1)
         buffer.y = min(max(0, row), rows - 1)
-        updateRange(buffer.y)
+        markingExternalRows { updateRange(buffer.y) }
     }
 
     /// The text of one visible row, for tests and accessibility comparisons.

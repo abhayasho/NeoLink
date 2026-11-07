@@ -540,6 +540,13 @@ open class Terminal {
     
     var refreshStart = Int.max
     var refreshEnd = -1
+    /// NeoLink: the exact rows marked since the last `clearUpdateRange` while every mark came through the
+    /// external-grid API (`NeoLinkExternalGrid.swift`), or nil once anything else marked a row. The update
+    /// range is the span between its extremes, so an editor that rewrites its first row and its status line
+    /// would otherwise have every row between them rebuilt.
+    public internal(set) var externalUpdateRows: IndexSet? = IndexSet()
+    /// NeoLink: set while the external-grid API marks rows.
+    var markingExternally = false
     var scrollInvariantRefreshStart = Int.max
     var scrollInvariantRefreshEnd = -1
     var userScrolling = false
@@ -6261,6 +6268,7 @@ open class Terminal {
      */
     func updateRange (_ y: Int, scrolling: Bool = false)
     {        
+        noteExternalMark(y)
         if !scrolling {
             let effectiveY = buffer._yDisp + y
             if effectiveY >= 0 {
@@ -6285,6 +6293,7 @@ open class Terminal {
 
     func updateRange (borrowing buffer: borrowing Buffer, _ y: Int, scrolling: Bool = false)
     {
+        noteExternalMark(y)
         if !scrolling {
             let effectiveY = buffer._yDisp + y
             if effectiveY >= 0 {
@@ -6311,10 +6320,31 @@ open class Terminal {
     {
         updateRange (startLine, scrolling: scrolling)
         updateRange (endLine, scrolling: scrolling)
+        // NeoLink: the span is what this marks.
+        if markingExternally, startLine >= 0, endLine > startLine { externalUpdateRows?.insert(integersIn: startLine...endLine) }
+    }
+
+    /// NeoLink: keeps `externalUpdateRows` exact (see there).
+    @inline(__always)
+    private func noteExternalMark(_ y: Int) {
+        if markingExternally {
+            if y >= 0 { externalUpdateRows?.insert(y) }
+        } else if externalUpdateRows != nil {
+            externalUpdateRows = nil
+        }
+    }
+
+    /// NeoLink: runs `body`, whose row marks are exact (the external-grid API).
+    func markingExternalRows(_ body: () -> Void) {
+        let outer = markingExternally
+        markingExternally = true
+        body()
+        markingExternally = outer
     }
     
     public func updateFullScreen ()
     {
+        externalUpdateRows = nil
         refreshStart = 0
         refreshEnd = rows
         
@@ -6401,6 +6431,7 @@ open class Terminal {
     {
         refreshStart = Int.max
         refreshEnd = -1
+        externalUpdateRows = IndexSet()
         
         scrollInvariantRefreshStart = Int.max
         scrollInvariantRefreshEnd = -1
