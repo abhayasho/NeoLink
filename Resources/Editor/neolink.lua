@@ -194,13 +194,19 @@ local function signature(path)
   local s = uv.fs_stat(path)
   return s and table.concat({s.dev,s.ino,s.size,s.mtime.sec,s.mtime.nsec}, ':') or 'missing'
 end
+-- Options of a buffer that is not current. `vim.bo[buf]` (nvim_get/set_option_value with a buffer) switches into
+-- the hidden buffer's context, and restoring the window layout afterwards marks every window for a full redraw:
+-- reading one option of a hidden buffer made the next redraw recompute the whole screen (about 5-11 ms). The
+-- snapshot read four options of every buffer after each command and mode change. getbufvar() reads in place.
+local function option(buf, name) return vim.fn.getbufvar(buf, '&'..name) end
+local function flag(buf, name) return option(buf, name) == 1 end
 function M.snapshot()
   M.revision=(M.revision or 0)+1
   local buffers, unnamed = {}, false
   for _,buf in ipairs(api.nvim_list_bufs()) do
-    if api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == '' and vim.bo[buf].buflisted then
+    if api.nvim_buf_is_loaded(buf) and option(buf,'buftype') == '' and flag(buf,'buflisted') then
       local path = api.nvim_buf_get_name(buf)
-      if path == '' then unnamed = unnamed or vim.bo[buf].modified
+      if path == '' then unnamed = unnamed or flag(buf,'modified')
       else
         local clients = vim.lsp.get_clients({bufnr=buf})
         local names = {}
@@ -210,7 +216,7 @@ function M.snapshot()
           if diagnostic.severity == vim.diagnostic.severity.ERROR then errors=errors+1
           elseif diagnostic.severity == vim.diagnostic.severity.WARN then warnings=warnings+1 end
         end
-        table.insert(buffers,{path=path,modified=vim.bo[buf].modified,filetype=vim.bo[buf].filetype,
+        table.insert(buffers,{path=path,modified=flag(buf,'modified'),filetype=option(buf,'filetype'),
           servers=table.concat(names,', '),diagnostics=#diagnostics,errors=errors,warnings=warnings,buf=buf})
       end
     end
@@ -241,14 +247,15 @@ end
 function M.open(path, line, activate)
   local b=vim.fn.bufadd(path)
   vim.fn.bufload(b)
-  vim.bo[b].buflisted=true
+  -- Only a buffer opened for the first time needs listing (see `option`: setting it redraws the screen).
+  if not flag(b,'buflisted') then vim.bo[b].buflisted=true end
   watch(b)
   if not M.baseline[b] then M.baseline[b]=signature(path) end
   if activate~=false then
     -- Agents edit files on disk. Refresh only clean buffers when returning to a tab.
     -- A dirty buffer keeps its original baseline, so Save still detects a conflict.
     local current=signature(path)
-    if current~='missing' and current~=M.baseline[b] and not vim.bo[b].modified then
+    if current~='missing' and current~=M.baseline[b] and not flag(b,'modified') then
       if ((uv.fs_stat(path) or {}).size or 0)>128*1024*1024 then
         error('The changed file exceeds the 128 MB editor limit.')
       end
@@ -365,9 +372,12 @@ api.nvim_create_autocmd({'BufEnter','BufModifiedSet','BufWritePost','ModeChanged
 api.nvim_create_autocmd('BufReadPost',{callback=function(ev) M.baseline[ev.buf]=signature(api.nvim_buf_get_name(ev.buf)) end})
 api.nvim_create_autocmd('BufWritePost',{callback=function(ev) M.baseline[ev.buf]=signature(api.nvim_buf_get_name(ev.buf)) end})
 local function apply_folding(buf)
-  -- Folding options belong to the window, so restore them on every buffer switch.
-  vim.wo.foldmethod=vim.b[buf].neolink_treesitter and 'expr' or 'indent'
-  vim.wo.foldexpr=vim.b[buf].neolink_treesitter and 'v:lua.vim.treesitter.foldexpr()' or '0'
+  -- Folding options belong to the window, so restore them on every buffer switch. Setting one
+  -- recomputes every fold of the window, so only when it differs.
+  local method=vim.b[buf].neolink_treesitter and 'expr' or 'indent'
+  local expr=vim.b[buf].neolink_treesitter and 'v:lua.vim.treesitter.foldexpr()' or '0'
+  if vim.wo.foldmethod~=method then vim.wo.foldmethod=method end
+  if vim.wo.foldexpr~=expr then vim.wo.foldexpr=expr end
 end
 api.nvim_create_autocmd('BufEnter',{callback=function(ev) apply_folding(ev.buf) end})
 api.nvim_create_autocmd('FileType',{callback=function(ev)
@@ -377,7 +387,7 @@ api.nvim_create_autocmd('FileType',{callback=function(ev)
   if size > 2*1024*1024 then
     vim.bo[ev.buf].syntax='OFF'; vim.bo[ev.buf].undolevels=100; return
   end
-  local lang=vim.treesitter.language.get_lang(vim.bo[ev.buf].filetype)
+  local lang=vim.treesitter.language.get_lang(ev.match)
   if lang and pcall(vim.treesitter.start,ev.buf,lang) then
     vim.b[ev.buf].neolink_treesitter=true
   end
