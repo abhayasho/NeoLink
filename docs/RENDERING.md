@@ -6,6 +6,68 @@
 
 [Build 26 explorer and tab interaction changes, measurements and limits](INTERACTIONS.md). Highlight composition now retains the text strip independently; historical whole-strip invalidation descriptions below apply to their original builds.
 
+## Responsiveness pass: exact editor rows, steady resampling, cheaper switches
+
+Sampling the release build's main thread (`sample` while the benchmark workloads ran) showed it idle for 87–89 % of the time while scrolling and while switching tabs, so the remaining choppiness and lag were not raw CPU. Four specific causes were found and fixed:
+
+1. **Every editor keystroke rebuilt every row.** SwiftTerm records changed rows as one span from the lowest to the highest marked row. A keystroke rewrites the edited line and the status line at the bottom, so the 58 rows between them were rebuilt. Measured in the release app with `NEOLINK_PREPARATION_PROFILE=1` (75 typed keys): **58 rows rebuilt per frame and 6.95 ms median (max 7.41) of draw-data work before; 2 rows and 1.22 ms median (max 2.22) after.** Rows written through the external-grid API are now recorded exactly (`Terminal.externalUpdateRows`), merged with exact rows still waiting for a frame, and the renderer rebuilds only those. Any other mark, a full-screen update or a direct dirty-range assignment falls back to the span, so the VT-parser path is unchanged ([UPSTREAM.md](../Vendor/SwiftTerm/UPSTREAM.md)). `NativeGridRenderingTests` checks that an edit plus its status line rebuilds exactly 2 rows and draws the same pixels as a view that drew the final screen from scratch.
+2. **The scroll resampler lost track of the input rate.** It measured the gap between events only while its history was non-empty. Once the drawn position caught up, the history was cleared and the next gap went unmeasured, so after a fast gesture a slower stream kept an estimate that was too short. In a failing `editor-diagonal` run the estimate was about 11 ms for events 16.7 ms apart (delay 7.4 ms instead of 22.7 ms), the drawn position caught up between events, and every other 120 Hz frame repeated. The delay also jumped by about 10 ms where the measured interval crossed 1.5 display frames, which made jittery input near 80 Hz hold frames. The rate is now measured from every event and kept across resets; the delay is a continuous blend between "half an interval plus 2 ms" (input at the display's rate) and "one interval plus 6 ms" (input at half of it); the delay in use follows that target at no more than half a second per second, so a change of rate never samples backwards; and interpolation uses the events' own timestamps when they are plausible. This applies to the editor, the sideways band, the explorer and terminal scrollback. `ScrollResamplerTests` cover a slower stream after a fast gesture, 80 Hz input, continuity of the delay and rate changes.
+3. **Every tab switch re-evaluated the whole SwiftUI workspace.** The selection was a `@Published` property of `TabsController`, which nearly every view observes, so each switch re-ran the workspace root and its layout. A trace of the previous build showed the cached image of the next file ready 0.5 ms after the switch but its first frame prepared at about 19 ms, with SwiftUI view-graph updates at 6 % of the main-thread samples. The selection now lives in `TabSelection`, observed only by the views that show it; the controller publishes `browserTabID` only when the shown browser changes. `TabSelectionTests` checks that switching documents publishes the selection and not the controller.
+4. **Neovim redrew the whole screen on every switch and command.** Reading or setting an option of a hidden buffer through `vim.bo[buf]` switches context, and restoring the window layout afterwards marks every window for a full redraw. `M.open` set `buflisted` that way, the status snapshot read four options of every buffer after each command and mode change, and every `BufEnter` reset the fold options. They now use `getbufvar()`, which reads in place, and set only what differs. In a headless probe on the real configuration (156 × 58 grid, 120 ms between switches), entering the buffer took 11.4 ms before and 0.5–1.0 ms after, and the whole switch 20.0 ms before and 11.6–12.9 ms after. Cached tab images hide this in `ui-tabs`. It matters for the first keystroke after a switch and for switches that miss the cache, and neither was measured end to end.
+
+**Method.** Two release builds made by `scripts/build-app.sh`. *Before* is `1eaec25` ("Pixel-smooth horizontal editor scrolling; native editor by default", binary SHA-256 `a4ea4a5d63b0…`), *after* is `0303fdb` ("Editor: stop forcing a full Neovim redraw on every switch and command", `ff4d47ec31f3…`). M2 Max, native full screen 1728 × 1084 pt, 2×, 120 Hz, native editor, direct presentation, frontmost; the Mac was unlocked before and after every run (checked through the session's lock flag). Five rounds, alternating which build ran first. All 10 runs are valid and none is dropped (an earlier attempt stopped at its first lock check and produced no data). Each run executed `editor-type,editor-cursor,terminal-type,editor-flick,editor-slow,editor-diagonal,editor-horizontal,terminal-flick,explorer-flick,ui-tabs` with synthetic key and scroll events, not a trackpad. Values are per round (round 1 … 5). [Compact per-run results](responsiveness-pass-results.json); raw reports were kept outside the repository.
+
+| Typing in the editor (`editor-type`, 75 keys) | Before | After |
+| --- | --- | --- |
+| Main-thread stall samples over 8 ms | 55 / 70 / 51 / 67 / 63 | 5 / 5 / 0 / 4 / 5 |
+| Display callbacks that ran late (%) | 37.6 / 36.4 / 36.2 / 25 / 41 | 2 / 1.8 / 0 / 0 / 0.3 |
+| Output read → frame submitted, median (ms) | 7.4 / 8.8 / 7.2 / 4.3 / 9.5 | 3.5 / 4.5 / 4.4 / 5 / 5.7 |
+| Frame submitted → presented, median (ms) | 17.6 / 16.7 / 17.5 / 16.4 / 16.7 | 15.5 / 15.7 / 17.9 / 23.8 / 25.5 |
+| Key → display p50 (ms) | 25.4 / 26.6 / 24.3 / 21.8 / 27.5 | 23.5 / 21 / 22.7 / 31 / 33.5 |
+| Key → display p95 (ms) | 36.3 / 36.6 / 35.1 / 25.1 / 36.7 | 31.9 / 27.7 / 26 / 34.3 / 36.8 |
+| Cursor keys (`editor-cursor`): stall samples over 8 ms | 5 / 10 / 11 / 7 / 10 | 0 / 0 / 0 / 0 / 2 |
+| Cursor keys: key → display p50 (ms) | 24.3 / 14.4 / 15.7 / 16.3 / 14.3 | 13.4 / 14.3 / 23.8 / 31.2 / 15.7 |
+| Shell typing (`terminal-type`, control): key → display p50 (ms) | 13.8 / 13.5 / 12.8 / 13.1 / 13.2 | 14.5 / 13.4 / 21.7 / 13.9 / 13.4 |
+
+| Scrolling | Before | After |
+| --- | --- | --- |
+| Slow editor scroll (60 Hz events): refreshes skipped while the finger moved | 89 / 79 / 88 / 89 / 0 | 0 / 0 / 0 / 0 / 6 |
+| Slow editor scroll (60 Hz events): best-fit input → display lag (ms) | 23 / 26 / 17 / 24 / 35 | 46 / 47 / 42 / 49 / 44 |
+| Diagonal editor scroll: refreshes skipped while the finger moved | 0 / 1 / 165 / 152 / 1 | 0 / 0 / 0 / 0 / 0 |
+| Diagonal editor scroll: best-fit input → display lag (ms) | 20 / 24 / 25 / 25 / 22 | 47 / 47 / 40 / 47 / 40 |
+| Diagonal editor scroll: velocity error p95 (lines/s) | 7.5 / 11.2 / 22.5 / 22.5 / 7.5 | 3.8 / 3.8 / 0 / 3.8 / 0.1 |
+| Diagonal editor scroll: jump frames | 0 / 1 / 0 / 0 / 1 | 0 / 0 / 0 / 0 / 0 |
+| Editor flick (120 Hz events): refreshes skipped while moving | 0 / 5 / 0 / 5 / 0 | 3 / 2 / 2 / 3 / 1 |
+| Editor flick: longest gap between changed frames (ms) | 16.7 / 25 / 16.7 / 25 / 16.7 | 16.7 / 16.7 / 16.7 / 16.7 / 16.7 |
+| Editor flick: best-fit lag (ms) | 25 / 25 / 16 / 24 / 24 | 33 / 25 / 29 / 33 / 27 |
+| Editor flick: velocity error p95 (lines/s) | 6.9 / 19.8 / 7.5 / 14.2 / 9.7 | 15.2 / 16.5 / 17.3 / 13.4 / 27.5 |
+| Terminal scrollback flick: refreshes skipped while moving | 0 / 0 / 5 / 5 / 5 | 2 / 3 / 2 / 2 / 2 |
+| Terminal scrollback flick: best-fit lag (ms) | 25 / 32 / 40 / 35 / 25 | 25 / 17 / 26 / 33 / 36 |
+| Sideways editor scroll (`editor-horizontal`): missed refreshes | 3 / 3 / 3 / 3 / 2 | 1 / 1 / 1 / 2 / 3 |
+| Explorer flick: frames with no motion while it should move | 76 / 6 / 16 / 16 / 94 | 7 / 11 / 7 / 9 / 8 |
+
+| Switching tabs (`ui-tabs`, 24 switches) | Before | After |
+| --- | --- | --- |
+| Selection → correct buffer presented, p50 (ms) | 35.7 / 31.3 / 33.2 / 32.1 / 32.9 | 32.1 / 30.9 / 32.2 / 38.3 / 34.8 |
+| Selection → correct buffer presented, p95 (ms) | 50 / 41.1 / 45.2 / 45.7 / 41.1 | 49.8 / 45.2 / 49.9 / 52.7 / 48.5 |
+| Process CPU (% of one core) | 22.9 / 22.6 / 23.3 / 23 / 23.8 | 25.2 / 28.6 / 27.4 / 28.2 / 26.2 |
+| Main-thread stall samples over 16 ms | 67 / 63 / 96 / 81 / 70 | 86 / 124 / 83 / 123 / 75 |
+
+**What the numbers support.**
+
+- Main-thread work while typing is gone as a source of jank. Stall samples over 8 ms fell from 51–70 to 0–5 per run, late display callbacks from 25–41 % to 0–2 %, and the time from reading Neovim's output to submitting the frame from a median of 7.4 to 4.5 ms (medians across rounds). Cursor-key runs show the same drop in stalls (5–11 to 0–2).
+- Slow and diagonal editor scrolling now move on every refresh. Skipped refreshes fell from 79–89 (four of five rounds; the fifth had 0) to 0–6 in `editor-slow`, and in `editor-diagonal` from two baseline rounds of 152 and 165 to 0 in all five. Diagonal velocity error fell as well (p95 7.5–22.5 to 0–3.8 lines/s) and its jump frames to 0. The baseline problem was intermittent, so five clean rounds are evidence, not proof.
+- The explorer flick lost its outliers of 76 and 94 frames with no motion (now 7–11), and no editor flick round had a 25 ms gap between changed frames (the baseline had two).
+
+**What it does not show, and what got worse.**
+
+- **Key → display did not improve.** Typing p50 was 25.4 ms before and 23.5 ms after (medians over rounds), cursor keys 15.7 ms in both, and the last two *after* rounds were slower (31.0 and 33.5 ms typing). That time is dominated by the submitted → presented stage, which ranged 8–18 ms in the baseline and 8–26 ms in the candidate; for typed characters it is about 17 ms against 8–9 ms for cursor keys in four of five baseline rounds, for a reason not established. Removing 5.7 ms of draw-data work per key (above) did not move it. The shell, which this pass does not change, also had one slow round (21.7 ms).
+- **Scroll lag rose.** Best-fit input → display lag went from 17–35 to 42–49 ms for slow scrolling and from 20–25 to 40–47 ms for diagonal scrolling. The resampler's delay is now correctly one input interval plus 6 ms (about 23 ms for 60 Hz events), where the baseline drew each event as it arrived and repeated frames in between. Flick lag moved from a median of 24 to 29 ms, and velocity error against the raw input rose (p95 median 9.7 to 16.5 lines/s; the benchmark scores a delayed, interpolated copy of the input against the raw trajectory). Whether the extra delay is worth the evenness on a real trackpad is not established. Shrinking the margin, or predicting a few milliseconds ahead, are the obvious levers.
+- **Tab switching did not improve, and the tab workload got more expensive.** Selection → buffer presented p50 was 32.9 ms before and 32.2 ms after, p95 45.2 and 49.8 ms. Process CPU during `ui-tabs` was 22.6–23.8 % before and 25.2–28.6 % after (higher in every round), and main-thread stall samples over 16 ms rose from 63–96 to 75–124. The cause is not established: the *after* build contains all four changes, and the SwiftUI split has not been shown to help end to end. Do not count it as a tab-latency improvement until that is understood.
+- Anomalies kept in the tables: one *after* typing round reports 6.4 % CPU with normal results otherwise, and run durations varied from about 1 to 7 minutes for reasons not established (the 7-minute run is the last *after* round, which also has the worst typing and tab numbers of its build). Five runs per build, no significance testing, one machine, synthetic input. Physical trackpad feel, key-repeat feel and click-to-photon latency are not measured.
+
+Checks for this pass: 213 tests pass with the native editor (the default) and 213 with `NEOLINK_NATIVE_GRID=0`; `scripts/test-editor.py`, `scripts/test-benchmark.py` and `scripts/verify-app.py` pass.
+
 ## Pixel-smooth horizontal editor scrolling (native client)
 
 **Why it was choppy.** Neovim shows whole columns, and each column it scrolls horizontally rewrites every row of the window. In the native client each column step was a wheel event to Neovim. Neovim then sent a full redraw, and the renderer rebuilt every row. Horizontal motion therefore advanced in whole-column jumps at most every other refresh, with heavy frames.
@@ -83,7 +145,7 @@ Every interaction that ends in a presented frame is 9–17 ms sooner, and droppe
 
 ## Scroll resampling (display-rate trackpad motion)
 
-`SmoothScrollDriver` used to draw each trackpad event's distance the moment it arrived and nothing in between. Input slower than the display (a slowly moving finger reports about 60 Hz; arrival times also jitter) therefore repeated frames every other refresh on a 120 Hz display. `ScrollResampler` keeps the recent history of the accumulated input and, on every display frame of the shared NeoGPU clock, draws the position it had `delay` seconds earlier by linear interpolation. For input slower than 1.5 display frames the delay is one input interval plus 6 ms; for input at the display's rate it is half an interval plus 2 ms. It is capped at 30 ms, never draws ahead of the fingers, never overshoots, and drops input the content had no room for (an end of the buffer) so reversing does not jump. It applies to program scrolling (the editor) and to local scrollback; the animation stops when the remainder has been drawn, so no extra clock or timer is introduced.
+`SmoothScrollDriver` used to draw each trackpad event's distance the moment it arrived and nothing in between. Input slower than the display (a slowly moving finger reports about 60 Hz; arrival times also jitter) therefore repeated frames every other refresh on a 120 Hz display. `ScrollResampler` keeps the recent history of the accumulated input and, on every display frame of the shared NeoGPU clock, draws the position it had `delay` seconds earlier by linear interpolation. For input slower than 1.5 display frames the delay was one input interval plus 6 ms; for input at the display's rate it was half an interval plus 2 ms (the two now blend continuously and the rate is measured from every event: see [the responsiveness pass](#responsiveness-pass-exact-editor-rows-steady-resampling-cheaper-switches)). It is capped at 30 ms, never draws ahead of the fingers, never overshoots, and drops input the content had no room for (an end of the buffer) so reversing does not jump. It applies to program scrolling (the editor) and to local scrollback; the animation stops when the remainder has been drawn, so no extra clock or timer is introduced.
 
 Same-binary-source A/B, release, native full screen, unlocked, native editor client, 5 alternating rounds of synthetic scroll events (not a trackpad). Per-run values in run order:
 
