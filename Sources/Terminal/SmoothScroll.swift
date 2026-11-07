@@ -324,52 +324,82 @@ struct ScrollAxisLock {
 /// when the display refreshes (up to 120 Hz). Applying each event's distance the moment it arrives moves
 /// the content in uneven steps and repeats frames in between. The resampler keeps the recent history of the
 /// accumulated input and, on every display frame, draws the position it had `delay` seconds ago by linear
-/// interpolation. For steady input that is exactly uniform motion; the delay is about one input interval
-/// plus a small jitter margin, so a late event does not stall the motion. The drawn position is never ahead
-/// of the fingers and never overshoots: when the events stop, it simply reaches the last position.
+/// interpolation. For steady input that is exactly uniform motion. The drawn position is never ahead of the
+/// fingers and never overshoots: when the events stop, it simply reaches the last position.
 /// `lag` is the part of the input not drawn yet (in lines). Whole-line moves of the grid shift the offset and
 /// the input together, so they do not change it.
+///
+/// The input rate is measured from every event, including events that arrive after the drawn position has
+/// caught up (an earlier version measured only while catching up, so after a fast gesture a slower stream kept
+/// a delay too short for it and was drawn at its own rate). The delay is a continuous function of that rate,
+/// and the delay in use follows it at a bounded speed, so a change of rate (a finger slowing down, the switch
+/// to momentum) changes the speed of the drawn content slightly instead of stalling or jerking it.
 struct ScrollResampler {
     private(set) var lag = 0.0
     private var history: [(time: Double, position: Double)] = []
     private var total = 0.0
     private var interval = 1.0 / 60
+    /// Time of the latest event; kept when the history is trimmed or reset, so every gap is measured.
+    private var lastInput: Double?
+    /// The delay in use (see `delaySlew`); nil while the content is at rest.
+    private var appliedDelay: Double?
+    private var lastAdvance: Double?
     static let jitterMargin = 0.006
     static let minimumDelay = 0.008
     static let maximumDelay = 0.030
     static let epsilon = 0.003
+    /// How fast the delay in use may change, in seconds per second. Below 1 the sampled time never moves
+    /// backwards, so steady input is never drawn moving back; at 0.5 the drawn speed changes by at most half.
+    static let delaySlew = 0.5
 
     /// Seconds between display frames; input at about this rate already moves every frame and needs little help.
     var framePeriod = 1.0 / 120
 
+    /// Input at or faster than the display only needs enough slack for arrival jitter (half an interval plus
+    /// 2 ms). Input at half the display's rate or slower trails by one interval plus a jitter margin, so every
+    /// refresh falls between two events. In between, the two blend linearly: there is no threshold at which a
+    /// small change of rate makes the delay jump.
     var delay: Double {
-        // Input slower than the display repeats frames between events: trail by one interval to interpolate them.
-        // Input at the display's rate only needs enough slack for arrival jitter.
-        let slower = interval >= 1.5 * framePeriod
-        let value = slower ? interval + Self.jitterMargin : 0.5 * interval + 0.002
-        return min(Self.maximumDelay, max(Self.minimumDelay * 0.5, value))
+        let fast = 0.5 * interval + 0.002, slow = interval + Self.jitterMargin
+        let blend = min(1, max(0, (interval - framePeriod) / max(framePeriod, 0.001)))
+        return min(Self.maximumDelay, max(Self.minimumDelay * 0.5, fast + (slow - fast) * blend))
     }
     var isCatchingUp: Bool { lag != 0 }
+    /// Measured seconds between input events.
+    var inputInterval: Double { interval }
 
     mutating func input(_ lines: Double, at time: Double) {
         guard lines.isFinite, lines != 0 else { return }
-        if let last = history.last {
-            let gap = time - last.time
+        if let lastInput {
+            let gap = time - lastInput
             // Events within 4 ms of each other are one report split in two: not a faster input rate.
             if gap >= 0.004, gap < 0.1 { interval = 0.7 * interval + 0.3 * gap }
             else if gap >= 0.1 { interval = 1.0 / 60; history.removeAll() }
         }
-        if history.isEmpty { history.append((time - interval, total)) }   // the gesture starts from rest
+        lastInput = max(lastInput ?? time, time)
+        if history.isEmpty {
+            // The gesture starts from rest; so does the delay.
+            history.append((time - interval, total))
+            appliedDelay = nil
+        }
         total += lines
-        history.append((time, total))
+        history.append((max(time, history[history.count - 1].time), total))
         advance(to: time)
     }
 
     /// Position of the drawn content at `now`; returns whether it still trails the input.
     @discardableResult
     mutating func advance(to now: Double) -> Bool {
-        guard let last = history.last else { lag = 0; return false }
-        let at = now - delay
+        guard let last = history.last else { lag = 0; appliedDelay = nil; return false }
+        let target = delay
+        if let applied = appliedDelay, let previous = lastAdvance {
+            let step = Self.delaySlew * max(0, now - previous)
+            appliedDelay = min(applied + step, max(applied - step, target))
+        } else {
+            appliedDelay = target
+        }
+        lastAdvance = max(lastAdvance ?? now, now)
+        let at = now - appliedDelay!
         var drawn = last.position
         if at < last.time {
             if at <= history[0].time { drawn = history[0].position }
@@ -382,7 +412,7 @@ struct ScrollResampler {
         if let keep = history.firstIndex(where: { $0.time >= at }), keep > 1 { history.removeFirst(keep - 1) }
         lag = last.position - drawn
         if abs(lag) < Self.epsilon { lag = 0 }
-        if lag == 0, at >= last.time { history.removeAll() }
+        if lag == 0, at >= last.time { history.removeAll(); appliedDelay = nil }
         return lag != 0
     }
 
@@ -395,7 +425,15 @@ struct ScrollResampler {
         advance(to: now)
     }
 
-    mutating func reset() { lag = 0; history.removeAll(); total = 0 }
+    /// Drops the undrawn remainder. The measured input rate is a property of the device and is kept.
+    mutating func reset() { lag = 0; history.removeAll(); total = 0; appliedDelay = nil }
+}
+
+/// The time an event's input was sampled, in `CACurrentMediaTime`'s timebase, when it is plausible: interpolating
+/// against sampling times instead of arrival times keeps delivery jitter out of the drawn motion.
+func scrollInputTime(_ event: NSEvent, now: Double) -> Double {
+    let stamp = event.timestamp
+    return stamp > 0 && stamp <= now && now - stamp < 0.05 ? stamp : now
 }
 
 /// Connects `SmoothScrollModel` to a terminal view, its Metal renderer and the window clock.
@@ -469,10 +507,11 @@ final class SmoothScrollDriver {
         mover = move
         let lines = Double(deltaY * view.scrollSensitivity / max(1, cellHeight))
         traced = true; traceInput += lines
+        let sampled = scrollInputTime(event, now: now)
         if source == .scrollback {
             // Apply all input before the next display-paced frame. A parked fraction is a
             // valid viewport, not an animation that should keep the display clock awake.
-            resampler.input(lines, at: now)
+            resampler.input(lines, at: sampled)
             let request = scrollback.input(lines)
             movingScrollback = true
             let moved = request == 0 ? 0 : (move(request) ?? 0)
@@ -485,7 +524,7 @@ final class SmoothScrollDriver {
             startAnimating()
             return
         }
-        resampler.input(lines, at: now)
+        resampler.input(lines, at: sampled)
         perform(model.input(lines, at: now, phase: phase, range: range), at: now)
         resampler.absorb(model.takeClamped(), at: now)
         apply()

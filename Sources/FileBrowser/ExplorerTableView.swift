@@ -568,7 +568,7 @@ final class ExplorerScrollView: NSScrollView {
             // A new gesture while the previous one is still gliding continues the same live scroll.
             if endPending { endPending = false } else { center.post(name: NSScrollView.willStartLiveScrollNotification, object: self) }
         }
-        queue(event.scrollingDeltaY, at: CACurrentMediaTime())
+        queue(event.scrollingDeltaY, at: scrollInputTime(event, now: CACurrentMediaTime()))
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) {
             if animating { endPending = true } else { center.post(name: NSScrollView.didEndLiveScrollNotification, object: self) }
         }
