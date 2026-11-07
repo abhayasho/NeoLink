@@ -86,9 +86,11 @@ final class NativeHorizontalScroll {
 
     // MARK: Input
 
-    /// Horizontal trackpad input over (row, column); `points` as `scrollingDeltaX`. Returns whether it was used.
-    func scroll(points: CGFloat, phase: SmoothScrollModel.Phase, row: Int, column: Int) -> Bool {
+    /// Horizontal trackpad input over (row, column); `points` as `scrollingDeltaX`, sampled at `sampledAt`
+    /// (`scrollInputTime`; now if nil). Returns whether it was used.
+    func scroll(points: CGFloat, phase: SmoothScrollModel.Phase, row: Int, column: Int, sampledAt: Double? = nil) -> Bool {
         let now = CACurrentMediaTime()
+        let sampled = min(now, sampledAt ?? now)
         let columns = -Double(points) / max(1, cellWidth)
         if !isActive {
             guard columns != 0 else { return false }
@@ -101,7 +103,7 @@ final class NativeHorizontalScroll {
         lastInput = now
         direction = columns > 0 ? 1 : -1
         guard leftcol != nil else { unanchored += columns; return true }
-        move(by: columns, at: now)
+        move(by: columns, at: sampled)
         requestIfNeeded(at: now)
         startAnimating()
         return true

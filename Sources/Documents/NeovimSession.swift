@@ -517,7 +517,8 @@ final class CodeTerminalView: InteractiveTerminalView {
                 guard let horizontal = self?.nativeGrid?.horizontal else { return false }
                 if dy != 0 { horizontal.endNow(); return false }
                 if dx == 0, !horizontal.isActive { return false }
-                return horizontal.scroll(points: dx, phase: SmoothScrollDriver.phase(of: event), row: row, column: column)
+                return horizontal.scroll(points: dx, phase: SmoothScrollDriver.phase(of: event), row: row, column: column,
+                                         sampledAt: scrollInputTime(event, now: CACurrentMediaTime()))
             }
         }
     }

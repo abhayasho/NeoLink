@@ -115,4 +115,57 @@ final class ScrollResamplerTests: XCTestCase {
         }()
         XCTAssertGreaterThan(slow, 0.02, "60 Hz input interpolates across a full interval")
     }
+
+    /// A fast gesture (120 Hz) followed at once by a slower stream (60 Hz: a slowing finger, or momentum). The
+    /// slower stream must still move every display frame: its rate is measured even though the drawn position
+    /// catches up between its events at first.
+    func testAfterAFastGestureASlowerStreamStillMovesEveryFrame() {
+        var inputs: [(Double, Double)] = []
+        for index in 0..<60 { inputs.append((Double(index) / 120, 0.25)) }
+        for index in 0..<90 { inputs.append((0.5 + Double(index) / 60, 0.5)) }
+        let steps = deltas(simulate(inputs: inputs, frame: 1.0 / 120, until: 1.9).drawn)
+        let slow = Array(steps[(Int(0.65 * 120))..<(Int(1.9 * 120) - 12)])
+        XCTAssertEqual(slow.filter { $0 <= 1e-9 }.count, 0, "every refresh moves once the slower rate is measured")
+        XCTAssertLessThan(slow.max()! / slow.min()!, 1.3)
+    }
+
+    /// Input between the display's rate and half of it (here 80 Hz with arrival jitter) used to flip between two
+    /// delays and hold frames. The delay is continuous in the rate, so it is drawn without a held frame.
+    func testInputBetweenTheDisplayRateAndHalfOfItIsDrawnWithoutHolds() {
+        let jitter = [0.0, 0.001, -0.001, 0.0005, -0.0005]
+        var inputs: [(Double, Double)] = []
+        for index in 0..<160 {
+            let time: Double = Double(index) / 80 + 0.002 + jitter[index % jitter.count]
+            inputs.append((time, 0.3))
+        }
+        let steps = Array(deltas(simulate(inputs: inputs, frame: 1.0 / 120, until: 1.9).drawn).dropFirst(40).prefix(170))
+        XCTAssertEqual(steps.filter { $0 <= 1e-9 }.count, 0)
+        XCTAssertLessThan(steps.max()! / steps.min()!, 2.0)
+    }
+
+    func testTheDelayIsAContinuousFunctionOfTheInputRate() {
+        var previous: Double?
+        for tenth in 41...300 {   // gaps under 4 ms are one report split in two, not a rate
+            var resampler = ScrollResampler()
+            let gap = Double(tenth) / 10_000
+            for event in 0..<80 { resampler.input(0.1, at: Double(event) * gap) }
+            if let previous { XCTAssertLessThan(abs(resampler.delay - previous), 0.0005, "no jump at \(gap * 1000) ms") }
+            previous = resampler.delay
+        }
+    }
+
+    /// The switch from a fast to a slow stream at the same speed (finger to momentum) changes the delay. The first
+    /// long gap cannot be known in advance (the drawn content reaches the last event and waits, as before); after
+    /// it, the content moves forward every frame while the delay grows, at no less than about half its speed.
+    func testAChangeOfRateNeverDrawsBackwardsAndRecoversAtOnce() {
+        var inputs: [(Double, Double)] = []
+        for index in 0..<60 { inputs.append((Double(index) / 120, 0.2)) }
+        for index in 0..<60 { inputs.append((59.0 / 120 + Double(index + 1) / 60, 0.4)) }
+        let steps = deltas(simulate(inputs: inputs, frame: 1.0 / 120, until: 1.4).drawn)
+        XCTAssertTrue(steps.allSatisfy { $0 >= -1e-9 }, "never backwards")
+        let afterSecondSlowEvent = Int((59.0 / 120 + 2.0 / 60) * 120) + 1
+        let slow = Array(steps[afterSecondSlowEvent..<(Int(1.4 * 120) - 20)])
+        XCTAssertTrue(slow.allSatisfy { $0 > 0 }, "forward every frame")
+        XCTAssertGreaterThan(slow.min()!, 0.2 * 0.45, "at least about half the input's speed per frame")
+    }
 }
