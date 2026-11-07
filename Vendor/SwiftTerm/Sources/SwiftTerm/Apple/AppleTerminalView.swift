@@ -2335,6 +2335,10 @@ extension TerminalView {
             terminalDelegate?.rangeChanged (source: self, startY: rowStart, endY: rowEnd)
         }
 
+        #if os(macOS)
+        // NeoLink: rows written through the external-grid API are known exactly (see `externalUpdateRows`).
+        let exactRows = terminal.externalUpdateRows
+        #endif
         terminal.clearUpdateRange ()
 
         #if os(macOS)
@@ -2397,6 +2401,9 @@ extension TerminalView {
 #if canImport(MetalKit)
         if metalView != nil {
             let buffer = displayBuffer
+            #if os(macOS)
+            let pending = (range: metalDirtyRange, rows: metalDirtyRows)
+            #endif
             if buffer.lines.count == 0 {
                 metalDirtyRange = nil
             } else if let absoluteDependencyRange {
@@ -2423,6 +2430,9 @@ extension TerminalView {
                     metalDirtyRange = nil
                 }
             }
+            #if os(macOS)
+            mergeExactDirtyRows(exactRows, buffer: buffer, pending: pending)
+            #endif
             lastRenderedCursor = (x: buffer.x, y: buffer.yBase + buffer.y, hidden: terminal.cursorHidden)
             requestMetalDisplay()
         } else {
@@ -2506,6 +2516,33 @@ extension TerminalView {
         caretView.setText (ch: charUnderCursor)
     }
     
+    #if os(macOS) && canImport(MetalKit)
+    /// NeoLink: `metalDirtyRange` was just set to the span of this update. When every row mark came from the
+    /// external-grid API, also record exactly which rows changed (with their bidi dependencies), merged with
+    /// exact rows still waiting to be drawn, so the renderer rebuilds those rather than every row between them.
+    /// Anything else still waiting as a whole range keeps the previous behaviour.
+    private func mergeExactDirtyRows(_ exact: IndexSet?, buffer: Buffer, pending: (range: ClosedRange<Int>?, rows: IndexSet?)) {
+        guard let exact, !exact.isEmpty, let span = metalDirtyRange, buffer.yDisp == buffer.yBase, !buffer.lines.isEmpty else { return }
+        if pending.range != nil, pending.rows == nil { return }
+        let maxRow = buffer.lines.count - 1
+        var rows = IndexSet()
+        for run in exact.rangeView {
+            let start = max(0, buffer.yDisp + run.lowerBound), end = min(maxRow, buffer.yDisp + run.upperBound - 1)
+            guard start <= end else { continue }
+            rows.insert(integersIn: TerminalBidi.renderingDependencyRange(rows: start...end, buffer: buffer,
+                                                                          maximumRows: terminal.options.maximumBidiParagraphRows))
+        }
+        guard !rows.isEmpty else { return }
+        var range = span
+        if let previous = pending.range, let previousRows = pending.rows {
+            range = min(previous.lowerBound, span.lowerBound)...max(previous.upperBound, span.upperBound)
+            rows.formUnion(previousRows)
+        }
+        metalDirtyRange = range   // clears metalDirtyRows
+        metalDirtyRows = rows
+    }
+    #endif
+
     // Does not use a default argument and merge, because it is called back
     func updateDisplay ()
     {

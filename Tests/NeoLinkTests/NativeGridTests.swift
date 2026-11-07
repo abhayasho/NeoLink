@@ -514,6 +514,66 @@ final class NativeGridRenderingTests: XCTestCase {
         XCTAssertEqual(backToB.rebuilt, 0)
     }
 
+    /// Typing in the editor rewrites the edited line and the status line. Those two rows are rebuilt, not every row between
+    /// them (the terminal's update range is the span between its extremes), and the result matches a full redraw.
+    @MainActor
+    func testAnEditAndItsStatusLineRebuildOnlyTheRowsThatChanged() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }
+        _ = NSApplication.shared
+        TerminalView.allowsMetalFrameCapture = true
+        let gpuPreference = TerminalRenderingPreferences.shared.useGPU
+        TerminalRenderingPreferences.shared.setUseGPU(false)
+        defer { TerminalView.allowsMetalFrameCapture = false; TerminalRenderingPreferences.shared.setUseGPU(gpuPreference) }
+        let edited = CodeTerminalView(frame: .zero), reference = CodeTerminalView(frame: .zero)
+        let windows = [window(edited), window(reference)]
+        defer { windows.forEach { $0.close() } }
+        var profiles: [[String: Double]] = []
+        edited.metalPreparationProfile = { profiles.append($0) }
+        for view in [edited, reference] {
+            view.nativeForegroundColor = NSColor(hex: 0xd8d8d8); view.nativeBackgroundColor = NSColor(hex: 0x181818)
+            try view.setUseMetal(true)
+        }
+        let cols = edited.getTerminal().cols, rows = edited.getTerminal().rows
+        XCTAssertGreaterThan(rows, 8)
+        let presenters = [edited, reference].map { view -> NativeGridPresenter in
+            let presenter = NativeGridPresenter(client: NeovimGridClient(socketPath: "/nonexistent"))
+            presenter.prepareTerminal(view)
+            return presenter
+        }
+        let model = NeovimGridModel(cols: cols, rows: rows)
+        func line(_ row: Int, _ text: String, hl: Int = 0) -> MsgPackValue {
+            event("grid_line", gridLine(row: row, column: 0, cells: text.map { cell(String($0), hl) } + [cell(" ", 0, max(1, cols - text.count))]))
+        }
+        var events: [MsgPackValue] = [event("grid_resize", .array([.int(1), .int(Int64(cols)), .int(Int64(rows))])),
+                                      event("default_colors_set", .array([.int(0xd8d8d8), .int(0x181818), .int(-1), .int(-1), .int(-1)])),
+                                      event("hl_attr_define", .array([.int(1), map([("foreground", .int(0xcc9595)), ("bold", .bool(true))]), .map([]), .array([])]))]
+        for row in 0..<rows - 1 { events.append(line(row, "row \(row) the quick brown fox 界")) }
+        events.append(line(rows - 1, "NORMAL  file.txt  1:1", hl: 1))
+        events.append(event("grid_cursor_goto", .array([.int(1), .int(0), .int(0)])))
+        model.apply(redraw: events)
+        let initial = model.takeFrame()!
+        func drawn(_ view: CodeTerminalView) throws -> [UInt8] {
+            profiles.removeAll()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            return pixels(try capture(view))
+        }
+        presenters[0].client.mailbox.push(.frame(initial)); presenters[0].drain()
+        _ = try drawn(edited)
+
+        // One keystroke: the first line gains a character, the status line's ruler changes and the cursor moves.
+        model.apply(redraw: [line(0, "xrow 0 the quick brown fox 界"), line(rows - 1, "INSERT  file.txt [+]  1:2", hl: 1),
+                             event("grid_cursor_goto", .array([.int(1), .int(0), .int(1)]))])
+        let keystroke = model.takeFrame()!
+        presenters[0].client.mailbox.push(.frame(keystroke)); presenters[0].drain()
+        let after = try drawn(edited)
+        let rebuilt = profiles.reduce(0) { $0 + ($1["rowsRebuilt"] ?? 0) }
+        XCTAssertEqual(rebuilt, 2, "only the edited line and the status line are rebuilt")
+
+        // A view that drew the final screen from scratch shows the same pixels.
+        presenters[1].client.mailbox.push(.frame(initial)); presenters[1].client.mailbox.push(.frame(keystroke)); presenters[1].drain()
+        XCTAssertEqual(after, try drawn(reference))
+    }
+
     @MainActor
     func testHorizontalBandWithARetainedLayerMatchesTheScrolledContentPixelForPixel() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device") }

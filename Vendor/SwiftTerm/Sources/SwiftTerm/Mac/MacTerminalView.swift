@@ -327,7 +327,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// last frame. When `viewDidMoveToWindow` fires with a different window,
     /// we rebuild the MTKView so a fresh CAMetalLayer binds to it.
     private weak var metalBoundWindow: NSWindow?
-    var metalDirtyRange: ClosedRange<Int>?
+    var metalDirtyRange: ClosedRange<Int>? { didSet { metalDirtyRows = nil } }
+    /// NeoLink: when set, exactly which rows of `metalDirtyRange` changed (absolute rows). Assigning
+    /// `metalDirtyRange` clears it, so any other invalidation falls back to the whole range.
+    var metalDirtyRows: IndexSet?
     var pendingMetalDisplay: Bool = false
     /// The cursor position last submitted to the Metal renderer. Used to
     /// detect pure cursor-only moves (no rows dirty) such as the

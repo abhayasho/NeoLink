@@ -968,6 +968,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 
         let visibleRange = firstRow...lastRow
         let dirtyRange = terminalView.metalDirtyRange
+#if os(macOS)
+        // NeoLink: exactly which rows of `dirtyRange` changed, when known (external-grid writes).
+        let dirtyRows = terminalView.metalDirtyRows
+#endif
         terminalView.metalDirtyRange = nil
 #if os(macOS)
         // Rows that only moved (program region scrolls, viewport scrolls) keep their geometry.
@@ -979,6 +983,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #endif
         let needsFullRebuild = signatureChanged || rowCache.isEmpty
         let rebuildRange = needsFullRebuild ? visibleRange : intersect(dirtyRange, visibleRange)
+#if os(macOS)
+        let exactRows = needsFullRebuild ? nil : dirtyRows
+        func isDirty(_ row: Int) -> Bool { exactRows.map { $0.contains(row) } ?? (rebuildRange?.contains(row) ?? false) }
+#else
+        func isDirty(_ row: Int) -> Bool { rebuildRange?.contains(row) ?? false }
+#endif
         // Cell heights snap to the pixel grid, so row translations are whole pixels.
         let rowHeightPx = Float((cellHeight * scale).rounded())
 
@@ -1150,7 +1160,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         for row in visibleRange {
             let line = buffer.lines[row]
             let visibleRow = row - visibleDisp
-            let dirty = (rebuildRange?.contains(row) ?? false) && !movedLines.contains(ObjectIdentifier(line))
+            let dirty = isDirty(row) && !movedLines.contains(ObjectIdentifier(line))
             let inRegion = regionRows?.contains(visibleRow) ?? false
 #if os(macOS)
             if let band, band.rows.contains(visibleRow) {
@@ -1169,9 +1179,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                     if !isCached(line, row: row, visibleRow: visibleRow, dirty: dirty) { bandBudget -= 1 }
                     entry = cachedEntry(for: line, row: row, visibleRow: visibleRow, dirty: dirty)
                 } else {
-                    // Keep the dirty range for when this row is built.
-                    if let rebuildRange, rebuildRange.contains(row) {
+                    // Keep the row dirty for when it is built (exactly, if this frame's rows were known exactly).
+                    if dirty {
+                        let exact = terminalView.metalDirtyRange == nil || terminalView.metalDirtyRows != nil
+                        let keptRows = terminalView.metalDirtyRows
                         terminalView.metalDirtyRange = terminalView.metalDirtyRange.map { min($0.lowerBound, row)...max($0.upperBound, row) } ?? row...row
+                        if exact, exactRows != nil { terminalView.metalDirtyRows = (keptRows ?? IndexSet()).union(IndexSet(integer: row)) }
                     }
                     drawnLines.insert(ObjectIdentifier(line))
                 }
