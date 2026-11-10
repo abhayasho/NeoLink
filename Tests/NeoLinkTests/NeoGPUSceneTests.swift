@@ -3,29 +3,103 @@ import XCTest
 @testable import NeoLink
 
 final class NeoGPUSceneTests: XCTestCase {
-    func testDroppedDrawableAcknowledgementsMoveToNextPresentedFrameInOrder() {
-        var log: [String] = []
-        var deferred = DeferredPresentations()
-        deferred.dropped([{ _ in log.append("a") }])
-        deferred.dropped([{ _ in log.append("b") }])
-        XCTAssertEqual(deferred.count, 2)
-        deferred.presented([{ _ in log.append("c") }]).forEach { $0(1) }
-        XCTAssertEqual(log, ["a", "b", "c"], "dropped frames are acknowledged first, once, by the next presented frame")
-        deferred.presented([{ _ in log.append("d") }]).forEach { $0(2) }
-        XCTAssertEqual(log, ["a", "b", "c", "d"], "nothing is replayed twice")
+    private final class Pane {}
+
+    /// Models one explorer-like pane: `presented` records a position sample and takes
+    /// ownership (covers native rows); `acknowledged` records only the revision.
+    private final class PaneLog {
+        var positions: [(time: Double, y: Int)] = [], covering = false, revision = 0, revisionTime = 0.0
+        func node(_ pane: Pane, frame: UInt64, y: Int, revision: Int) -> (presented: (Double) -> Void, entry: DeferredPresentations.Entry) {
+            ({ [unowned self] time in
+                positions.append((time, y)); covering = true
+                if revision > self.revision { self.revision = revision; revisionTime = time }
+            }, .init(pane: ObjectIdentifier(pane), frame: frame, acknowledge: { [unowned self] time in
+                if revision > self.revision { self.revision = revision; revisionTime = time }
+            }))
+        }
     }
 
-    func testDeferredAcknowledgementsAreBoundedAndDiscardable() {
+    func testDroppedPaneFrameIsNotAcknowledgedByDrawableThatOmitsThePane() {
+        let explorer = Pane(), editor = Pane(), log = PaneLog()
         var deferred = DeferredPresentations()
-        var kept: [Int] = []
-        for index in 0..<(DeferredPresentations.limit + 10) { deferred.dropped([{ _ in kept.append(index) }]) }
+        let dropped = log.node(explorer, frame: 1, y: 100, revision: 5)
+        XCTAssertTrue(deferred.complete(presentedTime: 0, frame: 1, current: true, carried: [ObjectIdentifier(explorer)],
+                                        presented: [dropped.presented], acknowledged: [dropped.entry]).isEmpty)
+        // Cache miss / native fallback / hidden: the next shown drawable carries only the editor.
+        deferred.complete(presentedTime: 2, frame: 2, current: true, carried: [ObjectIdentifier(editor)],
+                          presented: [], acknowledged: []).forEach { $0(2) }
+        XCTAssertFalse(log.covering, "a drawable without the explorer must not hide native fallback rows")
+        XCTAssertEqual(log.revision, 0, "the explorer revision was not shown by a drawable that omitted it")
+        XCTAssertTrue(log.positions.isEmpty)
+        XCTAssertEqual(deferred.count, 1, "the acknowledgement waits for a drawable that carries the pane")
+        // A later drawable that does carry the explorer, at a new position.
+        let later = log.node(explorer, frame: 3, y: 140, revision: 5)
+        deferred.complete(presentedTime: 3, frame: 3, current: true, carried: [ObjectIdentifier(explorer)],
+                          presented: [later.presented], acknowledged: [later.entry]).forEach { $0(3) }
+        XCTAssertEqual(log.revision, 5); XCTAssertEqual(log.revisionTime, 3)
+        XCTAssertEqual(log.positions.map(\.y), [140], "the dropped position (100) never appeared and is never counted")
+        XCTAssertEqual(deferred.count, 0)
+    }
+
+    func testReplayNeverReportsTwoPositionsAtOneTimestamp() {
+        let explorer = Pane(), log = PaneLog()
+        var deferred = DeferredPresentations()
+        for (frame, y) in [(UInt64(1), 10), (2, 20)] {
+            let node = log.node(explorer, frame: frame, y: y, revision: Int(frame))
+            _ = deferred.complete(presentedTime: 0, frame: frame, current: true, carried: [ObjectIdentifier(explorer)],
+                                  presented: [node.presented], acknowledged: [node.entry])
+        }
+        let shown = log.node(explorer, frame: 3, y: 30, revision: 3)
+        deferred.complete(presentedTime: 7, frame: 3, current: true, carried: [ObjectIdentifier(explorer)],
+                          presented: [shown.presented], acknowledged: [shown.entry]).forEach { $0(7) }
+        XCTAssertEqual(log.positions.count, 1, "one presented drawable yields one position sample")
+        XCTAssertEqual(log.positions.first?.y, 30)
+        XCTAssertEqual(log.revision, 3)
+    }
+
+    func testStaleCompletionKeepsNewerAcknowledgementsAndNativeOwnership() {
+        let editor = Pane(), log = PaneLog()
+        var deferred = DeferredPresentations()
+        // Frame 2 (new generation) is dropped before the stale frame 1 completion arrives.
+        let newer = log.node(editor, frame: 2, y: 0, revision: 9)
+        _ = deferred.complete(presentedTime: 0, frame: 2, current: true, carried: [ObjectIdentifier(editor)],
+                              presented: [newer.presented], acknowledged: [newer.entry])
+        let stale = log.node(editor, frame: 1, y: 0, revision: 4)
+        deferred.complete(presentedTime: 5, frame: 1, current: false, carried: [ObjectIdentifier(editor)],
+                          presented: [stale.presented], acknowledged: [stale.entry]).forEach { $0(5) }
+        XCTAssertFalse(log.covering, "a stale completion must not take ownership back from native fallback")
+        XCTAssertEqual(log.revision, 4, "its own content really was shown")
+        XCTAssertEqual(deferred.count, 1, "an older drawable neither satisfies nor discards a newer frame's acknowledgement")
+        let next = log.node(editor, frame: 3, y: 0, revision: 9)
+        deferred.complete(presentedTime: 6, frame: 3, current: true, carried: [ObjectIdentifier(editor)],
+                          presented: [next.presented], acknowledged: [next.entry]).forEach { $0(6) }
+        XCTAssertEqual(log.revision, 9); XCTAssertTrue(log.covering)
+    }
+
+    func testDroppedEditorAcknowledgementReachesNextDrawableCarryingTheEditor() {
+        // The original bug: the only frame encoded for a selection is dropped and later
+        // frames repeat the retained texture without a new acknowledgement of their own.
+        let editor = Pane()
+        var deferred = DeferredPresentations(), acknowledged: [UInt64] = []
+        let entry = DeferredPresentations.Entry(pane: ObjectIdentifier(editor), frame: 1) { _ in acknowledged.append(14) }
+        _ = deferred.complete(presentedTime: 0, frame: 1, current: true, carried: [ObjectIdentifier(editor)], presented: [], acknowledged: [entry])
+        deferred.complete(presentedTime: 1, frame: 2, current: true, carried: [ObjectIdentifier(editor)], presented: [], acknowledged: []).forEach { $0(1) }
+        deferred.complete(presentedTime: 2, frame: 3, current: true, carried: [ObjectIdentifier(editor)], presented: [], acknowledged: []).forEach { $0(2) }
+        XCTAssertEqual(acknowledged, [14], "acknowledged once, by the next shown drawable carrying the pane")
+    }
+
+    func testDeferredAcknowledgementsAreBoundedAndRetireWithTheirPane() {
+        let pane = Pane(), other = Pane()
+        var deferred = DeferredPresentations(), kept: [Int] = []
+        for index in 0..<(DeferredPresentations.limit + 10) {
+            deferred.dropped([.init(pane: ObjectIdentifier(pane), frame: UInt64(index)) { _ in kept.append(index) }])
+        }
         XCTAssertEqual(deferred.count, DeferredPresentations.limit)
-        deferred.presented([]).forEach { $0(1) }
-        XCTAssertEqual(kept.first, 10, "the oldest overflow is discarded")
-        deferred.dropped([{ _ in kept.append(-1) }])
-        deferred.discard()
-        deferred.presented([]).forEach { $0(2) }
-        XCTAssertFalse(kept.contains(-1), "overlay/fallback/generation changes must not replay stale acknowledgements")
+        deferred.dropped([.init(pane: ObjectIdentifier(other), frame: 500) { _ in kept.append(-1) }])
+        deferred.retire(ObjectIdentifier(other))
+        deferred.presented(frame: 1000, carrying: [ObjectIdentifier(pane), ObjectIdentifier(other)]).forEach { $0(1) }
+        XCTAssertEqual(kept.first, 11, "the oldest overflow is discarded")
+        XCTAssertFalse(kept.contains(-1), "a pane that left for good is not acknowledged later")
     }
 
     func testFrameLatencyExperimentAcceptsOnlyDocumentedLeads() {

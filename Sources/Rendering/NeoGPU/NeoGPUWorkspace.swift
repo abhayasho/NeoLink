@@ -18,23 +18,59 @@ final class WorkspaceContentController: NSViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 }
 
-/// Presentation acknowledgements of drawables the compositor dropped. Pane
-/// textures are retained, so the next drawable that reaches the display shows the
-/// same or newer content and may acknowledge them, oldest first. Bounded.
+/// Content acknowledgements of drawables the compositor dropped.
+///
+/// Two different facts are kept apart. "This pane revision and position appeared"
+/// belongs to the one drawable that carried it and is never replayed: a dropped
+/// frame's position was not shown, and its ownership effects (hiding the native
+/// layer, covering native rows) must not run for a drawable that omits the pane.
+/// "This input or selection was satisfied by later visible content" may be
+/// deferred: pane textures are retained, so a *later-submitted* drawable that
+/// reaches the display *and carries the same pane* shows the same or newer
+/// content. Entries are matched by pane and frame order, oldest first, bounded.
 struct DeferredPresentations {
-    private var pending: [(Double) -> Void] = []
+    struct Entry {
+        let pane: ObjectIdentifier
+        /// Submission order of the dropped drawable.
+        let frame: UInt64
+        let acknowledge: (Double) -> Void
+    }
+    private var pending: [Entry] = []
     static let limit = 64
     var count: Int { pending.count }
-    mutating func dropped(_ callbacks: [(Double) -> Void]) {
-        pending.append(contentsOf: callbacks)
+    mutating func dropped(_ entries: [Entry]) {
+        pending.append(contentsOf: entries)
         if pending.count > Self.limit { pending.removeFirst(pending.count - Self.limit) }
     }
-    /// Callbacks to run for a drawable that was presented: deferred ones first.
-    mutating func presented(_ callbacks: [(Double) -> Void]) -> [(Double) -> Void] {
-        defer { pending.removeAll() }
-        return pending + callbacks
+    /// Acknowledgements satisfied by a drawable that reached the display. Only
+    /// panes it carried, and only frames submitted before it: completion handlers
+    /// can arrive out of order, and an older drawable does not show newer content.
+    /// Other panes' entries stay for a drawable that does carry them.
+    mutating func presented(frame: UInt64, carrying panes: Set<ObjectIdentifier>) -> [(Double) -> Void] {
+        var satisfied: [(Double) -> Void] = []
+        pending.removeAll { entry in
+            guard entry.frame < frame, panes.contains(entry.pane) else { return false }
+            satisfied.append(entry.acknowledge)
+            return true
+        }
+        return satisfied
     }
-    mutating func discard() { pending.removeAll() }
+    /// A pane that left the workspace for good can no longer be satisfied.
+    mutating func retire(_ pane: ObjectIdentifier) { pending.removeAll { $0.pane == pane } }
+
+    /// One drawable's completion. Returns the callbacks to run, in order.
+    /// - `presentedTime == 0`: dropped. Defer its content acknowledgements only.
+    /// - shown while the workspace still owns the same client set (`current`):
+    ///   earlier satisfied acknowledgements, then this drawable's own callbacks.
+    /// - shown after an overlay, fallback or client-set change: content
+    ///   acknowledgements only; ownership callbacks would hide native fallback.
+    mutating func complete(presentedTime: Double, frame: UInt64, current: Bool,
+                           carried: Set<ObjectIdentifier>, presented: [(Double) -> Void],
+                           acknowledged: [Entry]) -> [(Double) -> Void] {
+        guard presentedTime > 0 else { dropped(acknowledged); return [] }
+        let satisfied = self.presented(frame: frame, carrying: carried)
+        return satisfied + (current ? presented : acknowledged.map(\.acknowledge))
+    }
 }
 
 @MainActor
@@ -88,6 +124,7 @@ final class NeoGPUWorkspace: NSView {
     private(set) var presentedFrames: UInt64 = 0
     private(set) var droppedDrawables: UInt64 = 0
     private var deferredPresentations = DeferredPresentations()
+    private var submittedFrames: UInt64 = 0
     private(set) var presentationTiming = FrameTiming()
     func resetPresentationTiming() { presentationTiming = FrameTiming() }
     private(set) var lastNodeCount = 0
@@ -245,7 +282,7 @@ final class NeoGPUWorkspace: NSView {
         guard drawable.texture.width == Int((bounds.width * scale).rounded()),
               drawable.texture.height == Int((bounds.height * scale).rounded()) else { wake(); return true }
         guard let command = queue.makeCommandBuffer() else { fail(); return false }
-        var nodes: [(NeoGPUNode, SIMD2<Float>, MTLScissorRect)] = []
+        var nodes: [(NeoGPUNode, SIMD2<Float>, MTLScissorRect, ObjectIdentifier)] = []
         nodes.reserveCapacity(clients.count)
         let time = source?.targetTimestamp ?? CACurrentMediaTime()
         // Admit PTY bytes before deciding which pane is visible. In particular,
@@ -254,7 +291,10 @@ final class NeoGPUWorkspace: NSView {
         let latchingClients = clients.values.compactMap(\.value)
         latchingClients.forEach { $0.gpuLatchOutput() }
         (window as? WorkspaceWindow)?.frames.prepareWorkspace(at: time)
-        if clients.values.contains(where: { $0.value == nil }) { clients = clients.filter { $0.value.value != nil } }
+        if clients.values.contains(where: { $0.value == nil }) {
+            for (id, entry) in clients where entry.value == nil { deferredPresentations.retire(id) }
+            clients = clients.filter { $0.value.value != nil }
+        }
         for entry in clients.values {
             guard let client = entry.value else { continue }
             guard let view = client.gpuInputView, view.window === window, !view.isHiddenOrHasHiddenAncestor,
@@ -269,14 +309,14 @@ final class NeoGPUWorkspace: NSView {
             let bottom = min(drawable.texture.height, Int(ceil(visible.maxY * scale)))
             guard right > x, bottom > y else { continue }
             nodes.append((node, .init(Float((rect.minX * scale).rounded()), Float((rect.minY * scale).rounded())),
-                          MTLScissorRect(x: x, y: y, width: right - x, height: bottom - y)))
+                          MTLScissorRect(x: x, y: y, width: right - x, height: bottom - y), ObjectIdentifier(client)))
         }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { fail(); return false }
-        for (node, origin, clip) in nodes {
+        for (node, origin, clip, _) in nodes {
             encoder.setScissorRect(clip)
             renderer.encode(node.scene, encoder: encoder, viewport: .init(Float(drawable.texture.width), Float(drawable.texture.height)),
                             translation: origin + node.translation)
@@ -289,35 +329,30 @@ final class NeoGPUWorkspace: NSView {
         }
         guard slot.acquire() else { return true }
         let callbacks = nodes.map { $0.0.presented }, generation = self.generation
-        let acknowledgements = nodes.compactMap { $0.0.acknowledged }
+        submittedFrames &+= 1
+        let frame = submittedFrames, carried = Set(nodes.map(\.3))
+        let deferrable = nodes.compactMap { node in
+            node.0.acknowledged.map { DeferredPresentations.Entry(pane: node.3, frame: frame, acknowledge: $0) }
+        }
         drawable.addPresentedHandler { [weak self] drawable in
             let time = drawable.presentedTime
             DispatchQueue.main.async {
                 guard let self else { return }
-
-                guard time > 0 else {
-                    // The compositor dropped this drawable (presentedTime == 0). Its
-                    // pane textures are retained, so the next drawable that really
-                    // reaches the display shows the same or newer content. Defer the
-                    // acknowledgements to it instead of losing them; otherwise the
-                    // host never learns that the requested buffer became visible.
-                    guard self.generation == generation else { return }
-                    self.droppedDrawables &+= 1
-                    self.deferredPresentations.dropped(callbacks)
-                    return
-                }
-                self.presentedFrames &+= 1
-                // Completion can arrive after an overlay, fallback or tab change.
-                // It must not hide a surface that has returned to native ownership.
-                guard self.enabled, !self.suspended, self.generation == generation else {
-                    self.deferredPresentations.discard()
-                    acknowledgements.forEach { $0(time) }
-                    return
-                }
-                // Visibility transitions explicitly pause this series. Keep even
-                // long visible-window stalls instead of silently filtering them.
-                self.presentationTiming.record(timestamp: time, work: 0, includeLongIntervals: true)
-                self.deferredPresentations.presented(callbacks).forEach { $0(time) }
+                // Dropped (time == 0): nothing it carried was shown, so no position,
+                // revision or ownership callback runs; its content acknowledgements
+                // wait for a later drawable carrying the same pane. A completion
+                // arriving after an overlay, fallback or tab change must not hide a
+                // surface that returned to native ownership, nor discard
+                // acknowledgements of newer frames or of panes it did not carry.
+                let current = self.enabled && !self.suspended && self.generation == generation
+                if time > 0 {
+                    self.presentedFrames &+= 1
+                    // Visibility transitions explicitly pause this series. Keep even
+                    // long visible-window stalls instead of silently filtering them.
+                    if current { self.presentationTiming.record(timestamp: time, work: 0, includeLongIntervals: true) }
+                } else { self.droppedDrawables &+= 1 }
+                self.deferredPresentations.complete(presentedTime: time, frame: frame, current: current, carried: carried,
+                                                    presented: callbacks, acknowledged: deferrable).forEach { $0(time) }
             }
         }
         let slot = self.slot

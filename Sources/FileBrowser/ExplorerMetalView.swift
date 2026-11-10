@@ -487,6 +487,13 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
             }
             self.layer?.opacity = 0
             if !self.isCoveringNativeRows { self.isCoveringNativeRows = true; self.coverageChanged?(true) }
+        }, acknowledged: { [weak self] time in
+            // A later drawable carrying this pane showed this revision or a newer
+            // one. That satisfies "the change became visible" only: no frame count,
+            // no position sample and no native-row coverage, which belong to the
+            // drawable that actually carried a given position.
+            guard let self, revision > self.presentedSceneRevision else { return }
+            self.presentedSceneRevision = revision; self.presentedSceneTime = time
         })
     }
 
