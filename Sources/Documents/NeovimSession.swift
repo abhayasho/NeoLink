@@ -638,6 +638,7 @@ final class NeovimHostView: NSView {
     }
     func selectionReady(session: NeovimSession) {
         guard wantsActive, session.requestedPath == nil, session.selectedPath?() != nil else { return }
+        applyPaneSize()
         terminal?.isHidden = false
         SelectionTrace.mark(session.selectionToken, "view.shown")
         if let terminal {
@@ -661,6 +662,7 @@ final class NeovimHostView: NSView {
             window.makeFirstResponder(nil)
         }
         if terminal?.isHidden != !active {
+            if active { applyPaneSize() }
             SelectionTrace.mark(session.selectionToken, active ? "view.shown" : "view.hidden")
             terminal?.isHidden = !active
             if active {
@@ -685,7 +687,36 @@ final class NeovimHostView: NSView {
     override func layout() {
         super.layout()
         LayoutTrace.layout("NeovimHostView", size: bounds.size, changed: terminal?.frame != bounds)
-        if bounds.width > 100, bounds.height > 40, terminal?.frame != bounds { SelectionTrace.mark(terminal?.session?.selectionToken ?? 0, "layout"); terminal?.frame = bounds }
+        guard bounds.width > 100, bounds.height > 40, let terminal, terminal.frame != bounds else { return }
+        // A covered editor follows a divider or window drag once, when the drag goes
+        // quiet, instead of resizing the Neovim grid (and redrawing every row) at
+        // each step nobody can see. Showing it applies the size first.
+        // (Never the first size: a newly mounted editor must start at its real grid.)
+        if terminal.isHidden, CoveredPaneResize.isDeferring, terminal.frame.width > 100, terminal.frame.height > 40 {
+            pendingResize?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.applyPaneSize() }
+            pendingResize = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + CoveredPaneResize.quiet, execute: work)
+            return
+        }
+        applyPaneSize()
+    }
+    private var pendingResize: DispatchWorkItem?
+    /// Gives the terminal the host's current size (cancelling any deferred resize).
+    func applyPaneSize() {
+        pendingResize?.cancel(); pendingResize = nil
+        guard bounds.width > 100, bounds.height > 40, let terminal, terminal.frame != bounds else { return }
+        SelectionTrace.mark(terminal.session?.selectionToken ?? 0, "layout")
+        LayoutTrace.layout("NeovimHostView.applied", size: bounds.size, changed: true)
+        terminal.frame = bounds
     }
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); LayoutTrace.layout(window == nil ? "NeovimHostView.leftWindow" : "NeovimHostView.joinedWindow", size: bounds.size, changed: true); if let terminal, !terminal.isHidden { window?.makeFirstResponder(terminal) } }
+}
+
+/// Covered workspace panes (the shell under a document, the editor under a shell)
+/// defer their grid resize while their size is changing continuously.
+enum CoveredPaneResize {
+    static let quiet = 0.15
+    /// `NEOLINK_COVERED_RESIZE=live` restores per-step resizing for same-binary comparisons.
+    static let isDeferring = ProcessInfo.processInfo.environment["NEOLINK_COVERED_RESIZE"] != "live"
 }

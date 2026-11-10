@@ -442,7 +442,9 @@ final class InteractionBenchmark {
                 }
                 let start = split.subviews[0].frame.maxX
                 var widths = Set<Int>()
-                await measure(scenario, extra: { ["terminalColumnsSeen": widths.count] }) {
+                SelectionTrace.reset()
+                var finalGrid = ""
+                await measure(scenario, extra: { ["terminalColumnsSeen": widths.count, "finalGrid": finalGrid, "layoutTrace": SelectionTrace.report] }) {
                     await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
                         var frame = 0
                         self.window.frames.animate(ObjectIdentifier(split)) { time in
@@ -455,6 +457,7 @@ final class InteractionBenchmark {
                         }
                     }
                     await self.sleep(0.3)
+                    finalGrid = "\(shell.getTerminal().cols)x\(shell.getTerminal().rows) divider=\(Int(split.subviews[0].frame.maxX.rounded()))"
                 }
                 split.setPosition(start, ofDividerAt: 0)
                 tabs.showAgentPanel = agentPanel

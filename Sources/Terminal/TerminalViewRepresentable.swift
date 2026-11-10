@@ -285,6 +285,7 @@ final class TerminalHostView: NSView {
     private var mountedViews: [UUID: LocalProcessTerminalView] = [:]
     private var focusedTabID: UUID?
     private var isActiveRequested = true
+    private var pendingResize: DispatchWorkItem?
     private let makeTerminalView: (TerminalTab, NSSize) -> LocalProcessTerminalView
 
     init(frame: NSRect, makeTerminalView: @escaping (TerminalTab, NSSize) -> LocalProcessTerminalView = { tab, size in
@@ -379,7 +380,20 @@ final class TerminalHostView: NSView {
                 window.makeFirstResponder(nil)
             }
             if view.isHidden != hide { view.isHidden = hide }
-            if id == selectedTabID, view.frame != bounds { view.frame = bounds }
+            if id == selectedTabID, view.frame != bounds {
+                // A covered shell follows a drag once it goes quiet (see CoveredPaneResize):
+                // each applied size reflows the buffer and sends the program a SIGWINCH.
+                if isHidden, CoveredPaneResize.isDeferring {
+                    pendingResize?.cancel()
+                    let work = DispatchWorkItem { [weak self, weak view] in
+                        guard let self, let view, self.selectedTabID == id, self.bounds.width >= 100, self.bounds.height >= 40,
+                              view.frame != self.bounds else { return }
+                        view.frame = self.bounds
+                    }
+                    pendingResize = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + CoveredPaneResize.quiet, execute: work)
+                } else { pendingResize?.cancel(); pendingResize = nil; view.frame = bounds }
+            }
         }
         if selectedTabID == nil { focusedTabID = nil }
         // A covered pane keeps its terminal mounted; it must never take focus from the document.

@@ -93,6 +93,41 @@ final class TerminalHostViewTests: XCTestCase {
         }
     }
 
+    @MainActor func testCoveredTerminalDefersGridResizeUntilQuietOrShown() async throws {
+        do {
+            let controller = TabsController(useNeovim: false)
+            let shell = try XCTUnwrap(controller.selectedTerminalTab)
+            var created: [UUID: LocalProcessTerminalView] = [:]
+            let size = NSSize(width: 800, height: 480)
+            let host = TerminalHostView(frame: NSRect(origin: .zero, size: size)) { tab, size in
+                let view = LocalProcessTerminalView(frame: NSRect(origin: .zero, size: size)); created[tab.id] = view; return view
+            }
+            host.synchronize(tabs: controller.workspaceTerminalTabs, selectedTabID: shell.id, isActive: true)
+            let view = try XCTUnwrap(created[shell.id])
+            let columns = view.terminal.cols
+            host.synchronize(tabs: controller.workspaceTerminalTabs, selectedTabID: shell.id, isActive: false, immediate: true)
+            XCTAssertTrue(host.isHidden)
+
+            // A divider drag while a document covers the shell: many sizes, no reflow per step.
+            for width in stride(from: 790.0, through: 600.0, by: -10.0) { host.setFrameSize(NSSize(width: width, height: 480)) }
+            XCTAssertEqual(view.frame.width, 800, "a covered terminal is not resized at every step")
+            XCTAssertEqual(view.terminal.cols, columns)
+
+            // Shown again before the quiet period ends: it takes the current size at once.
+            host.synchronize(tabs: controller.workspaceTerminalTabs, selectedTabID: shell.id, isActive: true, immediate: true)
+            XCTAssertEqual(view.frame.width, 600)
+            XCTAssertLessThan(view.terminal.cols, columns)
+
+            // Covered again and resized: once the drag goes quiet the final size is applied once.
+            host.synchronize(tabs: controller.workspaceTerminalTabs, selectedTabID: shell.id, isActive: false, immediate: true)
+            host.setFrameSize(NSSize(width: 700, height: 480)); host.setFrameSize(NSSize(width: 720, height: 480))
+            XCTAssertEqual(view.frame.width, 600)
+            // Suspend so the main queue can run the deferred resize.
+            try await Task.sleep(nanoseconds: UInt64((CoveredPaneResize.quiet + 0.15) * 1_000_000_000))
+            XCTAssertEqual(view.frame.width, 720, "the final size is applied after the drag goes quiet")
+        }
+    }
+
     func testHostLaunchesOnlySelectedTabsAndKeepsHiddenFrameUntilSelected() async throws {
         try await MainActor.run {
             let controller = TabsController(useNeovim: false)

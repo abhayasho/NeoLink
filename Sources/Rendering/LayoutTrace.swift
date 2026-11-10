@@ -9,16 +9,18 @@ enum LayoutTrace {
     static let enabled = SelectionTrace.enabled
     private static var installed = false
     private static var began = 0.0
+    /// Layout events outside any selection (a divider drag) still need a generation to join.
+    static var token: UInt64 { max(SelectionTrace.current, 1) }
 
     /// SwiftUI `body` evaluation or representable update.
     @inline(__always) static func body(_ name: @autoclosure () -> String) {
         guard enabled else { return }
-        SelectionTrace.mark(SelectionTrace.current, "body." + name(), once: false)
+        SelectionTrace.mark(token, "body." + name(), once: false)
     }
     /// AppKit layout of a native pane, with whether its size really changed.
     @inline(__always) static func layout(_ name: @autoclosure () -> String, size: CGSize, changed: Bool) {
         guard enabled else { return }
-        SelectionTrace.mark(SelectionTrace.current, "layout." + name(), once: false,
+        SelectionTrace.mark(token, "layout." + name(), once: false,
                             fields: ["width": size.width, "height": size.height, "changed": changed])
     }
     /// Records every main run-loop pass that kept the thread busy for 2 ms or more.
@@ -34,7 +36,7 @@ enum LayoutTrace {
             guard began > 0 else { return }
             let busy = CACurrentMediaTime() - began
             if busy >= 0.002 {
-                SelectionTrace.mark(SelectionTrace.current, "main.busy", at: began, once: false, fields: ["ms": (busy * 10_000).rounded() / 10])
+                SelectionTrace.mark(token, "main.busy", at: began, once: false, fields: ["ms": (busy * 10_000).rounded() / 10])
             }
             began = 0
         }

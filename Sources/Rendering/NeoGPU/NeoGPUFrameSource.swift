@@ -170,11 +170,11 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
     }
     private func trace(_ outcome: String, _ link: CADisplayLink) {
         guard LayoutTrace.enabled else { return }
-        SelectionTrace.mark(SelectionTrace.current, "link.tick", once: false, fields: ["outcome": outcome])
+        SelectionTrace.mark(LayoutTrace.token, "link.tick", once: false, fields: ["outcome": outcome])
     }
 
     func start() {
-        if LayoutTrace.enabled, link?.isPaused == true { SelectionTrace.mark(SelectionTrace.current, "link.resume", once: false) }
+        if LayoutTrace.enabled, link?.isPaused == true { SelectionTrace.mark(LayoutTrace.token, "link.resume", once: false) }
         demand.wake(); link?.isPaused = false
     }
     func stop() { link?.isPaused = true }

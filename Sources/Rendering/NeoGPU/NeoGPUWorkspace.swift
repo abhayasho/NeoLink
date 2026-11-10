@@ -334,7 +334,7 @@ final class NeoGPUWorkspace: NSView {
         }
         encoder.endEncoding()
         lastNodeCount = nodes.count
-        if LayoutTrace.enabled { SelectionTrace.mark(SelectionTrace.current, "ws.draw", once: false, fields: ["nodes": nodes.count, "clients": clients.count]) }
+        if LayoutTrace.enabled { SelectionTrace.mark(LayoutTrace.token, "ws.draw", once: false, fields: ["nodes": nodes.count, "clients": clients.count]) }
         if let capture = captureNextFrame, !drawable.texture.isFramebufferOnly {
             captureNextFrame = nil
             NeoGPUCapture.encode(drawable.texture, command: command, completion: capture)

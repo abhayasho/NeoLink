@@ -124,3 +124,34 @@ Verification limit: after moving the deferral into the `DeferredPresentations` t
 ### Selection published apart from the controller (responsiveness pass)
 
 `TabsController` no longer publishes the selected tab. `TabSelection` (`controller.selection`) does, and only the views that show the selection observe it; the controller publishes `browserTabID` when the shown file browser changes. The motivation was the SwiftUI transaction and root layout measured above after every switch. `TabSelectionTests` verifies the split. The `ui-tabs` A/B in [RENDERING.md](RENDERING.md#responsiveness-pass-exact-editor-rows-steady-resampling-cheaper-switches) shows **no change in selection → buffer presented (p50 32.9 → 32.2 ms)**, a slightly higher p95 (45.2 → 49.8 ms), and **higher process CPU (22.6–23.8 % → 25.2–28.6 %) and more long main-thread stall samples (63–96 → 75–124)** in all five rounds of the *after* build. That build also contains three other changes, so the cause is not established. Treat this change as unproven for tab latency.
+
+### Pane switching ahead of SwiftUI, and presentation accounting (responsiveness pass 2)
+
+Starting point: `d023473`. All numbers are procedural `ui-tabs` runs (24 switches, native full screen, 120 Hz, M2 Max, frontmost and unlocked), reported per switch class from the selection trace. **A matched baseline-versus-final A/B across all workloads was not completed (the Mac locked); the comparisons below are same-binary flag toggles and before/after traces taken during the work.**
+
+What the layout trace (`LayoutTrace`: `body.*`, `layout.*`, `main.busy`, `link.tick`, `ws.draw` events under `NEOLINK_SELECTION_TRACE`) showed on `d023473`:
+
+- The display link ticked every 8.3 ms until a selection, then no tick ran for about 17 ms (editor→shell) or 28 ms (shell→editor): the main thread was in the SwiftUI update, and the newly selected pane was only shown and drawn after it.
+- Selecting a document removed the shell's status bar (`selectedTerminalTab` is nil), so the covered shell grew 29 pt; returning resized it twice (983 → 954 pt): two reflows and SIGWINCHes per round trip.
+- Toggling `.allowsHitTesting` on the panes made SwiftUI remove both native pane views from the window and insert them again on every switch (24 unregister/register pairs per 24 switches, a workspace generation change each).
+- The tab strip's hosted root view was replaced on every update, re-rendering and laying out the strip in a second run-loop pass (5–9 ms). Returning to the editor rebuilt its toolbar (it was swapped for a spacer while covered).
+
+Changes: the covered terminal, its status bar and the editor toolbar stay mounted (`shownTerminalTab`, `shownEditorDocument`); panes are gated by z-order (`PaneGate`); `TabStripButtons` observes its own models; `TabsController` shows/hides the terminal pane at selection time and the newly visible pane is drawn at once through the workspace's own frame source (`NeoGPUWorkspace.presentNow`, same layer, queue bound and clock); covered panes defer grid resizes until a drag is quiet for 150 ms or they are shown.
+
+Selection → correct content presented, p50 / p95 / max in ms (3 runs each, pooled):
+
+| Class | `d023473` + trace only | all changes, `NEOLINK_IMMEDIATE_SWITCH=0` | all changes (default) |
+| --- | --- | --- | --- |
+| editor→editor (n=36) | 31.4 / 37.5 / 37.8 | 32.4 / 42.0 / 44.3 | 16.0 / 25.7 / 31.2 |
+| editor→shell (n=15) | 53.1 / 59.2 / 59.2 (one run, n=5) | 33.0 / 39.8 / 39.8 | 14.5 / 33.7 / 33.7 |
+| shell→editor (n=18) | 40.9 / 46.0 / 46.0 | 28.3 / 37.0 / 37.0 | 15.7 / 24.4 / 24.4 |
+
+Selection → focus p50 was 4.9–5.1 ms with immediate switching and 11.5–17.9 ms without. No selection failures, presentation timeouts or click-routing failures in any of these runs; 2–5 dropped drawables per run in both arms. The first column's shell classes were measured before/after individual fixes rather than in one matched set, so treat the middle and right columns (same binary, alternating) as the controlled comparison. `ui-tabs` now also hit-tests the centre of the active pane after every switch; that check passes with every gate (AppKit hiding already routes native clicks), so it guards regressions but does not distinguish the gates.
+
+**Resize: cadence not improved.** A divider drag still costs about 8.8 ms of main-thread work per step with only a shell (10.5–10.8 ms with a covered editor), so content changes every other refresh (changed-content interval p50/p95 16.7/16.7 ms, 233–235 missed refreshes). No SwiftUI body runs during the drag. A Time Profiler capture of the built binary attributes the step to hosted-pane layout (`NSHostingView.layout` 47 % of main-thread samples), of which key-view-loop recalculation (`FocusBridge.invalidateKeyViewLoop`) is about 15 %, native-view size probing 13 %, and terminal drawing 14 %; terminal reflow is under 1 %. Deferring covered-pane resizes removed all 220 hidden Neovim resizes per drag but did not change the step cost (10.8 vs 11.0 ms). Answering `sizeThatFits` directly in the native panes lowered it by 0.3–0.4 ms (3 of 3 pairs) and was removed as too small to change cadence. The split panes are already hosted independently, so a native `NSSplitView` prototype was not built.
+
+**Profiler caveat.** `xctrace record --launch -- .build/release/NeoLink` launches `/Applications/NeoLink.app` instead (the trace's binary path shows it). Attach to a running build (`--attach <pid>`) and check the path. Time Profiler captures taken with `--launch` before this pass profiled the installed build.
+
+Presentation accounting: `DeferredPresentations` now defers only content acknowledgements, matched by pane and submission order. A dropped drawable's position/ownership callbacks never run; an acknowledgement waits for a later-submitted drawable that carries the same pane; a stale completion neither takes ownership back nor discards newer acknowledgements (`NeoGPUSceneTests`).
+
+Not verified: physical trackpad scrolling, flicks, momentum interruption, typing-to-visible latency under these changes, and any matched comparison with Zed.
