@@ -12,13 +12,15 @@ struct TabStripViewport<Content: View>: NSViewRepresentable {
         TabStripScrollView(content: content)
     }
     func updateNSView(_ scroll: TabStripScrollView<Content>, context: Context) {
-        scroll.host.rootView = content
+        LayoutTrace.body("TabStripViewport.update")
+        // `content` observes its own models; it is installed once in makeNSView.
+        let widthChanged = scroll.contentWidth != width
         scroll.contentWidth = width
         if scroll.selection != selected {
             scroll.selection = selected
             scroll.reveal = selected.flatMap { frames[$0] }
         }
-        scroll.needsLayout = true
+        if widthChanged || scroll.reveal != nil { scroll.needsLayout = true }
     }
 }
 final class TabStripScrollView<Content: View>: NSScrollView {
@@ -38,6 +40,7 @@ final class TabStripScrollView<Content: View>: NSScrollView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func layout() {
         super.layout()
+        LayoutTrace.layout("TabStrip", size: bounds.size, changed: host.frame.size != CGSize(width: max(contentWidth, contentView.bounds.width), height: 34))
         let size = CGSize(width: max(contentWidth, contentView.bounds.width), height: 34)
         if host.frame.size != size { host.setFrameSize(size) }
         if let item = reveal, contentView.bounds.width > 0 {

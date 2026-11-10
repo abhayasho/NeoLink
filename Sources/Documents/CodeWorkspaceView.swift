@@ -7,10 +7,11 @@ struct CodeWorkspaceView: View {
     private var document: WorkspaceDocument? { controller.selectedTab?.document }
 
     var body: some View {
+        let _ = LayoutTrace.body("CodeWorkspaceView")
         VStack(spacing: 0) {
-            if let document, document.usesNeovim {
-                CodeToolbar(document: document, session: session, controller: controller)
-                CodeDocumentStatus(document: document)
+            if let shown = controller.shownEditorDocument {
+                CodeToolbar(document: shown, session: session, controller: controller)
+                CodeDocumentStatus(document: shown)
             } else {
                 // The retained editor is invisible behind shell/PDF tabs. Removing
                 // its toolbar would resize Neovim twice on every round trip.
@@ -38,6 +39,7 @@ struct CodeWorkspaceView: View {
 private struct CodeDocumentStatus: View {
     @ObservedObject var document: WorkspaceDocument
     var body: some View {
+        let _ = LayoutTrace.body("CodeDocumentStatus")
         if let error = document.error {
             Text(error).font(.system(size: 11)).foregroundColor(NeoLinkTheme.warning).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(10)
@@ -51,6 +53,7 @@ private struct CodeToolbar: View {
     @ObservedObject var controller: TabsController
 
     var body: some View {
+        let _ = LayoutTrace.body("CodeToolbar")
         HStack(spacing: 8) {
             Text(document.language.isEmpty ? "Text" : document.language.capitalized)
                 .lineLimit(1).help(document.source.displayPath)

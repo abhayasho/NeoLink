@@ -229,6 +229,17 @@ final class NeoGPUWorkspace: NSView {
             } else { wake() }
         }
     }
+    /// A pane just became the visible content. Draw it now through the workspace's own
+    /// frame source rather than waiting for the next refresh callback, which a SwiftUI
+    /// update can delay by a whole refresh or more. No-op for the display-link source.
+    func presentNow() {
+        wake()
+        if #available(macOS 14, *), let direct = source as? NeoGPUDirectFrameSource { direct.drawNow() }
+    }
+    var immediateFrames: Int {
+        if #available(macOS 14, *) { return (source as? NeoGPUDirectFrameSource)?.immediateFrames ?? 0 }
+        return 0
+    }
     func wake() {
         guard enabled, !suspended, !clients.isEmpty, let window, window.isVisible, !window.isMiniaturized,
               window.occlusionState.contains(.visible), let layer = layer as? CAMetalLayer else {
@@ -323,6 +334,7 @@ final class NeoGPUWorkspace: NSView {
         }
         encoder.endEncoding()
         lastNodeCount = nodes.count
+        if LayoutTrace.enabled { SelectionTrace.mark(SelectionTrace.current, "ws.draw", once: false, fields: ["nodes": nodes.count, "clients": clients.count]) }
         if let capture = captureNextFrame, !drawable.texture.isFramebufferOnly {
             captureNextFrame = nil
             NeoGPUCapture.encode(drawable.texture, command: command, completion: capture)

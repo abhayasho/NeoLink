@@ -25,6 +25,7 @@ struct GitChangesView: View {
     private var busy: Bool { loading || mutating }
 
     var body: some View {
+        let _ = LayoutTrace.body("GitChangesView")
         VStack(spacing: 0) {
             header
             NeoLinkTheme.horizontalSeparator()
@@ -186,6 +187,7 @@ private struct DiffPreview: NSViewRepresentable {
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
+        LayoutTrace.body("DiffPreview.update")
         guard let view = scroll.documentView as? NSTextView else { return }
         // The rendered view appends line separators. Cache the source instead of
         // rebuilding a potentially large diff whenever the commit message changes.

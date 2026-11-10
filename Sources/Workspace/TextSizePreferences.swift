@@ -33,6 +33,7 @@ final class TextSizePreferences: ObservableObject {
 struct TextSizeControl: View {
     @ObservedObject private var preferences = TextSizePreferences.shared
     var body: some View {
+        let _ = LayoutTrace.body("TextSizeControl")
         Menu {
             Button("Increase Text Size  ⌘+") { preferences.adjust(by: 1) }
             Button("Decrease Text Size  ⌘−") { preferences.adjust(by: -1) }

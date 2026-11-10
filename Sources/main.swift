@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         NSApp.setActivationPolicy(.regular)
         commands.install()
+        LayoutTrace.install()
         let contentView = ContentView(tabsController: tabsController)
         let hosting = NSHostingController(rootView: contentView)
         if #available(macOS 13.3, *) {

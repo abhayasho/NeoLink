@@ -5,6 +5,7 @@ struct SemanticFileIcon: View {
     var directory = false
     var expanded = false
     var body: some View {
+        let _ = LayoutTrace.body("SemanticFileIcon")
         let look = Self.appearance(url: url, directory: directory, expanded: expanded)
         Group {
             if let text = look.abbreviation { Text(text).font(.system(size: 8, weight: .bold, design: .monospaced)) }

@@ -105,35 +105,78 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
         self.link = link
     }
 
+    /// Draws at once instead of at the next refresh callback, for a pane that just became
+    /// the visible content (a tab switch). It is the same clock, layer and queue bound as a
+    /// refresh tick, not a second one: it runs only while the link is this source's and
+    /// fewer than `maximumQueued` frames are waiting, and the next tick simply repeats or
+    /// supersedes the retained content. `NEOLINK_IMMEDIATE_SWITCH=0` disables it for
+    /// same-binary comparisons.
+    static let immediateEnabled = ProcessInfo.processInfo.environment["NEOLINK_IMMEDIATE_SWITCH"] != "0"
+    private var drawing = false
+    private var lastPeriod = 1.0 / 120
+    private(set) var immediateFrames = 0
+    func drawNow() {
+        guard Self.immediateEnabled, let link, !drawing else { return }
+        let now = CACurrentMediaTime()
+        guard !queue.oldestUnpresented(before: now - 0.1) else { return }
+        frame(target: max(link.isPaused ? now + lastPeriod : link.targetTimestamp, now), period: lastPeriod, now: now, immediate: true)
+    }
+
     fileprivate func tick(_ link: CADisplayLink) {
+        guard !drawing else { return }
         targetTimestamp = link.targetTimestamp
         demand.beginFrame()
         let now = CACurrentMediaTime()
         // A presentation callback that never arrives must not stall the workspace forever.
         let period = link.targetTimestamp - link.timestamp
+        if period > 0 { lastPeriod = period }
         // `nextDrawable()` blocks (up to a second) when every drawable is held. If shown frames stop being
         // acknowledged (a sleeping or disconnected display), do not ask for another: wait for an acknowledgement,
         // and only after several seconds without one discard the stale bookkeeping and try once more.
         if queue.oldestUnpresented(before: now - 0.1) {
-            if now - lastAcquired < 5 { skippedForQueue += 1; return }
+            if now - lastAcquired < 5 { skippedForQueue += 1; trace("unacknowledged", link); return }
             queue.reset()
         }
         // A frame counts as waiting until it is shown, or until half a refresh after the refresh it was made for:
         // its presentation callback can trail the very refresh at which this tick runs.
+        frame(target: link.targetTimestamp, period: period, now: now, immediate: false)
+    }
+
+    private func frame(target: Double, period: Double, now: Double, immediate: Bool) {
+        guard let link else { return }
         guard queue.count(at: now, grace: period / 2) < Self.maximumQueued, let layer, let drawable = layer.nextDrawable() else {
-            skippedForQueue += 1
+            if !immediate { skippedForQueue += 1; trace("queued", link) }
             return   // stay running: the waiting frames will be shown and the next refresh draws
         }
         lastAcquired = now
         let queue = self.queue
-        let id = queue.add(target: link.targetTimestamp, acquired: now)
+        let id = queue.add(target: target, acquired: now)
         drawable.addPresentedHandler { _ in queue.remove(id) }
+        drawing = true
+        if immediate { targetTimestamp = target }
         let result = draw(drawable)
+        drawing = false
         if !result.presented { queue.remove(id) }
-        if !demand.endFrame(usedDrawable: result.keepRunning) { link.isPaused = true }
+        if immediate {
+            if result.presented { immediateFrames += 1 }
+            trace(result.presented ? "immediate" : "immediate, not presented", link)
+            // An immediate frame never pauses the clock: the tick decides, with the demand it saw.
+            if result.keepRunning { demand.wake(); link.isPaused = false }
+            return
+        }
+        let keep = demand.endFrame(usedDrawable: result.keepRunning)
+        trace(result.presented ? (keep ? "presented" : "presented, pausing") : (keep ? "not presented" : "not presented, pausing"), link)
+        if !keep { link.isPaused = true }
+    }
+    private func trace(_ outcome: String, _ link: CADisplayLink) {
+        guard LayoutTrace.enabled else { return }
+        SelectionTrace.mark(SelectionTrace.current, "link.tick", once: false, fields: ["outcome": outcome])
     }
 
-    func start() { demand.wake(); link?.isPaused = false }
+    func start() {
+        if LayoutTrace.enabled, link?.isPaused == true { SelectionTrace.mark(SelectionTrace.current, "link.resume", once: false) }
+        demand.wake(); link?.isPaused = false
+    }
     func stop() { link?.isPaused = true }
     func invalidate() { link?.invalidate(); link = nil }
     deinit { link?.invalidate() }

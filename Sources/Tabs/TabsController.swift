@@ -69,10 +69,13 @@ final class TabsController: ObservableObject {
             let oldValue = selection.id
             guard newValue != oldValue else { return }
             selection.id = newValue
+            if let terminal = selectedTab?.terminal { shownTerminalID = terminal.id }
+            if let document = selectedTab?.document, document.usesNeovim { shownEditorDocumentID = document.id }
             updateBrowserTab()
             if tabs.first(where: { $0.id == oldValue })?.terminal?.agentName != nil { fileRefreshRevision += 1 }
             guard let document = selectedTab?.document, case .local(let url) = document.source else {
                 codeSession.prepareSelection(nil)
+                switchPanesNow()
                 return
             }
             if !document.usesNeovim {
@@ -80,6 +83,8 @@ final class TabsController: ObservableObject {
                 Task { await document.refreshFromDiskIfUnmodified() }
                 return
             }
+            switchPanesNow()
+            codeSession.expectActive(!isConfirmingClose && codeSession.isReady)
             codeSession.prepareSelection(url.path)
             if !document.isLoading { codeSession.select(url.path) }
         }
@@ -381,6 +386,37 @@ final class TabsController: ObservableObject {
     var workspaceTerminalTabs: [TerminalTab] { workspaceTabs.compactMap(\.terminal) }
     var agentPanelTabs: [TerminalTab] { terminalTabs.filter { dockedAgentIDs.contains($0.id) } }
     var selectedTerminalTab: TerminalTab? { selectedTab?.terminal }
+    /// The terminal mounted in the workspace pane: the selected one, or while a
+    /// document covers the pane the terminal that was showing before it. Keeping it
+    /// (and its status bar) mounted means selecting a document never changes the
+    /// hidden terminal's size, so returning to it needs no reflow or SIGWINCH.
+    private var shownTerminalID: UUID?
+    /// The mounted terminal pane, for switching it at selection time.
+    weak var terminalPane: TerminalHostView?
+    static let switchesPanesImmediately = ProcessInfo.processInfo.environment["NEOLINK_IMMEDIATE_SWITCH"] != "0"
+    /// Shows or hides the terminal pane now, with exactly the state SwiftUI will pass it after
+    /// re-evaluating the workspace. The visible pane then changes (and is drawn) before that
+    /// update instead of after it. Only shell and Neovim targets: other documents mount their
+    /// own view during the update, and hiding the terminal early would show an empty pane.
+    private func switchPanesNow() {
+        guard Self.switchesPanesImmediately, let terminalPane, terminalPane.window != nil else { return }
+        terminalPane.synchronize(tabs: workspaceTerminalTabs, selectedTabID: shownTerminalTab?.id,
+                                 isActive: selectedTab?.document == nil, immediate: true)
+    }
+    /// The Neovim document whose toolbar stays mounted in the editor pane: the
+    /// selected one, or while a shell/PDF covers the pane the one shown before.
+    /// Swapping the toolbar for a spacer rebuilt its controls and the window's
+    /// key-view loop on every return to the editor.
+    private var shownEditorDocumentID: UUID?
+    var shownEditorDocument: WorkspaceDocument? {
+        if let document = selectedTab?.document, document.usesNeovim { return document }
+        return tabs.first(where: { $0.id == shownEditorDocumentID })?.document
+    }
+    var shownTerminalTab: TerminalTab? {
+        if let selected = selectedTerminalTab { return selected }
+        let open = workspaceTerminalTabs
+        return open.first(where: { $0.id == shownTerminalID }) ?? open.first
+    }
 
     // Keep the originating browser visible while a file is open beside its terminal.
     var browserTab: TerminalTab? {

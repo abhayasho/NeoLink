@@ -5,6 +5,7 @@ struct RecentProjectsView: View {
     let onClose: () -> Void
 
     var body: some View {
+        let _ = LayoutTrace.body("RecentProjectsView")
         VStack(alignment: .leading, spacing: 14) {
             Text("Recent Projects")
                 .font(.system(size: 18, weight: .semibold))

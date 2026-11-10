@@ -19,6 +19,7 @@ struct FileBrowserPane: View {
     }
 
     var body: some View {
+        let _ = LayoutTrace.body("FileBrowserPane")
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text(remoteEndpoint == nil ? "EXPLORER" : "REMOTE FILES")
@@ -113,6 +114,7 @@ private struct SftpPaneContent: View {
     @State private var password = ""
 
     var body: some View {
+        let _ = LayoutTrace.body("SftpPaneContent")
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Circle()

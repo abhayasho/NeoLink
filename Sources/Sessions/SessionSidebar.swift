@@ -27,6 +27,7 @@ struct SessionSidebar: View {
     }
 
     var body: some View {
+        let _ = LayoutTrace.body("SessionSidebar")
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(nsImage: Self.logo)
@@ -215,6 +216,7 @@ struct SessionEditSheet: View {
     }
 
     var body: some View {
+        let _ = LayoutTrace.body("SessionEditSheet")
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 12) {
                 Image(systemName: "network")

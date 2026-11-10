@@ -418,6 +418,16 @@ final class InteractionBenchmark {
                             }
                         }
                         await self.sleep(0.12)
+                        // Click routing: the middle of the active pane must hit that pane's own
+                        // native view, never the covered pane underneath or above it.
+                        if let pane = self.window.firstResponder as? NSView, let root = self.window.contentView {
+                            let point = pane.convert(CGPoint(x: pane.bounds.midX, y: pane.bounds.midY), to: nil)
+                            let hit = root.hitTest(root.superview?.convert(point, from: nil) ?? point)
+                            if hit == nil || !(hit === pane || hit!.isDescendant(of: pane)) {
+                                failures.append(["index": index, "stage": "hit-test", "hit": hit.map { String(describing: Swift.type(of: $0)) } ?? "nil",
+                                                 "expected": String(describing: Swift.type(of: pane))])
+                            }
+                        } else { failures.append(["index": index, "stage": "hit-test", "hit": "no responder view"]) }
                     }
                 }
             case "ui-resize":
@@ -1186,6 +1196,7 @@ final class InteractionBenchmark {
             "preparationProfile": ProcessInfo.processInfo.environment["NEOLINK_PREPARATION_PROFILE"] == "1",
         ]) { _, new in new }
         setup["workspaceDroppedDrawables"] = window.gpuWorkspace?.droppedDrawables ?? 0
+        setup["workspaceImmediateFrames"] = window.gpuWorkspace?.immediateFrames ?? 0
         let report: [String: Any] = ["results": results, "setup": setup, "displayMaximumHz": window.screen?.maximumFramesPerSecond ?? 0]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: outputURL)

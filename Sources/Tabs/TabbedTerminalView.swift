@@ -11,28 +11,29 @@ struct TabbedTerminalView: View {
     }
 
     var body: some View {
+        let _ = LayoutTrace.body("TabbedTerminalView")
         VStack(spacing: 0) {
             tabStrip
             NeoLinkTheme.horizontalSeparator()
 
             ZStack {
                 VStack(spacing: 0) {
-                    TerminalViewRepresentable(tabs: controller.workspaceTerminalTabs, selectedTabID: controller.selectedTerminalTab?.id,
-                                              isActive: controller.selectedTab?.document == nil)
+                    TerminalViewRepresentable(tabs: controller.workspaceTerminalTabs, selectedTabID: controller.shownTerminalTab?.id,
+                                              isActive: controller.selectedTab?.document == nil,
+                                              attach: { [weak controller] in controller?.terminalPane = $0 })
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.leading, 8)
                         .padding(.top, 8)
-                    if let tab = controller.selectedTerminalTab {
+                    if let tab = controller.shownTerminalTab {
                         TerminalStatusBar(tab: tab).id(tab.id)
                     }
                 }
                 .opacity(controller.selectedTab?.document == nil ? 1 : 0)
-                .allowsHitTesting(controller.selectedTab?.document == nil)
-                .accessibilityHidden(controller.selectedTab?.document != nil)
+                .modifier(PaneGate(active: controller.selectedTab?.document == nil))
 
                 EditorPane(controller: controller, selection: selection, session: controller.codeSession)
                 if let document = controller.selectedTab?.document, !document.usesNeovim {
-                    DocumentTabView(document: document).id(document.id)
+                    DocumentTabView(document: document).id(document.id).zIndex(2)
                 }
             }
         }
@@ -47,26 +48,7 @@ struct TabbedTerminalView: View {
             let offsets = widths.reduce(into: [CGFloat(0)]) { $0.append($0.last! + $1) }
             let frames = Dictionary(uniqueKeysWithValues: tabs.indices.map { (tabs[$0].id, CGRect(x: offsets[$0], y: 0, width: widths[$0], height: 34)) })
             TabStripViewport(selected: selection.id, frames: frames, width: offsets.last ?? 0,
-                content: HStack(spacing: 0) {
-                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
-                        Group {
-                            if let document = tab.document {
-                                DocumentTabButton(document: document, controller: controller, presentation: presentations[index],
-                                                  isSelected: selection.id == document.id)
-                            } else {
-                                WorkspaceTabButton(
-                                    title: tab.title, presentation: presentations[index],
-                                    icon: tab.terminal?.agentName != nil ? "sparkles" : (tab.terminal?.configuration.backend == .localShell ? "terminal" : "network"),
-                                    detail: "\(tab.title) terminal",
-                                    isSelected: selection.id == tab.id,
-                                    isModified: false,
-                                    select: { controller.selectedTabID = tab.id },
-                                    close: { controller.requestCloseTab(tab.id) }
-                                )
-                            }
-                        }.id(tab.id)
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 34))
+                             content: TabStripButtons(controller: controller, selection: selection))
 
             Button(action: controller.openLocalTab) {
                 Image(systemName: "plus")
@@ -85,6 +67,41 @@ struct TabbedTerminalView: View {
     }
 }
 
+/// The buttons live in the tab strip's own hosting view and follow the tabs and the
+/// selection themselves. The strip's root view is installed once: a selection then
+/// re-evaluates these buttons in place instead of replacing the hosted root (which
+/// re-rendered and re-laid out the whole strip in a second run-loop pass).
+struct TabStripButtons: View {
+    @ObservedObject var controller: TabsController
+    @ObservedObject var selection: TabSelection
+
+    var body: some View {
+        let _ = LayoutTrace.body("TabStripButtons")
+        let tabs = controller.workspaceTabs
+        let presentations = TabPresentation.make(titles: tabs.map(\.title), paths: tabs.map { $0.document?.source.displayPath })
+        HStack(spacing: 0) {
+            ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                Group {
+                    if let document = tab.document {
+                        DocumentTabButton(document: document, controller: controller, presentation: presentations[index],
+                                          isSelected: selection.id == document.id)
+                    } else {
+                        WorkspaceTabButton(
+                            title: tab.title, presentation: presentations[index],
+                            icon: tab.terminal?.agentName != nil ? "sparkles" : (tab.terminal?.configuration.backend == .localShell ? "terminal" : "network"),
+                            detail: "\(tab.title) terminal",
+                            isSelected: selection.id == tab.id,
+                            isModified: false,
+                            select: { controller.selectedTabID = tab.id },
+                            close: { controller.requestCloseTab(tab.id) }
+                        )
+                    }
+                }.id(tab.id)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 34)
+    }
+}
+
 /// Session mode/readiness changes stay inside the editor instead of invalidating
 /// the terminal host and every tab-strip button.
 private struct EditorPane: View {
@@ -92,11 +109,11 @@ private struct EditorPane: View {
     @ObservedObject var selection: TabSelection
     @ObservedObject var session: NeovimSession
     var body: some View {
+        let _ = LayoutTrace.body("EditorPane")
         if session.isStarted || controller.selectedTab?.document?.usesNeovim == true {
             CodeWorkspaceView(session: session, controller: controller, selection: selection)
                 .opacity(controller.selectedTab?.document?.usesNeovim == true ? 1 : 0)
-                .allowsHitTesting(controller.selectedTab?.document?.usesNeovim == true)
-                .accessibilityHidden(controller.selectedTab?.document?.usesNeovim != true)
+                .modifier(PaneGate(active: controller.selectedTab?.document?.usesNeovim == true))
         }
     }
 }
@@ -109,6 +126,7 @@ private struct DocumentTabButton: View {
     let isSelected: Bool
 
     var body: some View {
+        let _ = LayoutTrace.body("DocumentTabButton")
         WorkspaceTabButton(title: document.title, presentation: presentation, icon: document.icon, detail: document.source.displayPath,
                            isSelected: isSelected, isModified: document.isModified,
                            select: { controller.selectedTabID = document.id }, close: { controller.requestCloseTab(document.id) })
@@ -127,6 +145,7 @@ private struct WorkspaceTabButton: View {
     @State private var isHovered = false
 
     var body: some View {
+        let _ = LayoutTrace.body("WorkspaceTabButton")
         HStack(spacing: 0) {
             Button(action: select) {
                 HStack(spacing: 8) {
@@ -220,6 +239,7 @@ private struct TerminalStatusBar: View {
     }
 
     var body: some View {
+        let _ = LayoutTrace.body("TerminalStatusBar")
         VStack(spacing: 0) {
             NeoLinkTheme.horizontalSeparator()
             HStack(spacing: 7) {
@@ -241,5 +261,23 @@ private struct TerminalStatusBar: View {
             .padding(.horizontal, 12)
             .frame(height: 28)
         }
+    }
+}
+
+/// Routes clicks to the active workspace pane and hides the covered one from
+/// accessibility. Toggling `allowsHitTesting` makes SwiftUI remove the pane's
+/// native view from the window and insert it again on every selection (the GPU
+/// pane unregisters/registers and the terminal re-lays out); raising the active
+/// pane in z-order routes clicks the same way without touching the hierarchy.
+/// `NEOLINK_PANE_GATE=hit` restores the previous behavior for comparisons;
+/// `ui-tabs` verifies click routing after every switch.
+struct PaneGate: ViewModifier {
+    let active: Bool
+    private static let mode = ProcessInfo.processInfo.environment["NEOLINK_PANE_GATE"]
+    func body(content: Content) -> some View {
+        if Self.mode == "hit" { content.allowsHitTesting(active).accessibilityHidden(!active) }
+        // Negative control for the benchmark's click-routing check; never a product setting.
+        else if Self.mode == "none" { content.accessibilityHidden(!active) }
+        else { content.zIndex(active ? 1 : 0).accessibilityHidden(!active) }
     }
 }

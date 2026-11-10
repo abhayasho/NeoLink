@@ -376,6 +376,7 @@ struct LocalFileBrowserView: View {
     }
 
     var body: some View {
+        let _ = LayoutTrace.body("LocalFileBrowserView")
         VStack(alignment: .leading, spacing: 5) {
             navigationBar
             searchBar

@@ -104,6 +104,7 @@ struct ProjectSearchSheet: View {
     @FocusState private var focused: Bool
 
     var body: some View {
+        let _ = LayoutTrace.body("ProjectSearchSheet")
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label(searchContents ? "Find in Files" : "Quick Open", systemImage: "magnifyingglass").font(.headline)

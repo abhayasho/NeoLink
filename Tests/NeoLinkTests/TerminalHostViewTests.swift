@@ -50,6 +50,49 @@ final class TerminalHostViewTests: XCTestCase {
         }
     }
 
+    func testCoveredTerminalStaysMountedAtItsSizeAndNeverTakesFocus() async throws {
+        try await MainActor.run {
+            let controller = TabsController(useNeovim: false)
+            let shell = try XCTUnwrap(controller.selectedTerminalTab)
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Covered-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let file = directory.appendingPathComponent("a.txt"); try Data("a".utf8).write(to: file)
+            var created: [UUID: LocalProcessTerminalView] = [:]
+            let size = NSSize(width: 800, height: 480)
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+            let host = TerminalHostView(frame: NSRect(origin: .zero, size: size)) { tab, size in
+                let view = LocalProcessTerminalView(frame: NSRect(origin: .zero, size: size)); created[tab.id] = view; return view
+            }
+            window.contentView?.addSubview(host)
+            controller.terminalPane = host
+            host.synchronize(tabs: controller.workspaceTerminalTabs, selectedTabID: controller.shownTerminalTab?.id, isActive: true)
+            let view = try XCTUnwrap(created[shell.id])
+            let grid = (view.terminal.cols, view.terminal.rows)
+
+            // Selecting a document keeps the same terminal as the pane's content...
+            controller.openFile(file)
+            XCTAssertNotNil(controller.selectedTab?.document)
+            XCTAssertEqual(controller.shownTerminalTab?.id, shell.id, "the covered terminal (and its status bar) stays mounted")
+            // ...and the non-Neovim document path leaves hiding to SwiftUI's update.
+            host.synchronize(tabs: controller.workspaceTerminalTabs, selectedTabID: controller.shownTerminalTab?.id, isActive: false, immediate: true)
+            XCTAssertTrue(host.isHidden, "an immediate switch hides the pane before SwiftUI runs")
+            XCTAssertFalse(view.isHidden, "the terminal inside it is not unmounted or resized")
+            XCTAssertEqual(view.frame.size, size)
+            XCTAssertEqual(view.terminal.cols, grid.0); XCTAssertEqual(view.terminal.rows, grid.1)
+            host.layout()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            XCTAssertFalse(window.firstResponder === view, "a covered terminal never takes focus from the document")
+
+            // Returning shows it at once at the same grid; SwiftUI's later identical call changes nothing.
+            controller.selectedTabID = shell.id
+            XCTAssertFalse(host.isHidden, "the selection itself shows the pane")
+            host.synchronize(tabs: controller.workspaceTerminalTabs, selectedTabID: shell.id, isActive: true)
+            XCTAssertEqual(view.terminal.cols, grid.0); XCTAssertEqual(view.terminal.rows, grid.1)
+            XCTAssertEqual(created.count, 1)
+        }
+    }
+
     func testHostLaunchesOnlySelectedTabsAndKeepsHiddenFrameUntilSelected() async throws {
         try await MainActor.run {
             let controller = TabsController(useNeovim: false)

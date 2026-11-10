@@ -263,12 +263,16 @@ struct TerminalViewRepresentable: NSViewRepresentable {
     /// False while a document covers the terminals. SwiftUI opacity does not hide an
     /// NSView, and a visible terminal keeps rendering Metal frames nobody can see.
     var isActive = true
+    /// Lets the tab controller switch this pane at selection time, ahead of SwiftUI.
+    var attach: ((TerminalHostView) -> Void)?
 
     func makeNSView(context: Context) -> TerminalHostView {
         TerminalHostView(frame: .zero)
     }
 
     func updateNSView(_ nsView: TerminalHostView, context: Context) {
+        LayoutTrace.body("TerminalViewRepresentable.update")
+        attach?(nsView)
         nsView.synchronize(tabs: tabs, selectedTabID: selectedTabID, isActive: isActive)
     }
 }
@@ -292,7 +296,10 @@ final class TerminalHostView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func synchronize(tabs: [TerminalTab], selectedTabID: UUID?, isActive: Bool = true) {
+    /// `immediate` is for callers outside a SwiftUI update (the selection itself): the pane
+    /// is shown or hidden and drawn before SwiftUI re-evaluates anything, and SwiftUI's later
+    /// call with the same arguments is a no-op.
+    func synchronize(tabs: [TerminalTab], selectedTabID: UUID?, isActive: Bool = true, immediate: Bool = false) {
         guard self.tabs != tabs || self.selectedTabID != selectedTabID || isActiveRequested != isActive else { return }
         self.tabs = tabs
         self.selectedTabID = selectedTabID
@@ -300,7 +307,17 @@ final class TerminalHostView: NSView {
             if isActive {
                 // Show at once so the terminal is not blank for a frame; focus it again.
                 isHidden = false
+                isActiveRequested = true
                 layoutTerminals()
+                if immediate { (window as? WorkspaceWindow)?.gpuWorkspace?.presentNow() }
+                // Inside a SwiftUI update: draw right after it rather than at the next refresh.
+                else { DispatchQueue.main.async { [weak self] in (self?.window as? WorkspaceWindow)?.gpuWorkspace?.presentNow() } }
+            } else if immediate {
+                if let window, let responder = window.firstResponder as? NSView, responder === self || responder.isDescendant(of: self) {
+                    window.makeFirstResponder(nil)
+                }
+                isHidden = true
+                focusedTabID = nil
             } else {
                 // Hide outside SwiftUI's update. Hiding the view that holds the first responder
                 // makes AppKit search the key-view loop, which queries SwiftUI layout re-entrantly
@@ -326,16 +343,19 @@ final class TerminalHostView: NSView {
 
     override func layout() {
         super.layout()
+        LayoutTrace.layout("TerminalHostView", size: bounds.size, changed: false)
         layoutTerminals()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
+        LayoutTrace.layout("TerminalHostView.setFrameSize", size: newSize, changed: newSize != frame.size)
         super.setFrameSize(newSize)
         layoutTerminals()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        LayoutTrace.layout(window == nil ? "TerminalHostView.leftWindow" : "TerminalHostView.joinedWindow", size: bounds.size, changed: true)
         if window != nil {
             focusedTabID = nil
             layoutTerminals()
@@ -362,10 +382,11 @@ final class TerminalHostView: NSView {
             if id == selectedTabID, view.frame != bounds { view.frame = bounds }
         }
         if selectedTabID == nil { focusedTabID = nil }
-        guard !isHidden, focusedTabID != selectedTabID, let id = selectedTabID, let view = mountedViews[id] else { return }
+        // A covered pane keeps its terminal mounted; it must never take focus from the document.
+        guard !isHidden, isActiveRequested, focusedTabID != selectedTabID, let id = selectedTabID, let view = mountedViews[id] else { return }
         focusedTabID = id
         DispatchQueue.main.async { [weak self, weak view] in
-            guard let self, self.selectedTabID == id, let view, let window = self.window else { return }
+            guard let self, self.selectedTabID == id, self.isActiveRequested, let view, let window = self.window else { return }
             SelectionTrace.mark(SelectionTrace.current, "shell.focus")
             window.makeFirstResponder(view)
         }

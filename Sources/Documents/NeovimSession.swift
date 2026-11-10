@@ -449,6 +449,9 @@ final class NeovimSession: NSObject, ObservableObject, LocalProcessTerminalViewD
         speculateSelection(path)
     }
 
+    /// The editor pane is about to be the active one; SwiftUI will confirm it. Lets an
+    /// acknowledged or validated cached buffer be shown without waiting for that update.
+    func expectActive(_ active: Bool) { if TabsController.switchesPanesImmediately { host?.expect(active: active) } }
     func action(_ name: String) { _ = enqueue(["method":"action", "action":name]) }
     func prepareSelection(_ path: String?) {
         selection &+= 1
@@ -617,6 +620,7 @@ struct NeovimSurface: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NeovimHostView { NeovimHostView() }
     func updateNSView(_ host: NeovimHostView, context: Context) {
+        LayoutTrace.body("NeovimSurface.update")
         host.synchronize(session: session, active: active, selection: selection)
     }
 }
@@ -625,6 +629,7 @@ final class NeovimHostView: NSView {
     private var terminal: CodeTerminalView?
     private var selection: UUID?
     private var wantsActive = false
+    func expect(active: Bool) { wantsActive = active }
     func selectionChanging() {
         if let terminal, !terminal.isHidden {
             if window?.firstResponder === terminal { window?.makeFirstResponder(nil) }
@@ -640,6 +645,9 @@ final class NeovimHostView: NSView {
             window?.makeFirstResponder(terminal)
             SelectionTrace.mark(session.selectionToken, "focus.end")
         }
+        // Not inside a SwiftUI update: the acknowledged (or validated cached) buffer can be
+        // encoded now instead of at the next refresh callback.
+        (window as? WorkspaceWindow)?.gpuWorkspace?.presentNow()
     }
     func synchronize(session: NeovimSession, active: Bool, selection: UUID?) {
         session.host = self
@@ -655,7 +663,12 @@ final class NeovimHostView: NSView {
         if terminal?.isHidden != !active {
             SelectionTrace.mark(session.selectionToken, active ? "view.shown" : "view.hidden")
             terminal?.isHidden = !active
-            if active { PhaseTrace.mark("editor.shown") }
+            if active {
+                PhaseTrace.mark("editor.shown")
+                // This runs inside a SwiftUI update; drawing drains editor output, which may
+                // change focus. Draw right after the update instead of at the next refresh.
+                DispatchQueue.main.async { [weak self] in (self?.window as? WorkspaceWindow)?.gpuWorkspace?.presentNow() }
+            }
         }
         if mounting { needsLayout = true }
         if active, terminal != nil, mounting || self.selection != selection {
@@ -671,7 +684,8 @@ final class NeovimHostView: NSView {
     }
     override func layout() {
         super.layout()
+        LayoutTrace.layout("NeovimHostView", size: bounds.size, changed: terminal?.frame != bounds)
         if bounds.width > 100, bounds.height > 40, terminal?.frame != bounds { SelectionTrace.mark(terminal?.session?.selectionToken ?? 0, "layout"); terminal?.frame = bounds }
     }
-    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if let terminal, !terminal.isHidden { window?.makeFirstResponder(terminal) } }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); LayoutTrace.layout(window == nil ? "NeovimHostView.leftWindow" : "NeovimHostView.joinedWindow", size: bounds.size, changed: true); if let terminal, !terminal.isHidden { window?.makeFirstResponder(terminal) } }
 }

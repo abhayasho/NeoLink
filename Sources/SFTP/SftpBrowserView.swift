@@ -27,6 +27,7 @@ struct SftpBrowserView: View {
     private var isBusy: Bool { viewModel.isLoading || viewModel.isWorking }
 
     var body: some View {
+        let _ = LayoutTrace.body("SftpBrowserView")
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 toolbarButton("Go to parent directory", icon: "arrow.up") {

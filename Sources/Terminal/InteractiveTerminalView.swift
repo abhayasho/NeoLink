@@ -65,6 +65,7 @@ class InteractiveTerminalView: LocalProcessTerminalView {
 
     override func setFrameSize(_ newSize: NSSize) {
         if newSize != frame.size { smoothScroll.reset() }
+        LayoutTrace.layout(self is CodeTerminalView ? "EditorTerminal.setFrameSize" : "ShellTerminal.setFrameSize", size: newSize, changed: newSize != frame.size)
         super.setFrameSize(newSize)
     }
 

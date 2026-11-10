@@ -66,6 +66,7 @@ struct ExplorerTableView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
+        LayoutTrace.body("ExplorerTableView.update")
         context.coordinator.parent = self
         context.coordinator.updateRendering(enabled: rendering.useGPU)
         context.coordinator.apply(rows: tree.rows, revision: tree.rowsRevision, activeFileURL: activeFileURL)

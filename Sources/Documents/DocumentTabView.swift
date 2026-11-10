@@ -5,6 +5,7 @@ struct DocumentTabView: View {
     @ObservedObject var document: WorkspaceDocument
 
     var body: some View {
+        let _ = LayoutTrace.body("DocumentTabView")
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Text(document.source.displayPath)
@@ -122,6 +123,7 @@ private struct DocumentNativeView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: DocumentHostView, context: Context) {
+        LayoutTrace.body("DocumentNativeView.update")
         if let editor = (nsView.content as? NSScrollView)?.documentView as? NSTextView {
             editor.isEditable = isEnabled && !document.isReadOnly && !document.isSaving
             if editor.font?.pointSize != textSize.pointSize {

@@ -176,6 +176,7 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let _ = LayoutTrace.body("ContentView")
         workspaceWithTabCommands
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkOpenProject)) { _ in access.chooseFolder() }
         .onReceive(NotificationCenter.default.publisher(for: .neoLinkQuickOpen)) { _ in showSearch(contents: false) }
@@ -302,6 +303,7 @@ private struct WorkspaceFooter: View {
     let tabCount: Int
 
     var body: some View {
+        let _ = LayoutTrace.body("WorkspaceFooter")
         let document = controller.selectedTab?.document
         HStack(spacing: 7) {
             Image(systemName: document == nil ? "terminal" : "doc.text")
