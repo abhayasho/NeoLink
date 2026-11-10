@@ -127,7 +127,7 @@ Verification limit: after moving the deferral into the `DeferredPresentations` t
 
 ### Pane switching ahead of SwiftUI, and presentation accounting (responsiveness pass 2)
 
-Starting point: `d023473`. All numbers are procedural `ui-tabs` runs (24 switches, native full screen, 120 Hz, M2 Max, frontmost and unlocked), reported per switch class from the selection trace. **A matched baseline-versus-final A/B across all workloads was not completed (the Mac locked); the comparisons below are same-binary flag toggles and before/after traces taken during the work.**
+Starting point: `d023473`. All numbers are procedural `ui-tabs` runs (24 switches, native full screen, 120 Hz, M2 Max, frontmost and unlocked), reported per switch class from the selection trace. The first table is from same-binary flag toggles and before/after traces taken during the work; the matched baseline-versus-final A/B is at the end of this section.
 
 What the layout trace (`LayoutTrace`: `body.*`, `layout.*`, `main.busy`, `link.tick`, `ws.draw` events under `NEOLINK_SELECTION_TRACE`) showed on `d023473`:
 
@@ -155,3 +155,32 @@ Selection → focus p50 was 4.9–5.1 ms with immediate switching and 11.5–17.
 Presentation accounting: `DeferredPresentations` now defers only content acknowledgements, matched by pane and submission order. A dropped drawable's position/ownership callbacks never run; an acknowledgement waits for a later-submitted drawable that carries the same pane; a stale completion neither takes ownership back nor discards newer acknowledgements (`NeoGPUSceneTests`).
 
 Not verified: physical trackpad scrolling, flicks, momentum interruption, typing-to-visible latency under these changes, and any matched comparison with Zed.
+
+#### Matched A/B: `d023473` (`513d3cd2…`) vs final (`5a4d5398…`)
+
+Three alternating pairs, each `render-motion,ui-tabs,ui-highlights,ui-resize,editor-type,editor-scroll`, native full screen, frontmost and unlocked. Values are run 1 / 2 / 3; times in ms. Background load was not controlled.
+
+| Metric | Baseline | Final |
+| --- | --- | --- |
+| shell→editor presented, p50 / p95 / max (n=18 pooled) | 34.9 / 55.1 / 55.1 | 15.7 / 26.0 / 26.0 |
+| editor→editor presented, p50 / p95 / max (n=36) | 29.7 / 38.2 / 40.8 | 17.0 / 41.0 / 42.8 |
+| editor→shell presented, p50 / p95 / max (n=15) | 50.0 / 64.4 / 64.4 | 16.4 / 27.0 / 27.0 |
+| Selection → focus p50 | 16.2 / 20.0 / 27.4 | 4.4 / 5.1 / 5.1 |
+| Tab failures / presentation timeouts | 0 / 0 | 0 / 0 |
+| Tab workload worst main-thread wait | 36.1 / 38.3 / 39.3 | 30.7 / 34.2 / 27.9 |
+| Dropped drawables (whole run) | 4 / 4 / 4 | 3 / 3 / 2 |
+| Highlight → presented p50 | 16.9 / 17.4 / 16.5 | 17.5 / 18.1 / 17.1 |
+| Resize changed-content p50 / p95 / p99 / max | 16.7 / 25 / 33.3 / 75, 75, 66.7 | 16.7 / 25 / 33.3 / 75 |
+| Resize missed refreshes | 320 / 308 / 317 | 312 / 316 / 324 |
+| Resize worst main-thread wait | 35.8 / 45.2 / 31.2 | 36.0 / 45.7 / 38.5 |
+| Resize CPU % / memory MiB | 74.0, 72.9, 73.6 / 258, 244, 246 | 73.3, 73.3, 73.3 / 244, 244, 247 |
+| Editor typing key→display p50 | 25.0 / 27.7 / 26.8 | 16.7 / 26.4 / 19.8 |
+| Editor typing p95 | 28.4 / 31.1 / 30.1 | 20.1 / 29.7 / 24.9 |
+| Editor typing p99 | 30.0 / 31.1 / 30.1 | 38.2 / 33.0 / 39.7 |
+| Editor scroll interval p95 / max; missed | 8.3 / 50; 9, 8, 8 | 8.3 / 50; 8, 9, 8 |
+| Motion interval p95 | 16.7 / 8.3 / 16.7 | 8.3 / 8.3 / 8.3 |
+| Motion missed refreshes | 171 / 0 / 127 | 2 / 2 / 3 |
+| Motion worst main-thread wait | 151.7 / 18.3 / 231.2 | 13.0 / 19.1 / 14.2 |
+| Motion explorer native fallbacks | 0 | 0 |
+
+Reading it: the switch improvement holds for all three classes at the median, and at p95/max for the two shell classes. **Editor→editor p95/max did not improve** (38–41 → 41–43 ms). Resize, highlights and editor scrolling are unchanged. Typing is mixed: lower p50/p95 in two of three runs, but a **higher p99 in all three** (33–40 vs 30–31 ms), which this pass did not investigate. The baseline's two bad `render-motion` runs (127–171 missed refreshes, 150–230 ms waits) did not occur in the final build, but no change here targets that scenario and three runs cannot attribute it; treat it as an observation, not a result.
