@@ -83,7 +83,8 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
     private weak var layer: CAMetalLayer?
     private var demand = NeoGPUFrameDemand()
     private(set) var targetTimestamp: Double?
-    private let draw: (CAMetalDrawable) -> (keepRunning: Bool, presented: Bool)
+    /// The owner calls the supplied closure for a drawable only when it has something new to present.
+    private let draw: (() -> CAMetalDrawable?) -> (keepRunning: Bool, presented: Bool)
     /// Drawables handed to the display and not yet shown. Decremented on Core Animation's presentation callback
     /// thread directly, so a busy main thread cannot make the queue look fuller than it is.
     private let queue = QueuedDrawables()
@@ -92,7 +93,7 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
     /// Refreshes skipped because enough frames were already waiting (diagnostic).
     private(set) var skippedForQueue = 0
 
-    init(layer: CAMetalLayer, view: NSView, rate: Int, draw: @escaping (CAMetalDrawable) -> (keepRunning: Bool, presented: Bool)) {
+    init(layer: CAMetalLayer, view: NSView, rate: Int, draw: @escaping (() -> CAMetalDrawable?) -> (keepRunning: Bool, presented: Bool)) {
         self.layer = layer
         self.draw = draw
         super.init()
@@ -112,6 +113,11 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
     /// supersedes the retained content. `NEOLINK_IMMEDIATE_SWITCH=0` disables it for
     /// same-binary comparisons.
     static let immediateEnabled = ProcessInfo.processInfo.environment["NEOLINK_IMMEDIATE_SWITCH"] != "0"
+    /// `NEOLINK_QUEUE_DRAIN=0` keeps a standing queue for same-binary comparisons.
+    static let drainsStandingFrames = ProcessInfo.processInfo.environment["NEOLINK_QUEUE_DRAIN"] != "0"
+    var standingFramesDrained: Int { queue.standingFramesDrained }
+    /// No frame is waiting for the display: a repeat presented now delays nothing.
+    var isQueueEmpty: Bool { queue.isEmpty }
     private var drawing = false
     private var lastPeriod = 1.0 / 120
     private(set) var immediateFrames = 0
@@ -144,19 +150,27 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
 
     private func frame(target: Double, period: Double, now: Double, immediate: Bool) {
         guard let link else { return }
-        guard queue.count(at: now, grace: period / 2) < Self.maximumQueued, let layer, let drawable = layer.nextDrawable() else {
+        // A frame shown later than the refresh it was drawn for means frames are standing in the
+        // display's queue: every later frame would inherit that delay for as long as content keeps
+        // changing. Sit out one refresh per standing frame so the queue drains.
+        guard queue.count(at: now, grace: period / 2) < Self.maximumQueued, immediate || !Self.drainsStandingFrames || !queue.payStandingFrame(), let layer else {
             if !immediate { skippedForQueue += 1; trace("queued", link) }
             return   // stay running: the waiting frames will be shown and the next refresh draws
         }
-        lastAcquired = now
         let queue = self.queue
-        let id = queue.add(target: target, acquired: now)
-        drawable.addPresentedHandler { _ in queue.remove(id) }
+        var id: UInt64?
         drawing = true
         if immediate { targetTimestamp = target }
-        let result = draw(drawable)
+        let result = draw { [weak self] in
+            guard let drawable = layer.nextDrawable() else { return nil }
+            self?.lastAcquired = now
+            let entry = queue.add(target: target, acquired: now, period: immediate ? 0 : period)
+            id = entry
+            drawable.addPresentedHandler { queue.remove(entry, presentedAt: $0.presentedTime) }
+            return drawable
+        }
         drawing = false
-        if !result.presented { queue.remove(id) }
+        if let id, !result.presented { queue.remove(id) }
         if immediate {
             if result.presented { immediateFrames += 1 }
             trace(result.presented ? "immediate" : "immediate, not presented", link)
@@ -192,16 +206,23 @@ private final class DirectDisplayTarget: NSObject {
 
 final class QueuedDrawables: @unchecked Sendable {
     private let lock = NSLock()
-    private var entries: [(id: UInt64, target: Double, acquired: Double)] = []
+    private var entries: [(id: UInt64, target: Double, acquired: Double, period: Double)] = []
     private var next: UInt64 = 0
+    /// Refreshes to sit out so frames standing in the display's queue drain (see `payStandingFrame`).
+    private var standing = 0
+    private var measuredAfter: UInt64 = 0
+    private var drained = 0
+    var standingFramesDrained: Int { lock.lock(); defer { lock.unlock() }; return drained }
     func count(at now: Double, grace: Double) -> Int {
         lock.lock(); defer { lock.unlock() }
         return entries.filter { $0.target + grace > now }.count
     }
-    func add(target: Double, acquired: Double) -> UInt64 {
+    /// `period` > 0 marks a frame drawn on a refresh callback for the refresh at `target`: its real
+    /// presentation time then measures the standing queue. Immediate frames pass 0.
+    func add(target: Double, acquired: Double, period: Double = 0) -> UInt64 {
         lock.lock(); defer { lock.unlock() }
         next &+= 1
-        entries.append((next, target, acquired))
+        entries.append((next, target, acquired, period))
         if entries.count > 8 { entries.removeFirst(entries.count - 8) }
         return next
     }
@@ -210,6 +231,30 @@ final class QueuedDrawables: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return entries.contains { $0.acquired < time }
     }
-    func remove(_ id: UInt64) { lock.lock(); entries.removeAll { $0.id == id }; lock.unlock() }
-    func reset() { lock.lock(); entries.removeAll(); lock.unlock() }
+    func remove(_ id: UInt64, presentedAt time: Double = 0) {
+        lock.lock(); defer { lock.unlock() }
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        let entry = entries.remove(at: index)
+        // Only frames drawn after the last correction say anything about the queue as it is now.
+        guard time > 0, entry.period > 0, standing == 0, id > measuredAfter else { return }
+        // A frame drawn on a refresh callback with nothing ahead of it is shown at the next refresh,
+        // under one period after it was acquired; each frame standing ahead adds a whole period.
+        // A frame with nothing ahead of it is shown under one period after it was acquired; a heavy
+        // one that misses that refresh, or one behind a single frame of slack, within about two.
+        // Draining at that depth was measured and rejected: it skipped refreshes during ordinary
+        // typing and during continuous motion (editor key latency 13 -> 18-29 ms, 120+ repeated
+        // frames in `render-motion`). Only the deep queue (three periods and more, the 25 ms state)
+        // is drained, down to one frame of slack.
+        let periods = (time - entry.acquired) / entry.period
+        if periods >= 3.2 { standing = min(Int(periods) - 2, 3); measuredAfter = next }
+    }
+    /// True when this refresh should be skipped to let one standing frame leave the display's queue.
+    func payStandingFrame() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard standing > 0 else { return false }
+        standing -= 1; drained += 1; measuredAfter = next
+        return true
+    }
+    var isEmpty: Bool { lock.lock(); defer { lock.unlock() }; return entries.isEmpty }
+    func reset() { lock.lock(); entries.removeAll(); standing = 0; lock.unlock() }
 }

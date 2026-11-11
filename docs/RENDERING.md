@@ -159,7 +159,50 @@ Same-binary-source A/B, release, native full screen, unlocked, native editor cli
 
 The slow-scroll gap is the intended effect: content now moves on (almost) every refresh instead of every other one. The cost is about 15 ms more input-to-display latency for slow 60 Hz input and 3–6 ms for 120 Hz input. The harness's per-frame velocity error against its input timeline is higher after the change for flicks (about 8–12 vs 6 lines/s, with one 40 lines/s outlier run with 3 jump frames) and reversals (4–15 vs 0.2 lines/s) because the drawn motion is a delayed, interpolated copy of the input, which the benchmark scores against the raw trajectory. The unmodified baseline also has outlier runs (a 28-jump `terminal-scroll` run and an 8.8 lines/s `editor-reversal` run). Whether this feels smoother on a real trackpad, and how it feels at the start and end of a gesture, is not established by these runs.
 
+## Demand-driven presentation and the standing frame queue (responsiveness pass 3)
+
+Two measurements of the build before this pass (same M2 Max, built-in 120 Hz display, full screen, frontmost):
+
+- **An idle workspace presented 120 drawables a second** (Continuous High Refresh, then the default) and used 23% of one core in the `idle` scenario.
+- **Every frame was shown about 25 ms after it was submitted.** Logging each drawable's submission and `presentedTime` during `editor-type` showed a constant three refresh periods, changed or not: the workspace submitted one frame per refresh, the display consumed one per refresh, and whatever queue an early hiccup left never drained. `QueuedDrawables.count` stops counting a frame half a period after the refresh it was drawn for, so the two-frame bound did not see it. The depth differed from run to run (the `display` key stage was 7, 16 or 24 ms), which is where the run-to-run spread of the typing numbers came from.
+
+What changed:
+
+- `NeoGPUWorkspace.draw` prepares every visible pane first and takes a drawable only if the result differs from what the display shows: a pane reported `NeoGPUNode.changed` (it encoded into its retained texture), a scene object, position, clip or the drawable size differs, a drawable was reported dropped, or the layer was reconfigured. An unchanged workspace presents nothing (`idleCallbacks`).
+- While a scroll or animation is running (`needsAnotherFrame`) every refresh is presented, changed or not. Without that, a step that moved nothing emptied the queue and the next heavy frame missed its refresh: `render-motion` repeated 88–204 frames instead of fewer than 20.
+- For one second after input (the existing interaction hold) retained content is repeated **only while no frame is waiting for the display**, so a repeat can never stand ahead of the next change. Presenting nothing at all after input was measured and rejected: the first editor frame after a pause, and the repeat after it, were both reported never shown, and the key reached the display 36–39 ms after it was pressed instead of 18–21 ms.
+- A frame shown 3.2 periods or more after it was acquired marks a standing queue; the frame source then sits out refreshes until one frame of slack is left (`standingFramesDrained`). Draining at two periods was measured and rejected: it skipped refreshes during ordinary typing (editor key latency 13 → 18–29 ms) and during motion (120+ repeated frames).
+- **Continuous High Refresh now defaults to off.** Turning it on presents every refresh as before. `NEOLINK_CONTINUOUS_REFRESH=1`/`0` and `NEOLINK_QUEUE_DRAIN=0` select the behaviours in one binary; `NEOLINK_HOLD_REPEAT=0` removes the repeats after input.
+
+### Matched same-binary comparison
+
+Three alternating pairs of binary `4670f87eba05…`: **A** = `NEOLINK_CONTINUOUS_REFRESH=1 NEOLINK_QUEUE_DRAIN=0` (the previous behaviour), **B** = defaults. Raw reports: `docs/responsiveness-pass-3/`. `terminal-type-sparse` and `editor-type-sparse` press one key every 1.6 s, after the hold has ended. CPU is percent of one core and includes the benchmark's 2 ms main-thread probe.
+
+| | A (runs 1 / 2 / 3) | B (runs 1 / 2 / 3) |
+|---|---|---|
+| Idle CPU | 23.3 / 22.9 / 23.5 | 5.4 / 5.4 / 6.0 |
+| Editor typing, key → display p50 (ms) | 28.4 / 26.6 / 28.4 | 11.8 / 13.1 / 13.4 |
+| Editor typing p95 / max | 33.4, 33.3, 33.4 / 38.4, 41.7, 33.4 | 21.9, 24.7, 30.0 / 33.5, 24.8, 41.7 |
+| First editor key after a pause p50 | 23.6 / 30.8 / 35.9 | 20.7 / 17.5 / 19.3 |
+| First editor key after a pause max | 31.9 / 30.9 / 36.0 | 41.7 / 42.6 / 36.1 |
+| Shell typing p50 | 13.0 / 13.5 / 29.4 | 17.5 / 17.0 / 17.3 |
+| Shell typing p95 | 16.4 / 16.8 / 32.8 | 25.8 / 22.8 / 24.0 |
+| First shell key after a pause p50 | 11.9 / 22.6 / 10.8 | 21.0 / 18.7 / 20.1 |
+| `render-motion` missed refreshes | 1 / 4 / 244 | 13 / 10 / 7 |
+| `editor-scroll` missed refreshes | 8 / 8 / 7 | 8 / 8 / 8 |
+| `ui-resize` missed refreshes / CPU | 339, 301, 293 / 74–76 | 239, 241, 236 / 62–63 |
+
+Reading it honestly:
+
+- Idle cost and editor typing improved in every run. Editor typing's worst key did not (max 33–42 ms in both).
+- **Shell typing is not better.** A's good runs (13 ms) beat B (17 ms); A's third run was in the queued state (29 ms) that B did not enter in these three runs. B entered it once in an earlier three-run set with the same rule (28.8 ms), so it is rarer, not gone. The first shell key after a pause is slower in B in two of three pairs, and the first editor key's worst case is higher in B.
+- A's third `render-motion` run repeated 244 frames; B's three runs repeated 7–13, more than A's good runs (1 and 4).
+- Tab switching (`ui-tabs`) and editor scrolling did not change. `ui-resize` missed fewer refreshes in B but its content p95 is 16.7–25 ms in both; divider dragging is still not smooth.
+- None of this is a physical trackpad or keyboard measurement, and neither Zed nor VS Code was measured on this machine.
+
 ## Continuous workspace refresh (1.11.1, build 25)
+
+*Superseded as the default by the section above; kept as the record of that build.*
 
 The saved **View → Continuous High Refresh** preference defaults on. Shared coding panes reuse their retained textures and submit once per owning CAMetalDisplayLink deadline, up to the display rate capped at 120 Hz, even between content changes. There is no additional timer, independent animation phase, synchronous GPU wait or unbounded frame queue. Hidden/minimized windows pause. Turning the preference off restores demand-driven operation; native panels and macOS 13 retain their existing paths. This increases idle GPU work and does not force the panel’s physical refresh or guarantee no missed frames.
 

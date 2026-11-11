@@ -69,7 +69,7 @@ final class PerformanceMonitor: NSObject, NSWindowDelegate {
         let cadence = intervals.isEmpty ? "" : String(format: "\nWorkspace drawable intervals: p95 %.1f ms · max %.1f ms (last %d)",
             PresentationTiming.percentile(intervals, 0.95) * 1000, (intervals.max() ?? 0) * 1000, intervals.count)
         text.stringValue = frames.summary + "\n\n" + (rates.isEmpty ? "No visible Metal surface." : rates.joined(separator: "\n")) + cadence
-            + "\n\nGPU rates count displayed drawables, including cached repeats. Scene changes measure new content separately. Continuous High Refresh requests the display rate up to 120 Hz while a coding pane is visible; macOS controls physical refresh. Disable it in View to reduce idle GPU work. Frame work covers the window clock; native work can occur outside it."
+            + "\n\nGPU rates count displayed drawables, including cached repeats. Scene changes measure new content separately. The workspace presents only changed content by default. Continuous High Refresh (View menu, off by default) presents at the display rate up to 120 Hz while a coding pane is visible and increases idle CPU and GPU work; macOS controls physical refresh. Frame work covers the window clock; native work can occur outside it."
         previous = samples; previousChanged = changed; lastSample = now
     }
 

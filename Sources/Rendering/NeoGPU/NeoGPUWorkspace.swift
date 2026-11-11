@@ -91,6 +91,10 @@ struct NeoGPUNode {
     let scene: NeoGPUScene
     var translation: SIMD2<Float> = .zero
     var needsAnotherFrame = false
+    /// The pane's pixels differ from the frame it last handed over (it encoded into a retained
+    /// texture, moved or rebuilt). A new scene object, position or clip is detected by the
+    /// workspace itself; only content drawn into a texture the scene keeps needs this flag.
+    var changed = false
     var traceSelection: UInt64 = 0
     let presented: (Double) -> Void
     /// Run instead of `presented` when the drawable reached the display after the workspace's client set
@@ -133,6 +137,7 @@ final class NeoGPUWorkspace: NSView {
     private var presentedLastDraw = false
     /// Refreshes the direct clock skipped because enough frames already waited for the display.
     var skippedForQueue: Int { if #available(macOS 14, *) { return (source as? NeoGPUDirectFrameSource)?.skippedForQueue ?? 0 }; return 0 }
+    var standingFramesDrained: Int { if #available(macOS 14, *) { return (source as? NeoGPUDirectFrameSource)?.standingFramesDrained ?? 0 }; return 0 }
     var diagnostics: String { "enabled=\(enabled) suspended=\(suspended) window=\(window != nil) hidden=\(isHidden) bounds=\(bounds) clients=\(clients.count) callbacks=\(drawCallbacks) nodes=\(lastNodeCount) frames=\(presentedFrames)" }
     static var allowsOffscreenTesting = false
     var captureNextFrame: ((CGImage) -> Void)?
@@ -195,17 +200,18 @@ final class NeoGPUWorkspace: NSView {
         let rate = WindowFrameScheduler.rate(for: window?.screen?.maximumFramesPerSecond ?? 60)
         switch NeoGPUPresentation.current {
         case .direct:
-            source = NeoGPUDirectFrameSource(layer: layer, view: self, rate: rate) { [weak self] drawable in
+            source = NeoGPUDirectFrameSource(layer: layer, view: self, rate: rate) { [weak self] acquire in
                 guard let self else { return (false, false) }
                 self.presentedLastDraw = false
-                let keepRunning = self.draw(drawable)
+                let keepRunning = self.draw(acquire: acquire)
                 return (keepRunning, self.presentedLastDraw)
             }
         case .displayLink:
             source = NeoGPUFrameSource(layer: layer, rate: rate) { [weak self] drawable in
-                self?.draw(drawable) ?? false
+                self?.draw(acquire: { drawable }) ?? false
             }
         }
+        forcePresent = true
     }
     func register(_ client: any NeoGPUClient) {
         let id = ObjectIdentifier(client)
@@ -233,6 +239,7 @@ final class NeoGPUWorkspace: NSView {
     /// frame source rather than waiting for the next refresh callback, which a SwiftUI
     /// update can delay by a whole refresh or more. No-op for the display-link source.
     func presentNow() {
+        forcePresent = true
         wake()
         if #available(macOS 14, *), let direct = source as? NeoGPUDirectFrameSource { direct.drawNow() }
     }
@@ -280,18 +287,44 @@ final class NeoGPUWorkspace: NSView {
         let scale = window?.backingScaleFactor ?? 2
         layer.contentsScale = scale
         layer.drawableSize = CGSize(width: max(1, (bounds.width * scale).rounded()), height: max(1, (bounds.height * scale).rounded()))
-        guard let drawable = layer.nextDrawable() else { return }
-        _ = draw(drawable, allowOffscreen: true)
+        _ = draw(allowOffscreen: true, acquire: { layer.nextDrawable() })
     }
 
-    private func draw(_ drawable: CAMetalDrawable, allowOffscreen: Bool = false) -> Bool {
+    /// What the last presented drawable showed: enough to tell that the next frame would be identical.
+    private struct Shown {
+        var width = 0, height = 0
+        var panes: [(pane: ObjectIdentifier, scene: NeoGPUScene, origin: SIMD2<Float>, clip: SIMD4<Int>)] = []
+        func matches(_ other: Shown) -> Bool {
+            width == other.width && height == other.height && panes.count == other.panes.count
+                && zip(panes, other.panes).allSatisfy { $0.pane == $1.pane && $0.scene === $1.scene && $0.origin == $1.origin && $0.clip == $1.clip }
+        }
+    }
+    private var shown: Shown?
+    /// The retained content must reach the display again even if no pane reports a change:
+    /// the layer was reconfigured, a drawable was dropped, or a pane was just uncovered.
+    private var forcePresent = true
+    /// The first drawable presented after the workspace has been quiet is regularly reported as never
+    /// shown. Its content is presented once more at the next refresh instead of a refresh or two
+    /// later, when that report arrives.
+    private var repeatOnce = false
+    private var lastPresentation = -Double.infinity
+    static let quietInterval = 0.05
+    static let repeatsAfterInput = ProcessInfo.processInfo.environment["NEOLINK_HOLD_REPEAT"] != "0"
+    /// Refresh callbacks that found nothing new and presented nothing (diagnostic).
+    private(set) var idleCallbacks = 0
+
+    /// Prepares every visible pane, then takes a drawable only if the result differs from what the
+    /// display already shows. An unchanged workspace presents nothing: repeating a frame costs CPU
+    /// and GPU while idle, and every repeat is a drawable queued ahead of the next real change.
+    /// Continuous High Refresh (off by default) restores unconditional presentation.
+    private func draw(allowOffscreen: Bool = false, acquire: () -> CAMetalDrawable?) -> Bool {
         drawCallbacks += 1
-        guard enabled, !suspended, let window,
+        guard enabled, !suspended, let window, let layer = layer as? CAMetalLayer,
               allowOffscreen || (window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)) else { return false }
         guard slot.isAvailable else { return true }
         let scale = window.backingScaleFactor
-        guard drawable.texture.width == Int((bounds.width * scale).rounded()),
-              drawable.texture.height == Int((bounds.height * scale).rounded()) else { wake(); return true }
+        let targetWidth = Int((bounds.width * scale).rounded()), targetHeight = Int((bounds.height * scale).rounded())
+        guard Int(layer.drawableSize.width) == targetWidth, Int(layer.drawableSize.height) == targetHeight else { wake(); return true }
         guard let command = queue.makeCommandBuffer() else { fail(); return false }
         var nodes: [(NeoGPUNode, SIMD2<Float>, MTLScissorRect, ObjectIdentifier)] = []
         nodes.reserveCapacity(clients.count)
@@ -316,11 +349,32 @@ final class NeoGPUWorkspace: NSView {
             let visible = view.convert(view.visibleRect.intersection(view.bounds), to: self).intersection(bounds)
             guard !visible.isEmpty, let node = client.gpuPrepare(time: time, command: command) else { continue }
             let x = max(0, Int(floor(visible.minX * scale))), y = max(0, Int(floor(visible.minY * scale)))
-            let right = min(drawable.texture.width, Int(ceil(visible.maxX * scale)))
-            let bottom = min(drawable.texture.height, Int(ceil(visible.maxY * scale)))
+            let right = min(targetWidth, Int(ceil(visible.maxX * scale)))
+            let bottom = min(targetHeight, Int(ceil(visible.maxY * scale)))
             guard right > x, bottom > y else { continue }
             nodes.append((node, .init(Float((rect.minX * scale).rounded()), Float((rect.minY * scale).rounded())),
                           MTLScissorRect(x: x, y: y, width: right - x, height: bottom - y), ObjectIdentifier(client)))
+        }
+        let keepRunning = nodes.contains { $0.0.needsAnotherFrame } || ((window as? WorkspaceWindow)?.frames.isRunning ?? false)
+        let next = Shown(width: targetWidth, height: targetHeight, panes: nodes.map {
+            ($0.3, $0.0.scene, $0.1 + $0.0.translation, SIMD4($0.2.x, $0.2.y, $0.2.width, $0.2.height))
+        })
+        // Motion in progress (a scroll or animation still running) presents every refresh even when a
+        // step moved nothing: the frame of slack it keeps absorbs a heavy frame without a visible repeat.
+        // After input, retained content is repeated only while nothing waits for the display, so a
+        // repeat can never stand ahead of the next real change.
+        let moving = nodes.contains { $0.0.needsAnotherFrame }
+        var holding = false
+        if Self.repeatsAfterInput, #available(macOS 14, *), let direct = source as? NeoGPUDirectFrameSource {
+            holding = ((window as? WorkspaceWindow)?.frames.isRunning ?? false) && direct.isQueueEmpty
+        }
+        let changed = forcePresent || repeatOnce || moving || holding || allowOffscreen || continuousRefresh || captureNextFrame != nil
+            || nodes.contains { $0.0.changed } || !(shown.map { $0.matches(next) } ?? false)
+        guard changed else { idleCallbacks += 1; return keepRunning }
+        // A pane may already have encoded into its retained texture: that work is committed
+        // even when no drawable can carry it now, and the next callback presents it.
+        guard let drawable = acquire(), drawable.texture.width == targetWidth, drawable.texture.height == targetHeight else {
+            command.commit(); forcePresent = true; wake(); return true
         }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
@@ -339,7 +393,11 @@ final class NeoGPUWorkspace: NSView {
             captureNextFrame = nil
             NeoGPUCapture.encode(drawable.texture, command: command, completion: capture)
         }
-        guard slot.acquire() else { return true }
+        guard slot.acquire() else { command.commit(); forcePresent = true; return true }
+        let presentingAt = CACurrentMediaTime()
+        shown = next; forcePresent = false
+        repeatOnce = !allowOffscreen && presentingAt - lastPresentation > Self.quietInterval
+        lastPresentation = presentingAt
         let callbacks = nodes.map { $0.0.presented }, generation = self.generation
         submittedFrames &+= 1
         let frame = submittedFrames, carried = Set(nodes.map(\.3))
@@ -362,7 +420,12 @@ final class NeoGPUWorkspace: NSView {
                     // Visibility transitions explicitly pause this series. Keep even
                     // long visible-window stalls instead of silently filtering them.
                     if current { self.presentationTiming.record(timestamp: time, work: 0, includeLongIntervals: true) }
-                } else { self.droppedDrawables &+= 1 }
+                } else {
+                    // Nothing this drawable carried was shown: present the retained content again.
+                    self.droppedDrawables &+= 1
+                    // A later frame already carries the same retained content.
+                    if current, self.submittedFrames == frame { self.forcePresent = true; self.wake() }
+                }
                 self.deferredPresentations.complete(presentedTime: time, frame: frame, current: current, carried: carried,
                                                     presented: callbacks, acknowledged: deferrable).forEach { $0(time) }
             }
@@ -379,7 +442,6 @@ final class NeoGPUWorkspace: NSView {
         command.present(drawable); command.commit()
         // Repeat only at the owning display-link deadline. Retained pane textures
         // avoid reshaping unchanged text; do not enqueue timer-driven extra frames.
-        return (continuousRefresh && !nodes.isEmpty) || nodes.contains { $0.0.needsAnotherFrame }
-            || ((window as? WorkspaceWindow)?.frames.isRunning ?? false)
+        return (continuousRefresh && !nodes.isEmpty) || keepRunning || repeatOnce
     }
 }

@@ -474,7 +474,7 @@ final class ExplorerMetalView: NSView, NeoGPUClient {
             }
         }
         return NeoGPUNode(scene: display, translation: .init(0, Float((CGFloat(composed.rows.lowerBound) * 24 - y) * scale)),
-                          needsAnotherFrame: CACurrentMediaTime() < activeUntil, presented: { [weak self] time in
+                          needsAnotherFrame: CACurrentMediaTime() < activeUntil, changed: changed || cached == nil, presented: { [weak self] time in
             guard let self else { return }
             self.presentedFrames &+= 1
             if revision > self.presentedSceneRevision {

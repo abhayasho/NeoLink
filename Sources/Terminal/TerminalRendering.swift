@@ -17,7 +17,9 @@ final class TerminalRenderingPreferences: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         useGPU = defaults.object(forKey: Self.key) as? Bool ?? true
-        continuousRefresh = defaults.object(forKey: Self.refreshKey) as? Bool ?? true
+        // Same-binary comparisons: `NEOLINK_CONTINUOUS_REFRESH=1`/`0` overrides the saved preference.
+        if let forced = ProcessInfo.processInfo.environment["NEOLINK_CONTINUOUS_REFRESH"] { continuousRefresh = forced == "1" }
+        else { continuousRefresh = defaults.object(forKey: Self.refreshKey) as? Bool ?? false }
     }
 
     func setUseGPU(_ enabled: Bool) {
@@ -345,7 +347,7 @@ final class TerminalRendering: NeoGPUClient {
             else { hostTextureReady = true; hostBufferSelection = bufferSelection }
         }
         guard hostTextureReady, let scene = hostScene else { return nil }
-        return NeoGPUNode(scene: scene, needsAnotherFrame: pendingDraw != nil || frames.hasDrawableAnimation(id), traceSelection: encoded == 0 ? 0 : traceToken, presented: { [weak view] time in
+        return NeoGPUNode(scene: scene, needsAnotherFrame: pendingDraw != nil || frames.hasDrawableAnimation(id), changed: encoded != 0 || fresh, traceSelection: encoded == 0 ? 0 : traceToken, presented: { [weak view] time in
             guard let view else { return }
             if !(view is CodeTerminalView) { SelectionTrace.mark(traceToken, "shell.presented", at: time) }
             view.metalDisplayLayer?.opacity = 0

@@ -32,11 +32,11 @@ final class NeoGPUWorkspaceTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = TerminalRenderingPreferences(defaults: defaults)
         let root = try XCTUnwrap(NeoGPUWorkspace(window: window, device: device, preferences: preferences))
-        XCTAssertTrue(root.continuousRefresh)
-        preferences.setContinuousRefresh(false)
-        XCTAssertFalse(root.continuousRefresh, "Live preference changes reach the existing workspace")
+        XCTAssertFalse(root.continuousRefresh)
         preferences.setContinuousRefresh(true)
-        XCTAssertTrue(root.continuousRefresh)
+        XCTAssertTrue(root.continuousRefresh, "Live preference changes reach the existing workspace")
+        preferences.setContinuousRefresh(false)
+        XCTAssertFalse(root.continuousRefresh)
         defer { window.frames.invalidate(); window.close() }
         XCTAssertTrue(root.superview === hosting.view.superview)
         XCTAssertTrue(container.view.subviews.last === root)

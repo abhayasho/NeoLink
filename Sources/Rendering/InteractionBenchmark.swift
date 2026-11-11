@@ -332,6 +332,17 @@ final class InteractionBenchmark {
             case "editor-type":
                 guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
                 await measure(scenario, expectKeys: 75) { await self.type(count: 75, interval: 1.0 / 25, into: view) }
+            case "terminal-type-sparse":
+                // One key every 1.6 s: each lands after the post-interaction hold has ended, so
+                // this is the latency of the first key after the workspace went quiet.
+                guard let view = await focusShell() else { fail(scenario, "no shell terminal"); continue }
+                await sleep(1.6)
+                await measure(scenario, expectKeys: 10) { await self.type(count: 10, interval: 1.6, into: view) }
+                await postKeys(["\u{15}"], interval: 0.05)
+            case "editor-type-sparse":
+                guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
+                await sleep(1.6)
+                await measure(scenario, expectKeys: 10) { await self.type(count: 10, interval: 1.6, into: view) }
             case "editor-cursor":
                 guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
                 await postKeys(["\u{1B}", "g", "g", "i"], interval: 0.05) // Normal mode, top, insert.
@@ -1181,6 +1192,8 @@ final class InteractionBenchmark {
         setup["requestedFrameLatency"] = latency.map { String($0) } ?? "system default"
         setup["presentation"] = NeoGPUPresentation.current == .direct ? "direct" : "displayLink"
         setup["workspaceSkippedForQueue"] = window.gpuWorkspace?.skippedForQueue ?? 0
+        setup["workspaceStandingFramesDrained"] = window.gpuWorkspace?.standingFramesDrained ?? 0
+        setup["workspaceIdleCallbacks"] = window.gpuWorkspace?.idleCallbacks ?? 0
         if #available(macOS 14, *) { setup["effectiveFrameLatency"] = NeoGPUFrameSource.effectiveFrameLatency.map { String($0) } ?? "unavailable" }
         setup.merge([
             "displayMaximumHz": window.screen?.maximumFramesPerSecond ?? 0,
