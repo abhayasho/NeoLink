@@ -4,8 +4,10 @@ import XCTest
 final class ScrollResamplerTests: XCTestCase {
     /// Events (time, lines) arrive in time order; the display draws every `frame` seconds. Returns the drawn
     /// position (total input minus the undrawn lag) after each frame.
-    private func simulate(inputs: [(Double, Double)], frame: Double, until end: Double) -> (drawn: [Double], total: Double, finalLag: Double) {
+    private func simulate(inputs: [(Double, Double)], frame: Double, until end: Double,
+                          mode: ScrollResampler.Mode = .classic) -> (drawn: [Double], total: Double, finalLag: Double) {
         var resampler = ScrollResampler()
+        resampler.mode = mode
         var total = 0.0, drawn: [Double] = [], next = 0, index = 0
         while Double(index) * frame <= end {
             let time = Double(index) * frame
@@ -66,6 +68,7 @@ final class ScrollResamplerTests: XCTestCase {
 
     func testOneBigEventBecomesAShortGlideAndDelayIsBounded() {
         var resampler = ScrollResampler()
+        resampler.mode = .classic
         resampler.input(3, at: 0)
         var frames = 0
         var time = 0.0
@@ -78,6 +81,7 @@ final class ScrollResamplerTests: XCTestCase {
 
     func testResetDropsTheUndrawnRemainder() {
         var resampler = ScrollResampler()
+        resampler.mode = .classic
         resampler.input(2, at: 0)
         resampler.reset()
         XCTAssertEqual(resampler.lag, 0)
@@ -87,6 +91,7 @@ final class ScrollResamplerTests: XCTestCase {
 
     func testInputBeyondAnEndIsForgottenSoReversingDoesNotJump() {
         var resampler = ScrollResampler()
+        resampler.mode = .classic
         var total = 0.0, position = 0.0, maximum = 0.0, time = 0.0, largestStep = 0.0, previous = 0.0
         for event in 0..<40 {
             let lines = event < 20 ? 1.0 : -1.0
@@ -106,10 +111,11 @@ final class ScrollResamplerTests: XCTestCase {
 
     func testInputAtTheDisplayRateTrailsByAFewMillisecondsOnly() {
         var resampler = ScrollResampler()
+        resampler.mode = .classic
         for event in 0..<30 { resampler.input(0.5, at: Double(event) / 120) }
         XCTAssertLessThan(resampler.delay, 0.008, "120 Hz input on a 120 Hz display is not delayed by a whole interval")
         let slow = { () -> Double in
-            var r = ScrollResampler()
+            var r = ScrollResampler(); r.mode = .classic
             for event in 0..<30 { r.input(0.5, at: Double(event) / 60) }
             return r.delay
         }()
@@ -147,6 +153,7 @@ final class ScrollResamplerTests: XCTestCase {
         var previous: Double?
         for tenth in 41...300 {   // gaps under 4 ms are one report split in two, not a rate
             var resampler = ScrollResampler()
+        resampler.mode = .classic
             let gap = Double(tenth) / 10_000
             for event in 0..<80 { resampler.input(0.1, at: Double(event) * gap) }
             if let previous { XCTAssertLessThan(abs(resampler.delay - previous), 0.0005, "no jump at \(gap * 1000) ms") }
@@ -167,5 +174,159 @@ final class ScrollResamplerTests: XCTestCase {
         let slow = Array(steps[afterSecondSlowEvent..<(Int(1.4 * 120) - 20)])
         XCTAssertTrue(slow.allSatisfy { $0 > 0 }, "forward every frame")
         XCTAssertGreaterThan(slow.min()!, 0.2 * 0.45, "at least about half the input's speed per frame")
+    }
+
+    // MARK: Low-latency modes (`adaptive`, `predict`)
+
+    /// Total input delivered by each frame time (what "no delay at all" would draw).
+    private func raw(_ inputs: [(Double, Double)], frame: Double, count: Int) -> [Double] {
+        (0..<count).map { index in inputs.filter { $0.0 <= Double(index) * frame + 1e-9 }.reduce(0) { $0 + $1.1 } }
+    }
+
+    func testTheFirstEventOfAGestureIsDrawnAtOnceOutsideClassic() {
+        for mode in [ScrollResampler.Mode.adaptive, .predict] {
+            var resampler = ScrollResampler()
+            resampler.mode = mode
+            resampler.input(0.25, at: 10)
+            XCTAssertEqual(resampler.lag, 0, "\(mode): nothing earlier to interpolate from")
+        }
+        var classic = ScrollResampler()
+        classic.mode = .classic
+        classic.input(0.25, at: 10)
+        XCTAssertEqual(classic.lag, 0.25, accuracy: 1e-9, "classic ramps the first event in")
+    }
+
+    func testAdaptiveMarginFollowsMeasuredJitterAndNeverExceedsTheFixedOne() {
+        var clean = ScrollResampler(), noisy = ScrollResampler()
+        clean.mode = .adaptive; noisy.mode = .adaptive
+        let jitter = [0.0, 0.004, -0.004, 0.003, -0.003, 0.004, -0.002, 0.002]
+        for index in 0..<120 {
+            clean.input(0.3, at: Double(index) / 60)
+            noisy.input(0.3, at: Double(index) / 60 + 0.005 + jitter[index % jitter.count])
+        }
+        XCTAssertEqual(clean.jitterAllowance, ScrollResampler.minimumJitterMargin, accuracy: 0.0005)
+        XCTAssertGreaterThan(noisy.jitterAllowance, 0.0045)
+        XCTAssertLessThanOrEqual(noisy.jitterAllowance, ScrollResampler.jitterMargin)
+        XCTAssertLessThan(clean.delay, 1.0 / 60 + 0.003, "clean 60 Hz input trails by an interval plus about 2 ms, not 6")
+    }
+
+    func testAdaptiveAndPredictStillMoveEveryFrameAtSixtyAndEightyHertz() {
+        for mode in [ScrollResampler.Mode.adaptive, .predict] {
+            for rate in [60.0, 80.0] {
+                let inputs = (0..<Int(2 * rate)).map { (Double($0) / rate, 0.4) }
+                let steps = Array(deltas(simulate(inputs: inputs, frame: 1.0 / 120, until: 1.5, mode: mode).drawn).dropFirst(80).prefix(90))
+                XCTAssertEqual(steps.filter { $0 <= 0 }.count, 0, "\(mode) at \(rate) Hz: every display frame moves")
+                XCTAssertLessThan(steps.max()! / steps.min()!, 1.6, "\(mode) at \(rate) Hz: no alternating holds")
+            }
+        }
+    }
+
+    func testPredictTrailsSteadySixtyHertzInputByLessThanAdaptiveAndClassic() {
+        let inputs = (0..<120).map { (Double($0) / 60, 0.4) }
+        let frame = 1.0 / 120
+        func trail(_ mode: ScrollResampler.Mode) -> Double {
+            let drawn = simulate(inputs: inputs, frame: frame, until: 1.5, mode: mode).drawn
+            // Continuous finger position: 0.4 lines per 1/60 s, starting one interval before the first event.
+            let speed: Double = 0.4 * 60
+            var sum: Double = 0
+            for index in 120..<170 {
+                let finger: Double = speed * (Double(index) * frame + 1.0 / 60)
+                sum += finger - drawn[index]
+            }
+            return sum / 50 / speed   // seconds behind the finger
+        }
+        let classic = trail(.classic), adaptive = trail(.adaptive), predict = trail(.predict)
+        XCTAssertLessThan(adaptive, classic - 0.003)
+        XCTAssertLessThan(predict, adaptive - 0.006)
+        XCTAssertGreaterThan(predict, 0.008, "prediction is bounded: it does not pretend the interval is not there")
+    }
+
+    func testPredictionIsBoundedToOneDisplayFrameOfTravelAndNeverMovesBackOnSteadyInput() {
+        let rate = 60.0, perEvent = 0.4, frame = 1.0 / 120
+        let inputs = (0..<90).map { (Double($0) / rate, perEvent) }
+        let drawn = simulate(inputs: inputs, frame: frame, until: 1.4, mode: .predict).drawn
+        let delivered = raw(inputs, frame: frame, count: drawn.count)
+        let ahead = zip(drawn, delivered).map { $0 - $1 }.max()!
+        XCTAssertLessThanOrEqual(ahead, perEvent * rate * frame + 1e-6, "at most one display frame of travel past the latest event")
+        XCTAssertTrue(deltas(Array(drawn.prefix(175))).allSatisfy { $0 >= -1e-9 }, "never backwards while the input keeps moving")
+    }
+
+    func testAfterAnAbruptStopThePredictedRemainderHoldsThenEasesOntoTheInput() {
+        let rate = 60.0, perEvent = 0.4, frame = 1.0 / 120
+        let inputs = (0..<60).map { (Double($0) / rate, perEvent) }   // stops dead at full speed
+        let run = simulate(inputs: inputs, frame: frame, until: 2.0, mode: .predict)
+        let stop = Int((59.0 / rate) / frame)
+        let after = Array(run.drawn[stop...])
+        XCTAssertLessThanOrEqual(after.max()! - run.total, perEvent * rate * frame + 1e-6)
+        let steps = deltas(after)
+        XCTAssertLessThanOrEqual(-steps.min()!, 0.05, "the correction is eased, never one jump back")
+        XCTAssertEqual(run.drawn.last!, run.total, accuracy: 1e-6, "ends exactly on the input")
+        XCTAssertEqual(run.finalLag, 0)
+    }
+
+    func testAReversalIsFollowedAtOnceAndTheOvershootIsBounded() {
+        var inputs: [(Double, Double)] = []
+        for index in 0..<60 { inputs.append((Double(index) / 60.0, index < 30 ? 0.4 : -0.4)) }
+        let frame = 1.0 / 120
+        let run = simulate(inputs: inputs, frame: frame, until: 1.6, mode: .predict)
+        let peakInput = 30 * 0.4
+        XCTAssertLessThanOrEqual(run.drawn.max()! - peakInput, 0.4 * 60 * frame + 1e-6, "overshoot at the turn is at most one frame of travel")
+        let turn = Int((30.0 / 60) / frame)
+        // Within three frames of the first reversed event the content is moving the new way.
+        XCTAssertLessThan(run.drawn[turn + 3], run.drawn[turn], "the reversal is not held back by the old prediction")
+        XCTAssertEqual(run.drawn.last!, 0, accuracy: 1e-6)
+    }
+
+    func testUnsteadySpeedPredictsLessThanSteadySpeed() {
+        func ahead(_ deltas: [Double]) -> Double {
+            var resampler = ScrollResampler()
+            resampler.mode = .predict
+            var maximum = 0.0
+            for (index, delta) in deltas.enumerated() {
+                let time = Double(index) / 60
+                resampler.input(delta, at: time)
+                for sub in 1...2 { resampler.advance(to: time + Double(sub) / 120 - 0.0005); maximum = max(maximum, resampler.predictedAhead) }
+            }
+            return maximum
+        }
+        let steady = ahead(Array(repeating: 0.4, count: 40))
+        let erratic = ahead((0..<40).map { $0 % 2 == 0 ? 0.1 : 0.7 })
+        XCTAssertGreaterThan(steady, 0.05)
+        XCTAssertLessThan(erratic, steady * 0.6, "a speed that keeps changing is trusted less")
+    }
+
+    func testAbsorbedInputAtAnEndDoesNotLeaveAPredictionPastIt() {
+        var resampler = ScrollResampler()
+        resampler.mode = .predict
+        var total = 0.0
+        for index in 0..<30 {
+            let time = Double(index) / 60
+            resampler.input(0.4, at: time); total += 0.4
+            // The content has room for 6 lines only.
+            if total > 6 { let excess = 6 - total; total = 6; resampler.absorb(excess, at: time) }
+            resampler.advance(to: time + 1.0 / 120)
+        }
+        for frame in 0..<60 { resampler.advance(to: 0.5 + Double(frame) / 120) }
+        XCTAssertEqual(resampler.lag, 0, "the drawn position rests on the end")
+    }
+
+    func testALiveGestureStaysActiveBetweenEventsSoConsumersDoNotRestartIt() {
+        // Consumers end their animation and reset when `advance` reports nothing left. At a reversal the
+        // prediction is zero and the drawn position equals the input: that must not look like the end.
+        for mode in [ScrollResampler.Mode.adaptive, .predict] {
+            var resampler = ScrollResampler()
+            resampler.mode = mode
+            var ended = 0
+            for index in 0..<60 {
+                let time = Double(index) / 60
+                resampler.input(index < 30 ? 0.4 : -0.4, at: time)
+                for sub in 1...2 where !resampler.advance(to: time + Double(sub) / 120 - 0.001) { ended += 1 }
+            }
+            XCTAssertEqual(ended, 0, "\(mode)")
+            var frames = 0
+            while resampler.advance(to: 1.0 + Double(frames) / 120), frames < 200 { frames += 1 }
+            XCTAssertLessThan(frames, 40, "\(mode): it ends within a few frames of the input going quiet")
+            XCTAssertEqual(resampler.lag, 0)
+        }
     }
 }

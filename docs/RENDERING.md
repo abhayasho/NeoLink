@@ -159,6 +159,81 @@ Same-binary-source A/B, release, native full screen, unlocked, native editor cli
 
 The slow-scroll gap is the intended effect: content now moves on (almost) every refresh instead of every other one. The cost is about 15 ms more input-to-display latency for slow 60 Hz input and 3–6 ms for 120 Hz input. The harness's per-frame velocity error against its input timeline is higher after the change for flicks (about 8–12 vs 6 lines/s, with one 40 lines/s outlier run with 3 jump frames) and reversals (4–15 vs 0.2 lines/s) because the drawn motion is a delayed, interpolated copy of the input, which the benchmark scores against the raw trajectory. The unmodified baseline also has outlier runs (a 28-jump `terminal-scroll` run and an 8.8 lines/s `editor-reversal` run). Whether this feels smoother on a real trackpad, and how it feels at the start and end of a gesture, is not established by these runs.
 
+## Scroll latency, bounded prediction and the axis lock (responsiveness pass 4)
+
+Measured on the M2 Max's built-in 120 Hz display, full screen, frontmost, unlocked. Raw reports (gzip): `docs/responsiveness-pass-4/`. Scroll input is synthesized trackpad events; none of this is a physical-trackpad measurement.
+
+### Where the scroll lag was
+
+For a finger reporting at 60 Hz the resampler drew the position the input had one interval plus 6 ms earlier (22.7 ms), and the frame it drew was shown one to two refreshes after that (the frame of slack kept during motion). `lagMs` (the constant delay that best aligns drawn and ideal positions) was 36-45 ms for 60 Hz editor scrolling. The first event of a gesture was ramped in over the same delay.
+
+### What changed
+
+- **`ScrollResampler.Mode`** (`classic`, `adaptive`, `predict`), selectable in one binary with `NEOLINK_SCROLL_RESAMPLER`, and by **View -> Low-Latency Scrolling** (on = `predict`, the default; off = `classic`; applies to the next gesture). All three consumers (terminal/editor, sideways editor band, explorer) use it.
+  - `adaptive`: the first event of a gesture is drawn at once (nothing earlier exists to interpolate from) and the jitter margin is measured from the events' arrival times (2-6 ms) instead of fixed at 6 ms. The full interval is required as soon as the input is clearly slower than the display, because the measured margin no longer covers rates in between (80 Hz).
+  - `predict`: `adaptive` with the delay shortened by one display frame (at most 8.5 ms); a frame that falls after the latest event extrapolates it by at most that long. Steady input (speed and timing within a quarter of the previous segment) is extrapolated in full, using the mean of two segments; beyond that the prediction fades and a reversal predicts nothing. A prediction that shrinks holds its position instead of moving back, follows a reversal at once, and eases onto the input 60 ms after the last event. Consumers clamp the drawn position to content that exists.
+  - A live gesture stays active (`isCatchingUp`) until the input has been quiet for two intervals. The explorer ends its animation and resets when the resampler reports nothing left; drawn level with the input, that made every event a new start.
+- **Axis lock.** A gesture changed axis on one event of 6 points and 1.9 times, and chose its axis again after any 28 ms gap. A finger wandering around 45 degrees (`editor-wander`) changed axis 59 times in three seconds, started 30 sideways sessions and repeated 80-103 frames. The lock now changes only on sustained evidence (0.2 s of travel memory, 16 points and 1.9 times across), treats gaps with the fingers down as the same movement until a 0.15 s rest, and keeps a gesture's axis for its momentum: 0 changes, 0 sessions, 8 repeated frames, content p95 8.3 ms in both runs. The editor still scrolls one axis at a time; true diagonal scrolling is not implemented. `NEOLINK_AXIS_LOCK=classic` restores the old rule.
+- **Unacknowledged frames.** `NeoGPUDirectFrameSource.unacknowledgedPatience` is 0.3 s instead of 5 s. Twice (once in the build before this pass) a scenario that began shortly after the previous one's last frame showed nothing for its whole 1.8 s behind a frame whose presentation callback had not come.
+
+### Rejected in this pass (measured, removed)
+
+- **Scaling the prediction by a continuous confidence.** A few percent short of the interpolated line, alternate frames rounded to the same device pixel at one pixel per frame (62 held refreshes in one `editor-slow` run). Steady input is now predicted in full.
+- **Drawing key echoes and the first scroll movement immediately (off the refresh callback)**, with the repeats after input limited to the first refreshes after a pause so the next refresh stays free. Output is admitted at the refresh callback, so 1-4 frames a run were drawn early; without the repeats the first editor key after a pause went back to 38-60 ms with its first frames reported never shown, and dropped drawables rose from 7 to 27-31 a run.
+- **Measuring queue depth from submission (threshold 2.6 periods).** A heavy frame behind the slack that misses its refresh is shown 2.6 periods after submission: 136-152 skipped refreshes a run, `render-motion` 61-65 repeated frames instead of 7-16.
+- **Draining the frame of slack after a run of light frames.** No measured change in scroll lag (21/28 vs 26/23 ms).
+- **`adaptive` as the default.** 2-4 ms less lag than `classic` at 60 Hz, none elsewhere, and the same start-of-flick step.
+
+### Matched comparison: previous build vs this one
+
+Three alternating pairs: **A** = `00d8f20` (binary `c0713c32cf4f`), **B** = this pass with defaults (binary `0dab100f06d7`; the committed build differs only in `unacknowledgedPatience`, 1.0 -> 0.3 s). Values are runs 1 / 2 / 3.
+
+| | A | B |
+|---|---|---|
+| `editor-slow` lag (ms) | 37 / 45 / 36 | 25 / 28 / 35 |
+| `editor-diagonal` lag | 39 / 39 / 39 | 35 / 26 / 33 |
+| `editor-reversal` lag | 23 / 26 / 23 | 18 / 19 / 18 |
+| `editor-flick` lag | 22 / 28 / 21 | 22 / 21 / 21 |
+| `terminal-scroll` lag | 22 / 18 / 23 | 25 / 18 / 19 |
+| `terminal-flick` lag | 23 / 25 / no frames | 12 / 13 / 13 |
+| Stalled frames (flick, reversal, terminal scroll, terminal flick) | 0,0,0 / 0,1,0 / 0,0,0 / 0,1,- | 3,3,0 / 1,1,1 / 0,0,2 / 0,1,3 |
+| Jump frames (all six scenarios, per run) | 0 / 0 / 0 | 1 / 3 / 2 |
+| `editor-slow` refreshes missed while moving | 0 / 1 / 0 | 2 / 1 / 13 |
+| `editor-flick` refreshes missed while moving | 8 / 5 / 4 | 1 / 0 / 2 |
+| Settling after `terminal-flick` (ms, over 0.03 lines) | 0 / 0 / - | 63 / 60 / 56 |
+| Terminal typing p50 / p95 (ms) | 15.1, 16.3, 11.4 / 23.4, 27.1, 21.4 | 14.5, 12.9, 14.2 / 23.7, 22.9, 23.3 |
+| Editor typing p50 / p95 | 18.1, 17.2, 16.0 / 26.5, 32.2, 26.0 | 17.8, 19.2, 19.6 / 28.7, 25.9, 27.9 |
+| `render-motion` repeated frames | 7 / 8 / 12 | 10 / 10 / 10 |
+| `ui-resize` repeated frames | 236 / 239 / 240 | 238 / 240 / 326 |
+| Idle CPU (% of a core, with the 2 ms probe) | 5.4 / 5.8 / 5.4 | 5.4 / 5.5 / 6.2 |
+
+A's third `terminal-flick` is the unacknowledged-frame stall (589 skipped refreshes, no frame for the whole scenario). `ui-tabs` had no failures or timeouts in any run and the same cadence.
+
+Same-binary three-round comparison of the modes (`M*` reports), which also has the metrics the previous build does not report:
+
+| | `classic` | `adaptive` | `predict` |
+|---|---|---|---|
+| `editor-steady60` lag (ms) | 38 / 39 / 38 | 37 / 36 / 36 | 34 / 28 / 26 |
+| `editor-diagonal` lag | 39 / 39 / 39 | 35 / 35 / 39 | 26 / 34 / 27 |
+| `terminal-scroll` lag | 27 / 28 / 23 | 22 / 28 / 23 | 18 / 18 / 18 |
+| `terminal-flick` lag | 33 / 17 / 23 | 24 / 18 / 24 | 16 / 14 / 16 |
+| First visible motion, `editor-reversal` (ms) | 22.9 / 23.4 / 27.2 | 15.9 / 27.3 / 26.2 | 11.8 / 23.2 / 24.1 |
+| First visible motion, `terminal-flick` | 22.3 / 24.7 / 15.7 | 18.2 / 18.3 / 15.7 | 15.0 / 20.2 / 14.6 |
+| Drawn ahead of the input at display time (lines, max; the nonzero values are all `editor-steady60`) | 0.33 / 0.13 / 0.03 | 0.22 / 0.22 / 0.08 | 0 / 0 / 0 |
+| Frames that moved against the input (count, largest in lines) | 0 | 1 (0.09) | 4 (0.06-0.38) |
+| `velocityErrorP95`, `editor-flick` (lines/s) | 19.7 / 14.7 / 19.3 | 40.1 / 36.1 / 39.5 | 36.0 / 35.9 / 79.3 |
+
+Explorer (`explorer-steady`, 600 pt/s at 60 Hz, two runs each, fitted outside the app): lag 51 / 47 ms `classic`, 38 / 37 ms `predict`, no held frames in either; the residual around the fitted trajectory is larger with prediction (5.0 vs 0.8-2.9 points RMS).
+
+Reading it honestly:
+
+- **Lag is lower where the input is slower than the display or the scrollback is local** (60 Hz editor scrolling, reversals, the explorer, shell flicks): roughly 5-12 ms of 23-45. It did not change for `editor-flick` or `terminal-scroll`, and `editor-slow` still had one run at the old value (35 ms; the mode alone gave 35 / 36 / 23 in the same-binary rounds). What remains is mostly the one to two refreshes between drawing a frame and its display.
+- **Evenness is not better and in flicks it is worse.** The first event of a gesture is drawn as one step (the synthetic flick starts with 8 points, which the analysis counts as a jump), followed by a held frame until the delayed motion reaches it; flicks and reversals show 1-3 stalled frames a run where the previous build showed 0-1, and the velocity error against the lag-corrected trajectory roughly doubles.
+- **Prediction error exists.** The largest correction was 0.38 lines (6 points), at an instantaneous reversal at 720 pt/s; the content was never drawn ahead of where the input already was when the frame reached the display (`aheadLinesMax` 0). A real finger passes through zero speed, where the prediction fades; that was not measured.
+- **Typing, tab switching, divider dragging and idle cost are unchanged** by this pass. Editor typing p50 is 1-3 ms higher in B in these three pairs with an unchanged p95; nothing in this pass touches that path and three pairs do not establish a difference.
+- **First visible motion** is about 15-28 ms either way; the median improvement is a few milliseconds and within the run-to-run spread.
+- Whether `predict` feels better, the same or worse under a real hand is not established here: toggle View -> Low-Latency Scrolling and compare. No Zed measurement was made.
+
 ## Demand-driven presentation and the standing frame queue (responsiveness pass 3)
 
 Two measurements of the build before this pass (same M2 Max, built-in 120 Hz display, full screen, frontmost):

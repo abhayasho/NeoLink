@@ -234,8 +234,8 @@ final class InteractionBenchmark {
                     last["horizontalStepsSent"] = view.horizontalWheelSteps - before
                     results[results.count - 1] = last
                 }
-            case "editor-horizontal":
-                // A file of long lines; the editor scrolls sideways and back.
+            case "editor-horizontal", "editor-wander":
+                // A file of long lines; the editor scrolls sideways and back (or wanders diagonally).
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent("NeoLink-benchmark-\(UUID().uuidString)")
                 try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let fixture = directory.appendingPathComponent("wide.txt")
@@ -250,10 +250,13 @@ final class InteractionBenchmark {
                 let before = (requests: horizontal?.requests ?? 0, flips: horizontal?.flips ?? 0, steps: view.horizontalWheelSteps,
                               frames: presenter?.framesApplied ?? 0, rows: presenter?.rowsWritten ?? 0)
                 let start = CACurrentMediaTime()
+                let switchesBefore = view.scrollAxisSwitches, sessionsBefore = horizontal?.sessions ?? 0
                 var timeline: [(Double, Double)] = []
                 await measure(scenario, extra: {
                     let samples = (horizontal?.samples ?? []).filter { $0.time >= start }
-                    return ["inputDriver": "synthesized trackpad events at 60 Hz, sideways",
+                    return ["inputDriver": "synthesized trackpad events at 60 Hz, \(scenario == "editor-wander" ? "wandering diagonally" : "sideways")",
+                            "axisSwitches": view.scrollAxisSwitches - switchesBefore,
+                            "horizontalSessions": (horizontal?.sessions ?? 0) - sessionsBefore,
                             "horizontalSmoothing": horizontal != nil && NativeHorizontalScroll.enabled,
                             "chunkRequests": (horizontal?.requests ?? 0) - before.requests,
                             "rowFlips": (horizontal?.flips ?? 0) - before.flips,
@@ -265,7 +268,7 @@ final class InteractionBenchmark {
                             "drawnSamples": samples.map { [($0.time - start) * 1000, $0.drawn, Double($0.leftcol)] },
                             "inputTimeline": timeline.map { [($0.0 - start) * 1000, $0.1] }]
                 }) {
-                    timeline = await self.play(.horizontal(), cell: 1, over: view) { [weak view] event in view?.deliverWheel(event) }
+                    timeline = await self.play(scenario == "editor-wander" ? .wander() : .horizontal(), cell: 1, over: view) { [weak view] event in view?.deliverWheel(event) }
                     await self.sleep(0.3)
                 }
                 horizontal?.recordsSamples = false
@@ -287,7 +290,7 @@ final class InteractionBenchmark {
                       await wait(8, { surface.isCoveringNativeRows }) else { fail(scenario, "explorer Metal surface did not present"); continue }
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: 0)); scroll.reflectScrolledClipView(scroll.contentView)
                 await sleep(0.4)
-                let profile: ScrollProfile = scenario == "explorer-flick" ? .flick(towardTop: false) : .steady60(pointsPerSecond: 600, seconds: 3)
+                let profile: ScrollProfile = scenario == "explorer-flick" ? .flick(towardTop: false) : .steady60(pointsPerSecond: 600, seconds: 3, towardTopFirst: false)
                 surface.recordsMotionSamples = true
                 let start = CACurrentMediaTime()
                 var timeline: [(Double, Double)] = []
@@ -312,7 +315,7 @@ final class InteractionBenchmark {
                     sampling = false
                 }
                 surface.recordsMotionSamples = false
-            case "editor-scroll", "editor-slow", "editor-flick", "editor-reversal":
+            case "editor-scroll", "editor-slow", "editor-flick", "editor-reversal", "editor-steady60":
                 guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
                 await home(view)
                 let profile: ScrollProfile
@@ -320,6 +323,7 @@ final class InteractionBenchmark {
                 case "editor-slow": profile = .steady(pointsPerSecond: 60, seconds: 3, towardTopFirst: false)
                 case "editor-flick": profile = .flick(towardTop: false)
                 case "editor-reversal": profile = .reversal()
+                case "editor-steady60": profile = .steady60(pointsPerSecond: 360, seconds: 3, towardTopFirst: false)
                 default: profile = .steady(pointsPerSecond: 720, seconds: 2.5, towardTopFirst: false)
                 }
                 await measureScroll(scenario, view: view, profile: profile)
@@ -339,10 +343,32 @@ final class InteractionBenchmark {
                 await sleep(1.6)
                 await measure(scenario, expectKeys: 10) { await self.type(count: 10, interval: 1.6, into: view) }
                 await postKeys(["\u{15}"], interval: 0.05)
+            case "terminal-type-250", "editor-type-250":
+                // Four keys a second: between dense typing and the first key after a pause.
+                let target: NSView?
+                if scenario == "terminal-type-250" { target = await focusShell() } else { target = await editor() }
+                guard let view = target else { fail(scenario, "no view"); continue }
+                await measure(scenario, expectKeys: 24) { await self.type(count: 24, interval: 0.25, into: view) }
+                if scenario == "terminal-type-250" { await postKeys(["\u{15}"], interval: 0.05) }
             case "editor-type-sparse":
                 guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
                 await sleep(1.6)
                 await measure(scenario, expectKeys: 10) { await self.type(count: 10, interval: 1.6, into: view) }
+            case "editor-type-after-switch":
+                // The first key right after the editor takes over from the shell.
+                guard let view = await editor(), let document = tabs.selectedTab?.document,
+                      let shell = tabs.workspaceTerminalTabs.first else { fail(scenario, "editor did not open"); continue }
+                _ = view
+                await measure(scenario, expectKeys: 10) {
+                    for index in 0..<10 {
+                        self.tabs.selectedTabID = shell.id
+                        await self.sleep(0.7)
+                        self.tabs.selectedTabID = document.id
+                        for _ in 0..<200 where !(self.window.firstResponder is CodeTerminalView) { await self.sleep(0.002) }
+                        await self.postKeys([index % 2 == 0 ? "l" : "h"], interval: 0.05)
+                        await self.sleep(0.5)
+                    }
+                }
             case "editor-cursor":
                 guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
                 await postKeys(["\u{1B}", "g", "g", "i"], interval: 0.05) // Normal mode, top, insert.
@@ -730,6 +756,20 @@ final class InteractionBenchmark {
             return profile
         }
 
+        /// A finger wandering around 45 degrees at 60 Hz: each axis leads for three reports at a time, as in an
+        /// arc or a hand that is not sure which way it is scrolling. Nothing here is a deliberate change of axis.
+        static func wander(seconds: Double = 3) -> ScrollProfile {
+            let count = Int(seconds * 60)
+            var events: [Event] = []
+            for i in 0..<count {
+                let sideways = (i / 3) % 2 == 1
+                events.append(Event(delta: sideways ? -3 : -9, phase: i == 0 ? 1 : (i == count - 1 ? 4 : 2), momentum: 0, deltaX: sideways ? -9 : -3))
+            }
+            var profile = ScrollProfile(events: events)
+            profile.interval = 1.0 / 60
+            return profile
+        }
+
         /// Sideways finger motion at 60 Hz reports: the view scrolls right, then back left.
         static func horizontal(pointsPerSecond: Double = 480, seconds: Double = 3) -> ScrollProfile {
             let perDirection = Int(seconds * 30), step = pointsPerSecond / 60
@@ -742,8 +782,8 @@ final class InteractionBenchmark {
         }
 
         /// Constant finger speed at the 60 Hz report rate of a moving finger, one direction then the other.
-        static func steady60(pointsPerSecond: Double, seconds: Double) -> ScrollProfile {
-            let perDirection = Int(seconds * 30), step = pointsPerSecond / 60
+        static func steady60(pointsPerSecond: Double, seconds: Double, towardTopFirst: Bool = true) -> ScrollProfile {
+            let perDirection = Int(seconds * 30), step = (towardTopFirst ? 1 : -1) * pointsPerSecond / 60
             let events = [step, -step].flatMap { delta in
                 (0..<perDirection).map { i in Event(delta: delta, phase: i == 0 ? 1 : (i == perDirection - 1 ? 4 : 2), momentum: 0) }
             }
@@ -937,9 +977,31 @@ final class InteractionBenchmark {
                 let moved = abs(ideal(at: frames[i].0 - lag) - ideal(at: frames[i - 1].0 - lag))
                 if moved / (gap / period) >= pixel { missedMoving += Int((gap / period).rounded()) - 1 }
             }
+            // Responsiveness, reported apart from the lag-corrected evenness above: when the content first
+            // moved, how far it was ever drawn ahead of the input at the time it was shown (prediction
+            // error), and frames that moved against the input (corrections).
+            let firstMotion = frames.first(where: { abs($0.1) > 0.5 * pixel })?.0
+            var aheadMax = 0.0, backwardFrames = 0, backwardMax = 0.0, trailing: [Double] = []
+            for i in 1..<frames.count where frames[i].0 <= end + 0.1 {
+                let now = ideal(at: frames[i].0), before = ideal(at: frames[i].0 - 0.02)
+                let moving = now - before
+                if abs(moving) > 2 * pixel {
+                    let lead = (frames[i].1 - now) * (moving > 0 ? 1 : -1)
+                    aheadMax = max(aheadMax, lead)
+                    trailing.append(-lead)
+                }
+                let step = frames[i].1 - frames[i - 1].1
+                let expected = ideal(at: frames[i].0 - lag) - ideal(at: frames[i - 1].0 - lag)
+                if abs(step) > pixel, abs(expected) > 0.5 * pixel, (step > 0) != (expected > 0) {
+                    backwardFrames += 1; backwardMax = max(backwardMax, abs(step))
+                }
+            }
             let p = PresentationTiming.percentile
             func r(_ v: Double, _ digits: Double = 1000) -> Double { (v * digits).rounded() / digits }
             return ["scroll": [
+                "firstMotionMs": firstMotion.map { r(($0 - start) * 1000, 10) } ?? -1,
+                "aheadLinesMax": r(aheadMax), "backwardFrames": backwardFrames, "backwardLinesMax": r(backwardMax),
+                "trailingLinesP50": r(p(trailing, 0.5)), "trailingLinesP95": r(p(trailing, 0.95)),
                 "frames": frames.count, "lagMs": r(lag * 1000, 10),
                 "stallFrames": stalls, "jumpFrames": jumps,
                 "positionErrorLinesP95": r(p(positionErrors, 0.95)), "positionErrorLinesMax": r(positionErrors.max() ?? 0),
@@ -1193,6 +1255,7 @@ final class InteractionBenchmark {
         setup["presentation"] = NeoGPUPresentation.current == .direct ? "direct" : "displayLink"
         setup["workspaceSkippedForQueue"] = window.gpuWorkspace?.skippedForQueue ?? 0
         setup["workspaceStandingFramesDrained"] = window.gpuWorkspace?.standingFramesDrained ?? 0
+        setup["workspaceSkippedUnacknowledged"] = window.gpuWorkspace?.skippedUnacknowledged ?? 0
         setup["workspaceIdleCallbacks"] = window.gpuWorkspace?.idleCallbacks ?? 0
         if #available(macOS 14, *) { setup["effectiveFrameLatency"] = NeoGPUFrameSource.effectiveFrameLatency.map { String($0) } ?? "unavailable" }
         setup.merge([

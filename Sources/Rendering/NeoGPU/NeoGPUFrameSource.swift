@@ -90,6 +90,15 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
     private let queue = QueuedDrawables()
     private var lastAcquired = 0.0
     static let maximumQueued = 2
+    /// How long refreshes are skipped while a presented frame stays unacknowledged, before the bookkeeping is
+    /// discarded and a drawable is requested again. It was 5 s. Twice in the scroll-latency pass (once in the
+    /// build before it) a benchmark scenario that began shortly after the previous one's last frame showed
+    /// nothing at all for 1.8 s (583-589 skipped refreshes): that last frame's callback had not come, and
+    /// every refresh of the new gesture waited for it. The guard exists for a display that has stopped taking
+    /// frames while they are being submitted; a frame from before a pause says nothing about that.
+    static let unacknowledgedPatience = 0.3
+    /// Refreshes skipped because a frame handed to the display was never acknowledged (diagnostic).
+    private(set) var skippedUnacknowledged = 0
     /// Refreshes skipped because enough frames were already waiting (diagnostic).
     private(set) var skippedForQueue = 0
 
@@ -140,7 +149,7 @@ final class NeoGPUDirectFrameSource: NSObject, FrameClock {
         // acknowledged (a sleeping or disconnected display), do not ask for another: wait for an acknowledgement,
         // and only after several seconds without one discard the stale bookkeeping and try once more.
         if queue.oldestUnpresented(before: now - 0.1) {
-            if now - lastAcquired < 5 { skippedForQueue += 1; trace("unacknowledged", link); return }
+            if now - lastAcquired < Self.unacknowledgedPatience { skippedForQueue += 1; skippedUnacknowledged += 1; trace("unacknowledged", link); return }
             queue.reset()
         }
         // A frame counts as waiting until it is shown, or until half a refresh after the refresh it was made for:
@@ -245,6 +254,10 @@ final class QueuedDrawables: @unchecked Sendable {
         // typing and during continuous motion (editor key latency 13 -> 18-29 ms, 120+ repeated
         // frames in `render-motion`). Only the deep queue (three periods and more, the 25 ms state)
         // is drained, down to one frame of slack.
+        // Measuring from submission instead, with a 2.6-period threshold, and draining the slack itself after
+        // a run of light frames, were both tried in the scroll-latency pass: the first skipped 136-152
+        // refreshes a run (a heavy frame behind the slack that misses is shown 2.6 periods after it was
+        // submitted), the second changed no measured lag.
         let periods = (time - entry.acquired) / entry.period
         if periods >= 3.2 { standing = min(Int(periods) - 2, 3); measuredAfter = next }
     }

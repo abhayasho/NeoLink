@@ -98,6 +98,7 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         view.addItem(.separator())
         add("Use GPU Text Rendering", action: #selector(toggleGPUTextRendering(_:)), target: self, to: view)
         add("Continuous High Refresh", action: #selector(toggleContinuousRefresh(_:)), target: self, to: view)
+        add("Low-Latency Scrolling", action: #selector(toggleLowLatencyScrolling(_:)), target: self, to: view)
         add("Native Editor Rendering (after Restart)", action: #selector(toggleNativeEditor(_:)), target: self, to: view)
         add("Renderer Information…", action: #selector(showRendererInformation(_:)), target: self, to: view)
         add("Performance Monitor…", action: #selector(showPerformanceMonitor(_:)), target: self, to: view)
@@ -182,6 +183,12 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         preferences.setContinuousRefresh(!preferences.continuousRefresh)
     }
 
+    /// On: scrolling trails the fingers by up to one display frame less and predicts that far ahead
+    /// (`ScrollResampler.Mode.predict`). Off: the previous, purely interpolated motion.
+    @objc private func toggleLowLatencyScrolling(_ sender: NSMenuItem) {
+        ScrollResampler.lowLatencyPreference.toggle()
+    }
+
     /// The editor engine is chosen when Neovim starts, so the saved choice applies on the next launch.
     @objc private func toggleNativeEditor(_ sender: NSMenuItem) {
         let defaults = UserDefaults.standard, key = NeovimSession.nativeGridPreferenceKey
@@ -226,6 +233,9 @@ final class WorkspaceCommands: NSObject, NSMenuItemValidation {
         }
         if menuItem.action == #selector(toggleContinuousRefresh(_:)) {
             menuItem.state = TerminalRenderingPreferences.shared.continuousRefresh ? .on : .off
+        }
+        if menuItem.action == #selector(toggleLowLatencyScrolling(_:)) {
+            menuItem.state = ScrollResampler.lowLatencyPreference ? .on : .off
         }
         if menuItem.action == #selector(toggleNativeEditor(_:)) {
             menuItem.state = UserDefaults.standard.object(forKey: NeovimSession.nativeGridPreferenceKey) as? Bool ?? true ? .on : .off

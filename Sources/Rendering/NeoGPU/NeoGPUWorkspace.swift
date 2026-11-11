@@ -137,6 +137,7 @@ final class NeoGPUWorkspace: NSView {
     private var presentedLastDraw = false
     /// Refreshes the direct clock skipped because enough frames already waited for the display.
     var skippedForQueue: Int { if #available(macOS 14, *) { return (source as? NeoGPUDirectFrameSource)?.skippedForQueue ?? 0 }; return 0 }
+    var skippedUnacknowledged: Int { if #available(macOS 14, *) { return (source as? NeoGPUDirectFrameSource)?.skippedUnacknowledged ?? 0 }; return 0 }
     var standingFramesDrained: Int { if #available(macOS 14, *) { return (source as? NeoGPUDirectFrameSource)?.standingFramesDrained ?? 0 }; return 0 }
     var diagnostics: String { "enabled=\(enabled) suspended=\(suspended) window=\(window != nil) hidden=\(isHidden) bounds=\(bounds) clients=\(clients.count) callbacks=\(drawCallbacks) nodes=\(lastNodeCount) frames=\(presentedFrames)" }
     static var allowsOffscreenTesting = false
@@ -252,6 +253,7 @@ final class NeoGPUWorkspace: NSView {
               window.occlusionState.contains(.visible), let layer = layer as? CAMetalLayer else {
             source?.stop(); presentationTiming.pause(); return
         }
+
         let scale = window.backingScaleFactor
         let size = CGSize(width: max(1, (bounds.width * scale).rounded()), height: max(1, (bounds.height * scale).rounded()))
         if layer.contentsScale != scale || layer.drawableSize != size {
@@ -362,7 +364,10 @@ final class NeoGPUWorkspace: NSView {
         // Motion in progress (a scroll or animation still running) presents every refresh even when a
         // step moved nothing: the frame of slack it keeps absorbs a heavy frame without a visible repeat.
         // After input, retained content is repeated only while nothing waits for the display, so a
-        // repeat can never stand ahead of the next real change.
+        // repeat can never stand ahead of the next real change. Limiting the repeats to the first refreshes
+        // after a pause, so that an echo could be drawn the moment it arrives, was measured and rejected:
+        // output is admitted at the refresh callback, so almost nothing was drawn early (1-4 frames a run),
+        // and the first editor key after a pause went back to 38-60 ms with its first frames never shown.
         let moving = nodes.contains { $0.0.needsAnotherFrame }
         var holding = false
         if Self.repeatsAfterInput, #available(macOS 14, *), let direct = source as? NeoGPUDirectFrameSource {

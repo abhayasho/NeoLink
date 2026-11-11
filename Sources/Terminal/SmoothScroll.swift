@@ -272,24 +272,48 @@ struct SmoothScrollModel {
     mutating func takeClamped() -> Double { defer { clamped = 0 }; return clamped }
 }
 
-/// Keeps a trackpad gesture on the axis it started on, the way Zed's `OngoingScroll` does.
+/// Keeps a trackpad gesture on one axis, in the spirit of Zed's `OngoingScroll`.
 ///
 /// A finger moving "vertically" drifts sideways by a fraction of its motion. In an editor without line
 /// wrapping every sideways column makes the program redraw the whole screen, so that drift turned smooth
 /// vertical scrolling into a stream of heavy frames and jumps. A gesture locks to its dominant axis on its
-/// first event (or after a pause of 28 ms); it switches only when an event of at least 6 points moves 1.9
-/// times further along the other axis. Mouse wheels (imprecise deltas) are not filtered.
+/// first event. Mouse wheels (imprecise deltas) are not filtered.
+///
+/// The editor cannot scroll both ways at once: changing axis ends a sideways session on a whole column and
+/// starts a vertical one. A diagonal or wandering finger therefore must not flip the lock event by event
+/// (which looked like stuttering in both directions). While the fingers stay down:
+/// - the lock changes only on sustained evidence: recent travel along the other axis (a 0.2 s memory) of at
+///   least 16 points and 1.9 times the travel along the locked one. One sideways event is not enough, and a
+///   45-degree path stays on the axis it started on;
+/// - a short gap between events is not a new gesture (a slow finger reports with gaps of 30 ms and more);
+///   only a rest of 0.15 s chooses the axis again from the next movement.
+/// Momentum keeps the axis of the gesture that produced it. Streams without phases (older devices) choose
+/// again after 28 ms, as before.
 struct ScrollAxisLock {
     enum Axis { case horizontal, vertical }
     private(set) var axis: Axis?
     private var lastEvent: Double?
+    /// Between a gesture's `began` and `ended` phases.
+    private var touching = false
+    /// Decayed recent travel (points) along the locked axis and across it.
+    private var along: CGFloat = 0, across: CGFloat = 0
+    /// The axis of the gesture that just ended, for the momentum that follows it.
+    private var released: (axis: Axis, time: Double)?
+    /// Changes of axis within gestures (measurement).
+    private(set) var switches = 0
     static let separation = 0.028
+    static let restingSeparation = 0.15
     static let unlockRatio: CGFloat = 1.9
-    static let unlockMinimum: CGFloat = 6
+    static let unlockTravel: CGFloat = 16
+    static let memory = 0.2
 
-    mutating func filter(dx: CGFloat, dy: CGFloat, began: Bool, ended: Bool, at time: Double) -> (dx: CGFloat, dy: CGFloat) {
+    /// `NEOLINK_AXIS_LOCK=classic` restores the previous rule (one event of 6 points and 1.9 times switches;
+    /// any 28 ms gap chooses again) for same-binary comparisons.
+    static let usesClassicRule = ProcessInfo.processInfo.environment["NEOLINK_AXIS_LOCK"] == "classic"
+    var classic = ScrollAxisLock.usesClassicRule
+
+    private mutating func filterClassic(dx: CGFloat, dy: CGFloat, began: Bool, ended: Bool, at time: Double) -> (dx: CGFloat, dy: CGFloat) {
         if ended {
-            // The end of the finger's contact; whatever this event carries still follows the current lock.
             let result = apply(dx, dy)
             axis = nil; lastEvent = nil
             return result
@@ -301,9 +325,42 @@ struct ScrollAxisLock {
         let newGesture = began || lastEvent.map { time - $0 >= Self.separation } ?? true
         if newGesture {
             axis = abs(dx) > abs(dy) ? .horizontal : .vertical
-        } else if max(abs(dx), abs(dy)) >= Self.unlockMinimum {
+        } else if max(abs(dx), abs(dy)) >= 6 {
+            let previous = axis
             if axis == .vertical, abs(dx) > Self.unlockRatio * abs(dy) { axis = .horizontal }
             else if axis == .horizontal, abs(dy) > Self.unlockRatio * abs(dx) { axis = .vertical }
+            if axis != previous { switches += 1 }
+        }
+        lastEvent = time
+        return apply(dx, dy)
+    }
+
+    mutating func filter(dx: CGFloat, dy: CGFloat, began: Bool, ended: Bool, momentum: Bool = false, at time: Double) -> (dx: CGFloat, dy: CGFloat) {
+        if classic { return filterClassic(dx: dx, dy: dy, began: began, ended: ended, at: time) }
+        if ended {
+            // The end of the finger's contact; whatever this event carries still follows the current lock.
+            let result = apply(dx, dy)
+            if let axis, !momentum { released = (axis, time) }
+            axis = nil; lastEvent = nil; touching = false; along = 0; across = 0
+            return result
+        }
+        if began { touching = true; axis = nil; lastEvent = nil; released = nil; along = 0; across = 0 }
+        if dx == 0, dy == 0 { return (0, 0) }
+        let gap = lastEvent.map { time - $0 }
+        let rested = gap.map { $0 >= (touching ? Self.restingSeparation : Self.separation) } ?? true
+        if axis == nil || rested {
+            if momentum, let released, time - released.time < 0.25 { axis = released.axis }
+            else { axis = abs(dx) > abs(dy) ? .horizontal : .vertical }
+            along = 0; across = 0
+        } else if !momentum {
+            let decay = CGFloat(exp(-(gap ?? 0) / Self.memory))
+            along = along * decay + (axis == .vertical ? abs(dy) : abs(dx))
+            across = across * decay + (axis == .vertical ? abs(dx) : abs(dy))
+            if across >= Self.unlockTravel, across >= Self.unlockRatio * along {
+                axis = axis == .vertical ? .horizontal : .vertical
+                // Going back needs the same sustained evidence again.
+                along = 0; across = 0; switches += 1
+            }
         }
         lastEvent = time
         return apply(dx, dy)
@@ -335,36 +392,87 @@ struct ScrollAxisLock {
 /// and the delay in use follows it at a bounded speed, so a change of rate (a finger slowing down, the switch
 /// to momentum) changes the speed of the drawn content slightly instead of stalling or jerking it.
 struct ScrollResampler {
+    /// How much the drawn position is allowed to trail (or lead) the input. Selectable in one binary with
+    /// `NEOLINK_SCROLL_RESAMPLER=classic|adaptive|predict` for matched comparisons (see `docs/RENDERING.md`).
+    /// - `classic`: one input interval plus a fixed 6 ms; the first event of a gesture ramps in.
+    /// - `adaptive`: the first event of a gesture is drawn at once, and the jitter margin is the one measured
+    ///   from the events' arrival times (2–6 ms) instead of a fixed 6 ms.
+    /// - `predict`: `adaptive`, with the delay shortened by up to one display frame; frames that fall after the
+    ///   latest event extrapolate it by at most that long, scaled down when the speed is not steady.
+    enum Mode: String { case classic, adaptive, predict }
+    /// `predict` unless View → Low-Latency Scrolling is off (`classic`); the environment variable overrides both.
+    static let preferenceKey = "NeoLink.lowLatencyScrolling"
+    static let environmentMode = Mode(rawValue: ProcessInfo.processInfo.environment["NEOLINK_SCROLL_RESAMPLER"] ?? "")
+    static var lowLatencyPreference: Bool {
+        get { UserDefaults.standard.object(forKey: preferenceKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: preferenceKey); current = environmentMode ?? (newValue ? .predict : .classic) }
+    }
+    /// The mode of every resampler that was not given one explicitly; changes apply to the next gesture.
+    private(set) static var current: Mode = environmentMode ?? (lowLatencyPreference ? .predict : .classic)
+    private var chosenMode: Mode?
+    var mode: Mode {
+        get { chosenMode ?? Self.current }
+        set { chosenMode = newValue }
+    }
+
     private(set) var lag = 0.0
     private var history: [(time: Double, position: Double)] = []
     private var total = 0.0
     private var interval = 1.0 / 60
+    /// Smoothed absolute deviation of the gaps between events from the measured interval (arrival jitter).
+    private var deviation = 0.0015
     /// Time of the latest event; kept when the history is trimmed or reset, so every gap is measured.
     private var lastInput: Double?
     /// The delay in use (see `delaySlew`); nil while the content is at rest.
     private var appliedDelay: Double?
     private var lastAdvance: Double?
+    /// `predict`: the position drawn by the previous frame, so a shrinking prediction holds instead of moving back.
+    private var lastDrawn: Double?
+    /// `predict`: lines currently drawn beyond the latest input (diagnostic; 0 when interpolating).
+    private(set) var predictedAhead = 0.0
+    /// `predict`: the largest extrapolation drawn so far and how often a frame extrapolated (diagnostics).
+    private(set) var predictedAheadMax = 0.0
+    private(set) var predictedFrames = 0
     static let jitterMargin = 0.006
+    static let minimumJitterMargin = 0.002
     static let minimumDelay = 0.008
     static let maximumDelay = 0.030
     static let epsilon = 0.003
     /// How fast the delay in use may change, in seconds per second. Below 1 the sampled time never moves
     /// backwards, so steady input is never drawn moving back; at 0.5 the drawn speed changes by at most half.
     static let delaySlew = 0.5
+    /// `predict`: after this long without an event an extrapolated remainder is eased back to the input.
+    static let predictionRelease = 0.06
 
     /// Seconds between display frames; input at about this rate already moves every frame and needs little help.
     var framePeriod = 1.0 / 120
 
+    /// Slack for events that arrive late: fixed in `classic`, measured otherwise (never above the fixed value).
+    var jitterAllowance: Double {
+        mode == .classic ? Self.jitterMargin : min(Self.jitterMargin, max(Self.minimumJitterMargin, 0.001 + 2.5 * deviation))
+    }
+    /// `predict`: the longest time a frame may be drawn past the latest event (one display frame).
+    var lookahead: Double { mode == .predict ? min(framePeriod, 0.0085) : 0 }
+
     /// Input at or faster than the display only needs enough slack for arrival jitter (half an interval plus
     /// 2 ms). Input at half the display's rate or slower trails by one interval plus a jitter margin, so every
     /// refresh falls between two events. In between, the two blend linearly: there is no threshold at which a
-    /// small change of rate makes the delay jump.
+    /// small change of rate makes the delay jump. `predict` trails by `lookahead` less and extrapolates instead.
     var delay: Double {
-        let fast = 0.5 * interval + 0.002, slow = interval + Self.jitterMargin
-        let blend = min(1, max(0, (interval - framePeriod) / max(framePeriod, 0.001)))
-        return min(Self.maximumDelay, max(Self.minimumDelay * 0.5, fast + (slow - fast) * blend))
+        let fast = 0.5 * interval + 0.002, slow = interval + jitterAllowance
+        // `classic` blends over the whole range up to half the display's rate; its fixed 6 ms margin is what
+        // keeps rates in between (80 Hz) from holding frames. With a measured margin the full interval is
+        // needed as soon as the input is clearly slower than the display.
+        let span = mode == .classic ? 1.0 : 0.25
+        let blend = min(1, max(0, (interval - framePeriod) / max(framePeriod * span, 0.001)))
+        let base = min(Self.maximumDelay, max(Self.minimumDelay * 0.5, fast + (slow - fast) * blend))
+        return mode == .predict ? max(Self.minimumJitterMargin, base - lookahead) : base
     }
-    var isCatchingUp: Bool { lag != 0 }
+    /// There is still motion to draw. In `classic` that is an undrawn remainder. The other modes draw level
+    /// with (or ahead of) the latest event between events, so "nothing left to draw" there does not mean the
+    /// gesture is over: they stay active until the input has been quiet, and a consumer that ends its
+    /// animation and resets on inactivity does not turn every event into a new start.
+    private(set) var isCatchingUp = false
     /// Measured seconds between input events.
     var inputInterval: Double { interval }
 
@@ -373,27 +481,31 @@ struct ScrollResampler {
         if let lastInput {
             let gap = time - lastInput
             // Events within 4 ms of each other are one report split in two: not a faster input rate.
-            if gap >= 0.004, gap < 0.1 { interval = 0.7 * interval + 0.3 * gap }
-            else if gap >= 0.1 { interval = 1.0 / 60; history.removeAll() }
+            if gap >= 0.004, gap < 0.1 {
+                deviation = 0.85 * deviation + 0.15 * min(0.01, abs(gap - interval))
+                interval = 0.7 * interval + 0.3 * gap
+            } else if gap >= 0.1 { interval = 1.0 / 60; history.removeAll(); lastDrawn = nil }
         }
         lastInput = max(lastInput ?? time, time)
         if history.isEmpty {
-            // The gesture starts from rest; so does the delay.
-            history.append((time - interval, total))
+            // The gesture starts from rest; so does the delay. `classic` ramps the first event in over one
+            // interval; the other modes have nothing earlier to interpolate from and draw it at once.
+            if mode == .classic { history.append((time - interval, total)) }
             appliedDelay = nil
         }
         total += lines
-        history.append((max(time, history[history.count - 1].time), total))
+        history.append((max(time, history.last?.time ?? time), total))
         advance(to: time)
     }
 
     /// Position of the drawn content at `now`; returns whether it still trails the input.
     @discardableResult
     mutating func advance(to now: Double) -> Bool {
-        guard let last = history.last else { lag = 0; appliedDelay = nil; return false }
+        guard let last = history.last else { lag = 0; appliedDelay = nil; lastDrawn = nil; predictedAhead = 0; isCatchingUp = false; return false }
         let target = delay
-        if let applied = appliedDelay, let previous = lastAdvance {
-            let step = Self.delaySlew * max(0, now - previous)
+        let elapsed = lastAdvance.map { max(0, now - $0) } ?? 0
+        if let applied = appliedDelay, lastAdvance != nil {
+            let step = Self.delaySlew * elapsed
             appliedDelay = min(applied + step, max(applied - step, target))
         } else {
             appliedDelay = target
@@ -407,13 +519,73 @@ struct ScrollResampler {
                 let a = history[upper - 1], b = history[upper]
                 drawn = b.time > a.time ? a.position + (b.position - a.position) * (at - a.time) / (b.time - a.time) : b.position
             }
+        } else if mode == .predict {
+            drawn = last.position + extrapolation(past: at - last.time)
         }
-        // Keep only what a later frame can still need.
-        if let keep = history.firstIndex(where: { $0.time >= at }), keep > 1 { history.removeFirst(keep - 1) }
+        if mode == .predict { drawn = settlePrediction(drawn, latest: last, now: now, elapsed: elapsed) }
+        // Keep only what a later frame can still need (`predict` also keeps two segments to judge the speed).
+        if let keep = history.firstIndex(where: { $0.time >= at }), keep > 1 {
+            history.removeFirst(mode == .predict ? max(0, min(keep - 1, history.count - 3)) : keep - 1)
+        } else if history.count > 16 { history.removeFirst(history.count - 8) }
         lag = last.position - drawn
         if abs(lag) < Self.epsilon { lag = 0 }
-        if lag == 0, at >= last.time { history.removeAll(); appliedDelay = nil }
-        return lag != 0
+        // Caught up. `classic` forgets the gesture here and ramps the next event in. The other modes keep the
+        // latest events while the stream is live, so the next one is interpolated (and its speed known) rather
+        // than treated as a new start; they forget once the input has been quiet.
+        if lag == 0, at >= last.time, mode == .classic || now - last.time > max(2 * interval, 0.04) {
+            history.removeAll(); appliedDelay = nil; lastDrawn = nil; predictedAhead = 0
+        }
+        isCatchingUp = lag != 0 || (mode != .classic && !history.isEmpty)
+        return isCatchingUp
+    }
+
+    /// Lines to draw beyond the latest event, `time` seconds after it: its speed over at most `lookahead`.
+    /// Steady input (speed and timing within a quarter of the previous segment's) is extrapolated in full, so
+    /// the drawn motion stays linear and lands on the same device pixels as interpolation would; scaling it
+    /// down by a few percent made alternate frames round to the same pixel at one pixel per frame. Beyond that
+    /// the prediction fades, and a reversal or a single segment predicts nothing or half.
+    private func extrapolation(past time: Double) -> Double {
+        let count = history.count
+        guard count >= 2, time > 0 else { return 0 }
+        let a = history[count - 2], b = history[count - 1]
+        guard b.time - a.time >= 0.004 else { return 0 }
+        var speed = (b.position - a.position) / (b.time - a.time)
+        func trust(_ variation: Double) -> Double { variation <= 0.25 ? 1 : max(0, 1 - (variation - 0.25) / 0.5) }
+        var confidence = 0.5
+        if count >= 3, a.time - history[count - 3].time >= 0.004 {
+            let first = history[count - 3]
+            let earlier = (a.position - first.position) / (a.time - first.time)
+            confidence = earlier * speed <= 0 ? 0 : trust(abs(speed - earlier) / max(abs(speed), abs(earlier)))
+            // Two segments of steady input: their mean speed is less sensitive to one event's arrival time.
+            if confidence == 1 { speed = (b.position - first.position) / (b.time - first.time) }
+        }
+        // An interval far from the measured one is a late or early report: its speed is less certain.
+        confidence *= trust(abs((b.time - a.time) - interval) / max(interval, 0.004))
+        return speed * min(time, lookahead) * confidence
+    }
+
+    /// A prediction that shrank (the speed changed, or no event came) holds where it was drawn rather than moving
+    /// back; it follows a reversal at once, and after `predictionRelease` without input it eases onto the input.
+    private mutating func settlePrediction(_ candidate: Double, latest: (time: Double, position: Double), now: Double, elapsed: Double) -> Double {
+        let count = history.count
+        let sign: Double = count >= 2 && latest.position < history[count - 2].position ? -1 : 1
+        func ahead(_ value: Double) -> Double { (value - latest.position) * sign }
+        let released = now - latest.time > Self.predictionRelease
+        var drawn = candidate
+        // No event for a while: the stream stopped, so there is nothing left to predict.
+        if released, ahead(drawn) > 0 { drawn = latest.position }
+        if let previous = lastDrawn, ahead(previous) > 0, ahead(drawn) < ahead(previous) {
+            if released {
+                let remaining = ahead(previous) * exp(-elapsed / 0.05)
+                drawn = latest.position + sign * max(ahead(drawn), remaining < Self.epsilon ? 0 : remaining)
+            } else {
+                drawn = previous
+            }
+        }
+        lastDrawn = drawn
+        predictedAhead = max(0, ahead(drawn))
+        if predictedAhead > 0 { predictedFrames += 1; predictedAheadMax = max(predictedAheadMax, predictedAhead) }
+        return drawn
     }
 
     /// The content could not follow `amount` lines of the latest input (it hit an end): forget them, so a
@@ -426,7 +598,7 @@ struct ScrollResampler {
     }
 
     /// Drops the undrawn remainder. The measured input rate is a property of the device and is kept.
-    mutating func reset() { lag = 0; history.removeAll(); total = 0; appliedDelay = nil }
+    mutating func reset() { lag = 0; history.removeAll(); total = 0; appliedDelay = nil; lastDrawn = nil; predictedAhead = 0; isCatchingUp = false }
 }
 
 /// The time an event's input was sampled, in `CACurrentMediaTime`'s timebase, when it is plausible: interpolating
@@ -591,6 +763,7 @@ final class SmoothScrollDriver {
     private func apply() {
         // The program moved on its own (nothing of the gesture left to draw): drop the undrawn remainder too.
         if source == .program, !model.isScrolling { resampler.reset() }
+        // A predicted position may lead the model; `smoothScrollPlan` clamps it to the lines that exist.
         let drawn = (source == .scrollback ? scrollback.offset : model.offset) - resampler.lag
         let offset = CGFloat(drawn) * cellHeight
         // Whole device pixels keep glyphs on the pixel grid.

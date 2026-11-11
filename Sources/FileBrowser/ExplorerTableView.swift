@@ -611,7 +611,10 @@ final class ExplorerScrollView: NSScrollView {
         guard let targetY else { return }
         let scale = window?.backingScaleFactor ?? 2
         // Whole device pixels keep text on the pixel grid, like the terminal's smooth scrolling.
-        let y = ((targetY - CGFloat(resampler.lag)) * scale).rounded() / scale
+        // A predicted position may lead the target; never past the ends of the content.
+        var wanted = contentView.bounds
+        wanted.origin.y = targetY - CGFloat(resampler.lag)
+        let y = (contentView.constrainBoundsRect(wanted).origin.y * scale).rounded() / scale
         if y != contentView.bounds.origin.y {
             contentView.scroll(to: NSPoint(x: contentView.bounds.origin.x, y: y))
             reflectScrolledClipView(contentView)

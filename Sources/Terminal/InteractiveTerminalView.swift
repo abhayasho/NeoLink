@@ -37,13 +37,16 @@ class InteractiveTerminalView: LocalProcessTerminalView {
     /// Set by the native editor: handles horizontal trackpad input (event, dx, dy, column, row); true if used.
     var nativeHorizontalScroller: ((NSEvent, CGFloat, CGFloat, Int, Int) -> Bool)?
     private var axisLock = ScrollAxisLock()
+    /// For measurement: changes of scroll axis within gestures.
+    var scrollAxisSwitches: Int { axisLock.switches }
     /// The current event's deltas after axis locking (trackpads only).
     private var filtered: (dx: CGFloat, dy: CGFloat) = (0, 0)
     private func filterAxes(_ event: NSEvent) {
         guard event.hasPreciseScrollingDeltas else { filtered = (event.scrollingDeltaX, event.scrollingDeltaY); return }
         let began = event.phase.contains(.began) || event.phase.contains(.mayBegin)
         let ended = event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled)
-        filtered = axisLock.filter(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY, began: began, ended: ended, at: event.timestamp)
+        filtered = axisLock.filter(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY, began: began, ended: ended,
+                                   momentum: event.momentumPhase != [], at: event.timestamp)
     }
 
     /// Drains output queued for this surface: PTY chunks, or the native client's mailbox. Called
