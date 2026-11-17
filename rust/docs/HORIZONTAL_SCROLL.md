@@ -36,9 +36,32 @@ Continues `e7df757` on `rust-rewrite`. The Swift source and released `main` are 
 - Windows archive tests check runtime-resource layout, rejection of non-Windows binaries, and preservation
   of an existing archive when inputs are incomplete. They do not execute Windows software.
 
-## Performance acceptance is pending
+## Matched release comparison (2026-11-17, later the same day)
 
-The experiment is **off by default** (`NEOLINK_HSCROLL=1` opts in). Initial development runs showed
+Same binary (`23deb88b…`), alternating `NEOLINK_HSCROLL=0` / `=1`, three rounds, full screen,
+`NEOLINK_BENCHMARK_BUSY=1`, window frontmost and unoccluded: all 18 runs report
+`visibleTimingValid: true`. Display path was direct except two `on` crawl runs (composited).
+
+| Scenario | Column steps (off) | Pixel composition (on) |
+|---|---|---|
+| `editor-horizontal` (steady) | 225 frames, 137–141 uneven, jerk95 12–15 px | 301 frames, 1–4 uneven, jerk95 0.01–0.02 px |
+| `editor-horizontal-crawl` | 27 frames, 7 jumps, first motion ~440 ms | 152–156 frames, 0 jumps, first motion ~90 ms |
+| `editor-horizontal-flick` | 61 frames, 32–35 uneven, jerk95 17–26 px, largest 48 px | 119–124 frames, 40–51 uneven, jerk95 2.9–37 px, largest 148 px |
+
+Crawl costs more CPU while moving (~26% → ~60% of one core). The flick's largest steps are all in its
+first two or three frames: nothing can be drawn until Neovim answers the session's first geometry
+request (one round trip), then the text catches up in one step. After that the flick is even. The
+request lead now also covers the distance already received and the recent speed (`horizontal.rs`);
+three further `on` runs were 42–65 uneven with the same start-up step, so that change did not remove it.
+
+Still open: a physical-trackpad check (reversal, momentum interruption, slow creep, typing
+mid-gesture, resize). Until then the column path stays the default; **View → Pixel-Smooth Sideways
+Scrolling (Preview)** turns the new path on and is saved, so it can be tried in the packaged app
+(`open` does not pass environment variables). `NEOLINK_HSCROLL=1`/`0` still overrides the setting.
+
+## Earlier status (before the matched comparison)
+
+The experiment is **off by default** (View menu or `NEOLINK_HSCROLL=1` opts in). Initial development runs showed
 regressions, including sparse presentation and reversal jumps. Those drove the signature and flush
 fixes above. Final live verification was blocked when the Mac locked; the last run had zero displayed
 frames and failed foreground validity. No final speedup or smoothness claim is made.

@@ -92,6 +92,8 @@ pub struct Workspace {
     native: std::collections::HashMap<String, crate::native::NativeEditor>,
     /// Neovim could not start (or `NEOLINK_NO_NVIM=1`): documents open in the native editor.
     native_only: bool,
+    /// View > Pixel-Smooth Sideways Scrolling.
+    pixel_sideways: bool,
     pub explorer: Explorer,
     sidebar: Rect,
     notice: Option<String>,
@@ -219,6 +221,7 @@ impl Workspace {
             shown_selection: 0,
             editor: None,
             native: std::collections::HashMap::new(),
+            pixel_sideways: false,
             native_only: std::env::var("NEOLINK_NO_NVIM").is_ok_and(|value| value == "1"),
             explorer: Explorer::new(project_directory()),
             sidebar: Rect::default(),
@@ -794,6 +797,7 @@ impl Workspace {
     /// What is remembered between runs (the window itself is the caller's).
     pub fn settings(&self, mut settings: crate::settings::Settings) -> crate::settings::Settings {
         settings.font_points = self.font_points;
+        settings.pixel_sideways = self.pixel_sideways;
         settings.explorer_visible = self.explorer.visible;
         settings.connections_visible = self.connections.visible;
         settings.explorer_points = self.explorer_points;
@@ -817,6 +821,7 @@ impl Workspace {
 
     /// Applies remembered settings to a new workspace (the project is opened by the caller).
     pub fn apply_settings(&mut self, settings: &crate::settings::Settings) {
+        self.pixel_sideways = settings.pixel_sideways;
         self.font_points = settings.font_points.clamp(MIN_FONT_POINTS, MAX_FONT_POINTS);
         self.explorer_points = settings.explorer_points.clamp(200.0, 400.0);
         self.agent.visible = settings.agent_visible;
@@ -1151,6 +1156,7 @@ impl Workspace {
                 if phase == ScrollPhase::Began {
                     editor.end_scroll_gesture();
                 }
+                editor.pixel_sideways = self.pixel_sideways;
                 editor.scroll_both(time, _delta_x, delta_y, phase, self.scale as f64, period, cell, row, column, &path);
             }
         } else if let Some(terminal) = self.active() {
@@ -1341,6 +1347,12 @@ impl Workspace {
     /// Some document has changes that are not on disk.
     fn any_unsaved(&self) -> bool {
         self.tabs.iter().filter_map(|tab| tab.document()).any(|path| self.doc_modified(path))
+    }
+
+    /// View > Pixel-Smooth Sideways Scrolling.
+    pub fn toggle_pixel_sideways(&mut self) {
+        self.pixel_sideways = !self.pixel_sideways;
+        self.notice = Some(if self.pixel_sideways { "Pixel-smooth sideways scrolling is on (preview).".into() } else { "Sideways scrolling moves by whole columns.".into() });
     }
 
     /// The document has changes that are not on disk (in Neovim or the native editor).

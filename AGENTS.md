@@ -60,8 +60,9 @@ NeoLink is a native macOS (13+) SwiftUI/AppKit coding workspace: tabbed terminal
   `python3 scripts/test-package-windows.py`, and `./scripts/build-app.sh` for the macOS release bundle.
   The Windows CI archive must contain the executable plus `Resources/Editor`, not just an `.exe`.
 - Horizontal retained composition (`rust/crates/neolink/src/horizontal.rs`) is experimental and opt-in
-  with `NEOLINK_HSCROLL=1`. Keep the default stepped path until valid matched release comparisons and
-  real-input checks pass. See `rust/docs/HORIZONTAL_SCROLL.md`; locked/occluded runs establish no cadence.
+  with View → Pixel-Smooth Sideways Scrolling (saved setting) or `NEOLINK_HSCROLL=1` (`=0` forces it off).
+  Matched release comparisons passed (steady/crawl); keep the default stepped path until real-input
+  (physical trackpad) checks pass. See `rust/docs/HORIZONTAL_SCROLL.md`; locked/occluded runs establish no cadence.
 - Pair horizontal coordinates only with the screen captured at `neolink_hscroll_ready`, after the explicit
   UI flush. Respect the selection input gate, token checks, dimension/style invalidation and settlement
   before input. Retain at most two previous screens, keep text native resolution and the gutter fixed,

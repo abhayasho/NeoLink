@@ -5,7 +5,7 @@ working product until this reaches parity; nothing here replaces or modifies it.
 
 Status (2026-11-17): **Rust migration preview: terminal, editor, explorer, SSH/SFTP, ACP/Git/search, bottom/side terminal dock, macOS PDFs, saved credentials, file watching, and fallback text editing are implemented. Full feature parity and Windows on-device verification remain incomplete.** See [the current feature/status guide](README.md); older milestone tables below are historical snapshots, not the current feature list.
 
-Latest continuation: explorer refresh anchors preserve fractional offsets; horizontal editor composition is implemented behind `NEOLINK_HSCROLL=1`, with ordered redraw acknowledgements, Unicode pixel equality and real-Neovim tests. It is **not enabled by default**: earlier development runs exposed presentation/ordering defects and final live verification was blocked by a locked Mac. Windows packaging now includes required runtime resources. [Checks, retained failed runs, and remaining work](docs/HORIZONTAL_SCROLL.md).
+Latest continuation: explorer refresh anchors preserve fractional offsets; horizontal editor composition is implemented behind `NEOLINK_HSCROLL=1`, with ordered redraw acknowledgements, Unicode pixel equality and real-Neovim tests. It is **not enabled by default** but can be turned on from the View menu: matched release runs later passed (steady 1–4 vs 137–141 uneven frames; crawl 0 vs 7 jumps), a flick keeps one catch-up step at its start, and a physical-trackpad check is still open. Windows packaging now includes required runtime resources. [Checks, retained failed runs, and remaining work](docs/HORIZONTAL_SCROLL.md).
 
 ## 1. Why a rewrite, and what "better" has to mean
 

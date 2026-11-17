@@ -278,6 +278,8 @@ impl App {
             });
         } else if command == "view:monitor" {
             self.with_workspace(|workspace, _| workspace.toggle_monitor());
+        } else if command == "view:hscroll" {
+            self.with_workspace(|workspace, _| workspace.toggle_pixel_sideways());
         } else if command == "view:renderer" {
             self.with_workspace(|workspace, _| workspace.show_renderer_information());
         } else if let Some(side) = command.strip_prefix("dock:") {
@@ -619,7 +621,8 @@ impl ApplicationHandler<UserEvent> for App {
             #[cfg(target_os = "macos")]
             if self.menu_bar.is_none() && std::env::var("NEOLINK_MENU_BAR").as_deref() != Ok("0") {
                 let proxy = self.proxy.clone();
-                self.menu_bar = menubar::install(move |command| {
+                let pixel_sideways = self.saved.pixel_sideways;
+                self.menu_bar = menubar::install(pixel_sideways, move |command| {
                     let _ = proxy.send_event(UserEvent::Command(command));
                 });
             }

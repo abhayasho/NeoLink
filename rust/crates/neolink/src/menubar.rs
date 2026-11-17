@@ -3,7 +3,7 @@
 //! keyboard shortcut, "editor:<action>" and "repl:<program>" are the Code menu's entries.
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
 fn code(character: char) -> Option<Code> {
     Some(match character {
@@ -50,7 +50,7 @@ fn plain(id: &str, title: &str) -> MenuItem {
 }
 
 /// Builds the menu bar and installs it. The returned menu must be kept alive.
-pub fn install(on_command: impl Fn(String) + Send + Sync + 'static) -> Option<Menu> {
+pub fn install(pixel_sideways: bool, on_command: impl Fn(String) + Send + Sync + 'static) -> Option<Menu> {
     let separator = PredefinedMenuItem::separator;
     let menu = Menu::new();
     let app = Submenu::new("NeoLink", true);
@@ -111,6 +111,7 @@ pub fn install(on_command: impl Fn(String) + Send + Sync + 'static) -> Option<Me
         &separator(),
         &plain("view:renderer", "Renderer Information\u{2026}"),
         &plain("view:monitor", "Performance Monitor\u{2026}"),
+        &CheckMenuItem::with_id("view:hscroll", "Pixel-Smooth Sideways Scrolling (Preview)", true, pixel_sideways, None),
         &separator(),
         &key("Toggle Connections Sidebar", "cx", 's'),
         &key("Toggle File Browser", "cs", 'e'),

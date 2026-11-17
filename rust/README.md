@@ -58,7 +58,8 @@ editor configuration lookup to fail outside a source checkout.
 
 ## Current horizontal-scrolling work
 
-The default horizontal editor path still uses whole columns. The new retained-strip path is opt-in:
+The default horizontal editor path still uses whole columns. The new retained-strip path is opt-in,
+from **View → Pixel-Smooth Sideways Scrolling (Preview)** (saved) or the environment:
 
 ```sh
 NEOLINK_HSCROLL=1 cargo run --release --locked -p neolink -- /path/to/project
@@ -67,7 +68,9 @@ NEOLINK_HSCROLL=1 cargo run --release --locked -p neolink -- /path/to/project
 PowerShell: `$env:NEOLINK_HSCROLL='1'` before launching the executable. Unset it to return to the default.
 Wrapped text and Neovim split windows retain the existing wheel path. The experiment keeps the gutter
 fixed, composes native-resolution text, and settles before editing, clicks, resizing or file changes.
-See [horizontal-scrolling verification](docs/HORIZONTAL_SCROLL.md) for tests and why it remains opt-in.
+Matched release runs show it much smoother for steady and slow sideways motion; a flick still has
+one catch-up step at its start. It stays opt-in until checked with a physical trackpad. See
+[horizontal-scrolling verification](docs/HORIZONTAL_SCROLL.md) for the numbers and tests.
 
 ## Remaining migration work
 

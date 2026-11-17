@@ -44,6 +44,8 @@ pub struct Editor {
     /// one axis (a vertical scroll never drifts sideways: each column redraws every row).
     sideways: f64,
     horizontal: crate::horizontal::Horizontal,
+    /// The saved preference for pixel-smooth sideways scrolling.
+    pub pixel_sideways: bool,
     axis_lock: neolink_core::scroll::AxisLock,
     /// Wheel input received, in device pixels (for the benchmark).
     pub received: f64,
@@ -128,7 +130,7 @@ impl Editor {
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), pixel_sideways: false, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {
@@ -346,9 +348,9 @@ impl Editor {
         }
         self.received_x += dx;
         if dx != 0.0 && self.shows(path) && self.client.with_state(|s| s.horizontal_allowed)
-            // Opt in until matched on-screen checks can validate the new presenter path. The existing
-            // column-stepped path remains the shipping default; a passing pixel test is not a cadence test.
-            && std::env::var("NEOLINK_HSCROLL").as_deref() == Ok("1") {
+            // View > Pixel-Smooth Sideways Scrolling, off by default until a physical trackpad check
+            // (matched release runs pass, docs/HORIZONTAL_SCROLL.md); NEOLINK_HSCROLL=1/0 overrides it.
+            && match std::env::var("NEOLINK_HSCROLL").as_deref() { Ok("1") => true, Ok("0") => false, _ => self.pixel_sideways } {
             self.smoother.cancel();
             self.horizontal.input(&self.client, self.client.screen(), time, dx, period, cell.width as f64, row, column);
             if matches!(phase, ScrollPhase::Ended | ScrollPhase::MomentumEnded) { self.horizontal.release(); }

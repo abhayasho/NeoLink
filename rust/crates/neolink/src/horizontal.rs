@@ -29,6 +29,8 @@ struct Session {
     released: bool,
     settling: bool,
     highest: Option<f64>,
+    /// Recent drawn speed in columns per second (decays), so fast flicks ask Neovim further ahead.
+    speed: f64,
 }
 
 /// One non-overlapping strip, in device pixels relative to the text band's left edge.
@@ -105,6 +107,7 @@ impl Horizontal {
                 released: false,
                 settling: false,
                 highest: None,
+                speed: 0.0,
             });
             // Establish the geometry and left column without moving anything.
             self.send(client, 0, true);
@@ -233,7 +236,10 @@ impl Horizontal {
             self.finish(client);
             return Next::Idle;
         }
-        session.position += session.smoother.advance(display, period);
+        let step = session.smoother.advance(display, period);
+        session.position += step;
+        let frame_speed = step.abs() / session.width / period.max(1e-3);
+        session.speed = frame_speed.max(session.speed * 0.85);
         let bounded = session.position.clamp(0.0, session.highest.unwrap_or(f64::MAX));
         if bounded != session.position {
             session.smoother.cancel();
@@ -261,13 +267,21 @@ impl Horizontal {
         if session.pending.is_none() && !session.settling {
             let current = self.drawn / session.width;
             let left = window.after as f64;
+            // The text cannot be drawn past the newest screen, so ask while the distance already
+            // received (and what the current speed covers in a Neovim round trip) still fits in the
+            // lead. A fast flick otherwise held, then jumped several columns when the answer came.
+            let text = (window.width - window.gutter).max(1) as f64;
+            let outstanding = (session.smoother.outstanding() / session.width).abs();
+            let lead = (chunk as f64 / 2.0).max(outstanding + session.speed * 0.06).min(text * 0.6);
+            let reach = (chunk as f64).max(lead + session.speed * 0.04).min(text * 0.6).round() as i64;
             let target = if session.direction > 0
-                && left - current < chunk as f64 / 2.0
+                && left - current < lead
                 && session.highest.is_none_or(|limit| left * session.width < limit)
             {
-                Some(current.ceil() as i64 + chunk)
-            } else if session.direction < 0 && current - left < chunk as f64 / 2.0 && left > 0.0 {
-                Some((current.floor() as i64 - chunk).max(0))
+                // Each screen must overlap the previous one for the bands to cover the text.
+                Some((current.ceil() as i64 + reach).min(window.after as i64 + text as i64 - 1))
+            } else if session.direction < 0 && current - left < lead && left > 0.0 {
+                Some((current.floor() as i64 - reach).max(0).max(window.after as i64 - text as i64 + 1))
             } else {
                 None
             };

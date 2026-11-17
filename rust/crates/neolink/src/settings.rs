@@ -31,6 +31,8 @@ pub struct Settings {
     pub custom_agent_executable: String,
     pub project: Option<PathBuf>,
     pub recent_projects: Vec<PathBuf>,
+    /// View > Pixel-Smooth Sideways Scrolling (preview; off until checked with a real trackpad).
+    pub pixel_sideways: bool,
 }
 
 impl Default for Settings {
@@ -56,6 +58,7 @@ impl Default for Settings {
             custom_agent_executable: String::new(),
             project: None,
             recent_projects: Vec::new(),
+            pixel_sideways: false,
         }
     }
 }
