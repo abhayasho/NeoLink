@@ -271,14 +271,14 @@ impl App {
                     // A folder named on the command line is the project; files open as document tabs.
                     let arguments: Vec<std::path::PathBuf> = std::env::args().skip(1).filter(|argument| !argument.starts_with("--")).map(std::path::PathBuf::from).collect();
                     if let Some(folder) = arguments.iter().find(|path| path.is_dir()) {
-                        workspace.set_project(folder.canonicalize().unwrap_or_else(|_| folder.clone()));
+                        workspace.set_project(neolink_core::paths::canonical(folder));
                     }
                     if std::env::var("NEOLINK_EXPLORER").as_deref() == Ok("0") {
                         workspace.explorer.visible = false;
                     }
                     for file in arguments.iter().filter(|path| path.is_file()) {
                         workspace.open_document(file);
-                        workspace.explorer.reveal(&file.canonicalize().unwrap_or_else(|_| file.clone()));
+                        workspace.explorer.reveal(&neolink_core::paths::canonical(file));
                     }
                 }
             }

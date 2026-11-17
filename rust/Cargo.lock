@@ -1118,6 +1118,7 @@ version = "0.1.0"
 name = "neolink-nvim"
 version = "0.1.0"
 dependencies = [
+ "neolink-core",
  "rmpv",
  "serde_json",
 ]

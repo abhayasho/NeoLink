@@ -446,7 +446,7 @@ impl Runner {
         std::fs::create_dir_all(&directory).ok()?;
         let target = directory.join(name);
         std::fs::copy(&source, &target).ok()?;
-        target.canonicalize().ok()?.to_str().map(str::to_string)
+        neolink_core::paths::canonical(&target).to_str().map(str::to_string)
     }
 
     /// Waits until the frame log's newest frame shows selection `generation` (the document is on screen).

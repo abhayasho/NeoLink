@@ -38,7 +38,8 @@ impl Scratch {
         let directory = std::env::temp_dir().join(format!("neolink-nvim-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
-        Scratch(directory.canonicalize().unwrap())
+        // The spelling Neovim itself reports (no `\\?\` prefix on Windows).
+        Scratch(neolink_core::paths::canonical(&directory))
     }
 
     fn file(&self, name: &str, contents: &str) -> String {

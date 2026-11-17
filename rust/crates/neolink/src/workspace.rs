@@ -200,7 +200,7 @@ impl Workspace {
 
     /// Opens `path` in the editor, in its existing tab if it has one.
     pub fn open_document(&mut self, path: &std::path::Path) {
-        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path = neolink_core::paths::canonical(path);
         let Some(path) = path.to_str().map(str::to_string) else { return };
         if let Some(index) = self.tabs.iter().position(|tab| tab.document() == Some(path.as_str())) {
             self.select(index);
@@ -527,7 +527,7 @@ impl Signature {
 /// (a graphical launch starts in `/`, where the home folder is the better guess).
 fn project_directory() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("NEOLINK_PROJECT").map(std::path::PathBuf::from) {
-        return path.canonicalize().unwrap_or(path);
+        return neolink_core::paths::canonical(&path);
     }
     match std::env::current_dir() {
         Ok(directory) if directory.parent().is_some() => directory,

@@ -5,6 +5,7 @@
 
 pub mod analysis;
 pub mod pacer;
+pub mod paths;
 pub mod profile;
 pub mod scroll;
 pub mod stats;
