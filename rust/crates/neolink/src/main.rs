@@ -274,6 +274,8 @@ impl App {
                 "selectAll" => workspace.select_all(),
                 _ => workspace.editor_action(action),
             });
+        } else if command == "view:monitor" {
+            self.with_workspace(|workspace, _| workspace.toggle_monitor());
         } else if command == "view:renderer" {
             self.with_workspace(|workspace, _| workspace.show_renderer_information());
         } else if let Some(side) = command.strip_prefix("dock:") {

@@ -419,7 +419,7 @@ here has been used by a person, and none of it has been seen running on Windows.
 | 11 | Agents | Terminal agents in the panel or a tab, Claude's continue option, custom CLI; native ACP conversations: streaming, plan, tools with input and diffs, permissions, stop, modes, several sessions, picker, include the active file, Git review, MCP servers passed through | Nothing known against the offline test agent; not tried with the real Claude adapter |
 | 12 | Documents and projects | PDF tabs on macOS with Apple's PDF view and the Swift app's toolbar (pages, zoom, Fit) and page counter (checked with a real screenshot); Open Project, project restored, recent projects with removal and clearing; unsaved-change prompt on closing a tab and on quitting | PDF tabs on Windows (there a PDF opens in the system's viewer); external-change check before saving beyond what `neolink.lua` does; file size limits enforced by the app |
 | 13 | Look | The palette, system font for controls, SF Mono for code, SF Symbols, thin separators, compact bars; the axolotl logo and app icon (`rust/scripts/build-app.sh` makes `rust/target/NeoLink.app` with its own bundle identifier; the bundle was run from outside the repository) | Menus, sheets and alerts inside the window are drawn by the app rather than AppKit; |
-| 14 | Rendering | GPU glyph atlas, retained rows, one presenter for all panes, VSync kept, at most one commit per refresh, nothing presented when nothing changed, replayed unchanged chrome | The View menu's rendering toggles and the Performance Monitor (Renderer Information shows one line of facts, not the Swift app's panel); phase-aware glyph positions are quarter-pixel horizontally only |
+| 14 | Rendering | GPU glyph atlas, retained rows, one presenter for all panes, VSync kept, at most one commit per refresh, nothing presented when nothing changed, replayed unchanged chrome | The View menu's rendering toggles (Renderer Information shows one line of facts; the Performance Monitor is a panel in the window, not a separate one); phase-aware glyph positions are quarter-pixel horizontally only |
 | + | Terminal under the code | Control-` (also View menu): a panel under the code with any number of shells, resizable, remembered | |
 | + | Split view of code and terminal | Control-Shift-` or the panel's button: the same panel beside the code | Splitting two documents side by side |
 
@@ -441,6 +441,12 @@ scenario to run with the screen on.
 
 ## 8. Log
 
+- 2026-11-17 (afternoon, later): saved SSH passwords, PDF tabs (macOS), View > Performance Monitor. The monitor
+  found a busy loop: a frame scheduled for a later display time (pending tooltip, the monitor's own refresh) was
+  rebuilt continuously for the 2-3 refreshes before it, because the content compared against the clock instead
+  of the frame's display time (about 1,600 discarded builds a second while a tooltip was pending). Fixed in the
+  content and guarded in the frame loop. Idle measured again: 0 frames, 0.0% CPU. Typing in this session's display
+  state ("composited"): 22.6 ms new build, 22.4 ms for the build installed in the morning, so no regression.
 - 2026-11-17 (afternoon): editor scrolling made even. Measured full screen, synthetic input: steady scroll uneven
   frames 196/302 -> 2/303, jerk p95 24 px -> 0; slow scroll bursts 73 -> 0; flick on par with the terminal's
   (42/114 vs 39/123, the rest is whole-point momentum input). Two causes fixed: wheel input now goes through the

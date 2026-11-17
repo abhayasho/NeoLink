@@ -110,6 +110,7 @@ pub fn install(on_command: impl Fn(String) + Send + Sync + 'static) -> Option<Me
         &key("Reset Text Size", "c", '0'),
         &separator(),
         &plain("view:renderer", "Renderer Information\u{2026}"),
+        &plain("view:monitor", "Performance Monitor\u{2026}"),
         &separator(),
         &key("Toggle Connections Sidebar", "cx", 's'),
         &key("Toggle File Browser", "cs", 'e'),

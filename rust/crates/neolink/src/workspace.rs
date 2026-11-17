@@ -64,6 +64,18 @@ struct Closing {
     buttons: Vec<(Rect, &'static str)>,
 }
 
+/// The Performance Monitor (`PerformanceMonitor.swift`): counters sampled twice a second.
+struct Monitor {
+    sampled_at: f64,
+    frames: u64,
+    skipped: u64,
+    warm: u64,
+    render_cpu: f64,
+    main_cpu: f64,
+    lines: Vec<String>,
+    close: Rect,
+}
+
 pub struct Workspace {
     shared: Weak<Shared>,
     tabs: Vec<Tab>,
@@ -156,6 +168,8 @@ pub struct Workspace {
     pub pdf_label: String,
     on_layout: Option<Box<dyn Fn() + Send>>,
     pdf_buttons: Vec<(Rect, crate::pdf::PdfCommand)>,
+    /// The Performance Monitor (View menu) while it is open.
+    monitor: Option<Monitor>,
     /// What draws the window, for View > Renderer Information.
     pub renderer_information: String,
     /// The terminal's find bar while it is open: the text, and whether it was found.
@@ -256,6 +270,7 @@ impl Workspace {
             pressed_in: 0,
             find: None,
             renderer_information: String::new(),
+            monitor: None,
             pdf_request: Default::default(),
             pdf_commands: Vec::new(),
             pdf_label: String::new(),
@@ -1589,11 +1604,11 @@ impl Workspace {
         None
     }
 
-    fn draw_tip(&mut self, painter: &mut Painter) -> Option<f64> {
+    fn draw_tip(&mut self, painter: &mut Painter, display: f64) -> Option<f64> {
         const DELAY: f64 = 0.8;
         self.tip_shown = false;
         let (text, since) = self.tip.clone()?;
-        let now = crate::clock::now();
+        let now = display.max(crate::clock::now());
         if now < since + DELAY {
             return Some(since + DELAY);
         }
@@ -1814,6 +1829,10 @@ impl Workspace {
 
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        if self.monitor.as_ref().is_some_and(|monitor| monitor.close.contains(x, y)) {
+            self.monitor = None;
+            return true;
+        }
         self.tip = None;
         self.find = None;
         // Presses close together in time and place count up: word, then line.
@@ -2120,6 +2139,74 @@ impl Workspace {
         } else {
             self.open_document(path);
         }
+    }
+
+    /// View > Performance Monitor: opens or closes the panel.
+    pub fn toggle_monitor(&mut self) {
+        self.monitor = match self.monitor.take() {
+            Some(_) => None,
+            None => {
+                let shared = self.shared.upgrade();
+                let read = |shared: &Arc<Shared>| (shared.frames.load(std::sync::atomic::Ordering::Relaxed), shared.skipped.load(std::sync::atomic::Ordering::Relaxed), shared.warm_frames.load(std::sync::atomic::Ordering::Relaxed), shared.render_cpu(), shared.main_cpu());
+                let (frames, skipped, warm, render_cpu, main_cpu) = shared.as_ref().map(read).unwrap_or_default();
+                Some(Monitor { sampled_at: crate::clock::now(), frames, skipped, warm, render_cpu, main_cpu, lines: vec!["Sampling\u{2026}".into()], close: Rect::default() })
+            }
+        };
+    }
+
+    /// Samples the counters every half second and draws the panel. Returns when to sample next.
+    fn draw_monitor(&mut self, painter: &mut Painter, display: f64) -> Option<f64> {
+        use std::sync::atomic::Ordering;
+        let shared = self.shared.upgrade()?;
+        // Judged at this frame's display time, which is what the frame loop schedules by.
+        let now = display.max(crate::clock::now());
+        let period = self.period;
+        let monitor = self.monitor.as_mut()?;
+        let elapsed = now - monitor.sampled_at;
+        if elapsed >= 0.5 {
+            let (frames, skipped, warm) = (shared.frames.load(Ordering::Relaxed), shared.skipped.load(Ordering::Relaxed), shared.warm_frames.load(Ordering::Relaxed));
+            let (render_cpu, main_cpu) = (shared.render_cpu(), shared.main_cpu());
+            let rate = |now: u64, then: u64| now.saturating_sub(then) as f64 / elapsed;
+            let displayed: Vec<f64> = shared.displayed.lock().iter().copied().collect();
+            let mut intervals: Vec<f64> = displayed.windows(2).map(|pair| (pair[1] - pair[0]) * 1000.0).filter(|interval| *interval > 0.0 && *interval < 1000.0).collect();
+            intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let percentile = |p: f64| intervals.get(((intervals.len() as f64 - 1.0) * p).round() as usize).copied().unwrap_or(0.0);
+            let cost = f64::from_bits(shared.build_cost.load(Ordering::Relaxed));
+            monitor.lines = vec![
+                format!("Display: {:.0} Hz ({:.2} ms a refresh)", 1.0 / period.max(0.001), period * 1000.0),
+                format!("Presented frames: {:.1}/s, of which {:.1}/s kept the display warm", rate(frames, monitor.frames), rate(warm, monitor.warm)),
+                format!("Frames built but unchanged (not presented): {:.1}/s", rate(skipped, monitor.skipped)),
+                if intervals.is_empty() { "Presented intervals: none yet".to_string() } else { format!("Presented intervals (last {}): p50 {:.1} ms \u{b7} p95 {:.1} ms \u{b7} max {:.1} ms", intervals.len(), percentile(0.5), percentile(0.95), intervals.last().copied().unwrap_or(0.0)) },
+                format!("Last frame built in {cost:.2} ms"),
+                format!("CPU: render thread {:.1}% \u{b7} main thread {:.1}% of one core", (render_cpu - monitor.render_cpu) / elapsed * 100.0, (main_cpu - monitor.main_cpu) / elapsed * 100.0),
+                String::new(),
+                "Frames are presented only when something changed; an idle window presents nothing.".into(),
+                "Keep-warm frames follow input for a few seconds so the display stays at full rate.".into(),
+                "This panel itself causes two frames a second.".into(),
+            ];
+            *monitor = Monitor { sampled_at: now, frames, skipped, warm, render_cpu, main_cpu, lines: std::mem::take(&mut monitor.lines), close: monitor.close };
+        }
+        let next = monitor.sampled_at + 0.5;
+        let lines = monitor.lines.clone();
+        let mut ui = Ui { painter, scale: self.scale };
+        let (width, row, pad) = (ui.px(540.0).min(self.center.width - ui.px(24.0)), ui.px(16.0), ui.px(14.0));
+        let height = pad * 2.0 + ui.px(22.0) + lines.len() as f32 * row;
+        let panel = Rect::new(self.center.right() - width - ui.px(12.0), self.center.y + ui.px(44.0), width, height);
+        ui.shadow(panel, 8.0);
+        ui.rounded(panel, 8.0, theme::rgb(0x202020));
+        ui.outline(panel, 8.0, theme::white(0.12));
+        ui.text("Performance", panel.x + pad, panel.y + pad + ui.px(8.0), 12.0, 600, false, theme::TEXT_PRIMARY);
+        let close = Rect::new(panel.right() - pad - ui.px(16.0), panel.y + pad, ui.px(16.0), ui.px(16.0));
+        ui.icon("xmark", 10.0, IconWeight::Semibold, close.x + close.width * 0.5, close.y + close.height * 0.5, theme::TEXT_SECONDARY);
+        let mut y = panel.y + pad + ui.px(22.0);
+        for line in &lines {
+            ui.text(line, panel.x + pad, y + row * 0.5, 11.0, 400, true, theme::TEXT_SECONDARY);
+            y += row;
+        }
+        if let Some(monitor) = &mut self.monitor {
+            monitor.close = close;
+        }
+        Some(next)
     }
 
     pub fn show_renderer_information(&mut self) {
@@ -2819,6 +2906,13 @@ impl Content for Workspace {
             };
         }
         self.draw_find(painter);
+        if let Some(at) = self.draw_monitor(painter, frame.display) {
+            next = match next {
+                Next::Idle => Next::At(at),
+                Next::At(other) => Next::At(other.min(at)),
+                Next::Soon => Next::Soon,
+            };
+        }
         self.draw_creation(painter);
         self.draw_closing(painter);
         self.draw_recent(painter);
@@ -2852,7 +2946,7 @@ impl Content for Workspace {
             menu.draw(&mut ui, self.window);
             self.menu = Some(menu);
         }
-        if let Some(at) = self.draw_tip(painter) {
+        if let Some(at) = self.draw_tip(painter, frame.display) {
             next = match next {
                 Next::Idle => Next::At(at),
                 Next::At(other) => Next::At(other.min(at)),
@@ -2892,6 +2986,9 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
+        if let Some(monitor) = &self.monitor {
+            signature.add(monitor.sampled_at.to_bits());
+        }
         signature.add(self.strip_scroll.to_bits() as u64).add(self.connections.signature()).text(&self.pdf_label);
         if let Some((query, found)) = &self.find {
             signature.add(0x46494E44 + *found as u64).text(query);
@@ -2901,7 +2998,7 @@ impl Content for Workspace {
         }
         if let Some((text, since)) = &self.tip {
             // The same text before and after its delay is a different picture.
-            signature.add((crate::clock::now() >= since + 0.8) as u64 + 3).text(text).add(self.pointer.0.to_bits() as u64);
+            signature.add((frame.display.max(crate::clock::now()) >= since + 0.8) as u64 + 3).text(text).add(self.pointer.0.to_bits() as u64);
         }
         signature.add(self.recent.len() as u64 ^ (self.recent_sheet.is_some() as u64) << 20);
         signature.add(self.explorer_points.to_bits() as u64).add(self.agent.signature()).add(self.dock.signature());

@@ -30,6 +30,10 @@ pub struct Shared {
     pub skipped: AtomicU64,
     /// When the user last did something (bits of an `f64` on the app's clock).
     last_input: AtomicU64,
+    /// When the last presented frames reached the display (the Performance Monitor's intervals).
+    pub displayed: parking_lot::Mutex<std::collections::VecDeque<f64>>,
+    /// How long the last frame took to build, in milliseconds (`f64` bits).
+    pub build_cost: AtomicU64,
     /// CPU seconds used by the render thread and by the main thread, as last published (`f64` bits).
     render_cpu: AtomicU64,
     main_cpu: AtomicU64,
@@ -164,6 +168,8 @@ impl Shared {
             frames: AtomicU64::new(0),
             warm_frames: AtomicU64::new(0),
             skipped: AtomicU64::new(0),
+            displayed: parking_lot::Mutex::new(std::collections::VecDeque::new()),
+            build_cost: AtomicU64::new(0f64.to_bits()),
             last_input: AtomicU64::new(0f64.to_bits()),
             render_cpu: AtomicU64::new(0f64.to_bits()),
             main_cpu: AtomicU64::new(0f64.to_bits()),
@@ -268,10 +274,16 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
     let mut presented_size = (0u32, 0u32);
 
     loop {
-        if shared.log.is_recording() {
-            shared.render_cpu.store(clock::thread_cpu_seconds().to_bits(), Ordering::Relaxed);
-        }
+        // For the benchmark and the Performance Monitor.
+        shared.render_cpu.store(clock::thread_cpu_seconds().to_bits(), Ordering::Relaxed);
         for report in presenter.take_presented() {
+            {
+                let mut displayed = shared.displayed.lock();
+                if displayed.len() >= 240 {
+                    displayed.pop_front();
+                }
+                displayed.push_back(report.displayed);
+            }
             let latch = latches.iter().position(|entry| entry.0 == report.frame).map(|i| latches.swap_remove(i).1).unwrap_or(0.0);
             if exact {
                 pacer.presented(report.submitted, latch, report.displayed);
@@ -374,6 +386,7 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
         };
         let again = built.next;
         stages[0] = ((clock::now() - build_started) * 1000.0) as f32;
+        shared.build_cost.store((stages[0] as f64).to_bits(), Ordering::Relaxed);
         if let Some((path, after)) = &capture {
             if clock::now() - started_at >= *after {
                 match crate::capture::write_png(&gpu, &mut renderer, &scene, size, background, path) {
@@ -435,6 +448,9 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
         match again {
             Next::Idle => {}
             Next::Soon => shared.dirty.store(true, Ordering::Release),
+            // A change already due by this frame's display time is drawn at the next refresh, not
+            // rebuilt again and again before it.
+            Next::At(at) if at <= display => shared.dirty.store(true, Ordering::Release),
             Next::At(at) => scheduled = Some(scheduled.map_or(at, |earlier: f64| earlier.min(at))),
         }
     }
