@@ -25,6 +25,8 @@ pub enum Action {
     /// An explorer row's context-menu choice: what, the row's path, whether it is a folder.
     File(&'static str, std::path::PathBuf, bool),
     /// Show this agent session in the panel.
+    /// A saved connection's context-menu choice: what, the connection's identity.
+    Connection(&'static str, String),
     AgentSession(u64),
     /// Switch the shown conversation's mode.
     AgentMode(String),

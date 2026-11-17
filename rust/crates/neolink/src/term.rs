@@ -146,6 +146,8 @@ pub struct Terminal {
     keys: std::collections::HashMap<i32, u64>,
     keys_state: Option<(u64, usize, usize, usize, bool, bool)>,
     pub fallback_title: String,
+    /// `user@host:port` if this is an SSH session.
+    pub remote: Option<String>,
     /// The shell's process, to ask the system for its working directory.
     child: Option<u32>,
     master: Option<i32>,
@@ -189,6 +191,11 @@ fn window_size(columns: usize, lines: usize, cell: CellMetrics) -> WindowSize {
 impl Terminal {
     /// Starts the user's shell on a new PTY.
     pub fn spawn(shared: &Arc<Shared>, columns: usize, lines: usize, cell: CellMetrics, directory: Option<std::path::PathBuf>, id: u64) -> std::io::Result<Terminal> {
+        Terminal::spawn_program(shared, columns, lines, cell, directory, id, None)
+    }
+
+    /// Starts `program` (with arguments) on a new PTY instead of the user's shell.
+    pub fn spawn_program(shared: &Arc<Shared>, columns: usize, lines: usize, cell: CellMetrics, directory: Option<std::path::PathBuf>, id: u64, program: Option<(String, Vec<String>)>) -> std::io::Result<Terminal> {
         let size = window_size(columns, lines, cell);
         let listener = Listener {
             shared: Arc::downgrade(shared),
@@ -204,7 +211,8 @@ impl Terminal {
         let mut env = std::collections::HashMap::new();
         env.insert("TERM_PROGRAM".to_string(), "NeoLink".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
-        let options = tty::Options { shell: None, working_directory: directory, drain_on_exit: false, env, ..tty::Options::default() };
+        let shell = program.map(|(program, arguments)| tty::Shell::new(program, arguments));
+        let options = tty::Options { shell, working_directory: directory, drain_on_exit: false, env, ..tty::Options::default() };
         let start_directory = options.working_directory.clone();
         let pty = tty::new(&options, size, id)?;
         // The PTY's descriptor names the foreground process (the shell at a prompt; on macOS the
@@ -241,6 +249,7 @@ impl Terminal {
             keys: std::collections::HashMap::new(),
             keys_state: None,
             fallback_title: "shell".to_string(),
+            remote: None,
             child,
             master,
             directory: start_directory,

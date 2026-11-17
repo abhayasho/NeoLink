@@ -120,6 +120,9 @@ pub struct Workspace {
     custom_agent: (String, String),
     agent_rect: Rect,
     dragging_agent: bool,
+    /// Saved SSH connections, at the far left.
+    connections: crate::connections::Connections,
+    connections_rect: Rect,
     /// The terminal docked under or beside the code.
     dock: crate::dock::Dock,
     dock_rect: Rect,
@@ -215,6 +218,8 @@ impl Workspace {
             custom_agent: ("My agent".into(), String::new()),
             agent_rect: Rect::default(),
             dragging_agent: false,
+            connections: crate::connections::Connections::new(),
+            connections_rect: Rect::default(),
             dock: crate::dock::Dock::new(),
             dock_rect: Rect::default(),
             dragging_dock: false,
@@ -269,8 +274,12 @@ impl Workspace {
         let top = self.header.bottom() + line;
         let bottom = self.footer.y - line;
         let explorer_width = if self.explorer.visible { px(self.explorer_points).min(width * 0.5) } else { 0.0 };
-        self.sidebar = Rect::new(0.0, top, explorer_width, (bottom - top).max(1.0));
-        let center_x = if explorer_width > 0.0 { explorer_width + line } else { 0.0 };
+        // The connections sidebar, then the file browser (`ContentView`'s split view).
+        let connections_width = if self.connections.visible { px(crate::connections::WIDTH_POINTS).min(width * 0.3) } else { 0.0 };
+        self.connections_rect = Rect::new(0.0, top, connections_width, (bottom - top).max(1.0));
+        let explorer_x = if connections_width > 0.0 { connections_width + line } else { 0.0 };
+        self.sidebar = Rect::new(explorer_x, top, explorer_width, (bottom - top).max(1.0));
+        let center_x = if explorer_width > 0.0 { explorer_x + explorer_width + line } else { explorer_x };
         // The agent panel takes its width from the right (`ContentView`: 240 to 480 points).
         let agent_width = if self.agent.visible { px(self.agent.width_points).min((width - center_x) * 0.6) } else { 0.0 };
         self.agent_rect = Rect::new(width - agent_width, top, agent_width, (bottom - top).max(1.0));
@@ -535,6 +544,52 @@ impl Workspace {
         }
     }
 
+    pub fn toggle_connections(&mut self) {
+        self.connections.visible = !self.connections.visible;
+        if !self.connections.visible {
+            self.connections.search_focused = false;
+        }
+    }
+
+    /// Opens the "New connection" sheet (Shift-Command-N).
+    pub fn new_connection(&mut self) {
+        self.menu = None;
+        self.connections.visible = true;
+        self.connections.edit(None);
+    }
+
+    /// Opens an SSH session to a saved connection in a new tab, using the system's `ssh`: it asks for
+    /// passwords and host-key confirmations in the terminal itself.
+    fn open_connection(&mut self, connection: &neolink_core::sessions::Connection) {
+        let Some(shared) = self.shared.upgrade() else { return };
+        let id = self.next_id;
+        self.next_id += 1;
+        match Terminal::spawn_program(&shared, self.grid.0, self.grid.1, self.cell, home_directory(), id, Some(("ssh".to_string(), connection.ssh_arguments()))) {
+            Ok(mut terminal) => {
+                terminal.fallback_title = connection.name.clone();
+                terminal.remote = Some(format!("{}:{}", connection.address(), connection.port));
+                self.tabs.push(Tab { id, pane: Pane::Terminal(terminal) });
+                self.select(self.tabs.len() - 1);
+            }
+            Err(error) => self.notice = Some(format!("Could not start ssh: {error}")),
+        }
+    }
+
+    fn connections_outcome(&mut self, outcome: crate::connections::Outcome) {
+        use crate::connections::Outcome;
+        match outcome {
+            Outcome::Nothing => {}
+            Outcome::Close => self.toggle_connections(),
+            Outcome::LocalTerminal => {
+                if let Some(shared) = self.shared.upgrade() {
+                    let _ = self.new_tab(&shared);
+                }
+            }
+            Outcome::Open(connection) => self.open_connection(&connection),
+            Outcome::Menu(menu) => self.menu = Some(menu),
+        }
+    }
+
     /// Sends the prompt of the shown conversation, with the active file as its context.
     pub fn submit_prompt(&mut self) -> bool {
         if !self.agent.composing() {
@@ -567,6 +622,7 @@ impl Workspace {
     pub fn settings(&self, mut settings: crate::settings::Settings) -> crate::settings::Settings {
         settings.font_points = self.font_points;
         settings.explorer_visible = self.explorer.visible;
+        settings.connections_visible = self.connections.visible;
         settings.explorer_points = self.explorer_points;
         settings.compact_folders = self.explorer.compact();
         settings.show_hidden = self.explorer.show_hidden();
@@ -589,6 +645,7 @@ impl Workspace {
         self.font_points = settings.font_points.clamp(MIN_FONT_POINTS, MAX_FONT_POINTS);
         self.explorer_points = settings.explorer_points.clamp(200.0, 400.0);
         self.agent.visible = settings.agent_visible;
+        self.connections.visible = settings.connections_visible;
         self.agent.width_points = settings.agent_points.clamp(240.0, 480.0);
         self.dock.side = if settings.dock_right { crate::dock::Side::Right } else { crate::dock::Side::Bottom };
         self.dock.height_points = settings.dock_height.clamp(80.0, 900.0);
@@ -846,6 +903,10 @@ impl Workspace {
         }
         let (cell, period) = (self.cell, self.period);
         self.tip = None;
+        if self.connections.contains(self.pointer.0, self.pointer.1) {
+            self.connections.scroll(delta_y as f32);
+            return;
+        }
         if self.strip.contains(self.pointer.0, self.pointer.1) {
             // Either axis moves the tabs sideways.
             let delta = if _delta_x.abs() > delta_y.abs() { _delta_x } else { delta_y };
@@ -908,6 +969,9 @@ impl Workspace {
         if let (Some(part), Some(closing)) = (name.strip_prefix("closing:"), &self.closing) {
             return closing.buttons.iter().find(|(_, what)| *what == part).map(|(rect, _)| middle(*rect));
         }
+        if let Some(part) = name.strip_prefix("connections:") {
+            return self.connections.control_rect(part).map(middle);
+        }
         if name == "editor" {
             return Some(middle(self.editor_pane));
         }
@@ -939,6 +1003,9 @@ impl Workspace {
             if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.menu = None;
             }
+            return true;
+        }
+        if (self.connections.sheet_is_open() || self.connections.search_focused) && self.menu.is_none() && self.connections.key(key, text) {
             return true;
         }
         if self.recent_sheet.is_some() {
@@ -1253,6 +1320,12 @@ impl Workspace {
         if self.menu.is_some() || self.creation.is_some() || self.closing.is_some() || self.search.is_some() || self.git.is_some() {
             return false;
         }
+        if self.connections.contains(x, y) {
+            let outcome = self.connections.click(x, y, true);
+            let opened = matches!(outcome, crate::connections::Outcome::Menu(_));
+            self.connections_outcome(outcome);
+            return opened;
+        }
         let Some((path, is_directory)) = self.explorer.row_under(x, y) else { return false };
         self.explorer.selected = Some(path.clone());
         self.explorer.focused = true;
@@ -1465,6 +1538,16 @@ impl Workspace {
             Action::NewFile => self.begin_create(false),
             Action::NewFolder => self.begin_create(true),
             Action::File(what, path, is_directory) => self.file_action(what, path, is_directory),
+            Action::Connection(what, id) => match what {
+                "open" => {
+                    if let Some(connection) = self.connections.find(&id) {
+                        self.open_connection(&connection);
+                    }
+                }
+                "edit" => self.connections.edit(Some(&id)),
+                "remove" => self.connections.remove(&id),
+                _ => {}
+            },
             Action::AgentSession(id) => self.agent.select(id),
             Action::AgentMode(mode) => self.agent.set_mode(&mode),
             Action::GitCreateBranch | Action::GitSwitch(_) | Action::GitStash(_) => {
@@ -1522,6 +1605,10 @@ impl Workspace {
             }
             return true;
         }
+        if self.connections.sheet_is_open() {
+            self.connections.click_sheet(x, y);
+            return true;
+        }
         if self.recent_sheet.is_some() {
             self.click_recent(x, y);
             return true;
@@ -1558,6 +1645,16 @@ impl Workspace {
             }
             return true;
         }
+        if self.connections.contains(x, y) {
+            self.explorer.focused = false;
+            self.explorer.filter_focused = false;
+            self.agent.focused = false;
+            self.dock.focused = false;
+            let outcome = self.connections.click(x, y, false);
+            self.connections_outcome(outcome);
+            return true;
+        }
+        self.connections.search_focused = false;
         if self.over_divider(x, y) {
             self.dragging_divider = true;
             return true;
@@ -1659,6 +1756,7 @@ impl Workspace {
                 }
                 "files" => self.toggle_explorer(),
                 "agent-panel" => self.toggle_agent_panel(),
+                "connections" => self.toggle_connections(),
                 "agent" => self.open_launcher(),
                 "quick-open" => self.open_search(false),
                 "find" => self.open_search(true),
@@ -1666,7 +1764,6 @@ impl Workspace {
                 // Quick Open, Find in Files, Source Control, connections, the agent panel and the
                 // agent launcher do not exist in this build yet (PLAN.md).
                 _ => self.notice = Some(format!("{} is not available in this build yet.", match action {
-                    "connections" => "The connections sidebar",
                     _ => "This",
                 })),
             }
@@ -1856,7 +1953,7 @@ impl Workspace {
         }
         if self.dragging_divider {
             // `ContentView`: the file browser is 200 to 400 points wide.
-            let points = (x / self.scale).clamp(200.0, 400.0).round();
+            let points = ((x - self.sidebar.x) / self.scale).clamp(200.0, 400.0).round();
             let changed = points != self.explorer_points;
             self.explorer_points = points;
             return changed;
@@ -1953,10 +2050,11 @@ impl Workspace {
         let mut right = rect.right() - ui.px(10.0);
         let explorer_shown = self.explorer.visible;
         let agent_shown = self.agent.visible;
+        let connections_shown = self.connections.visible;
         for (symbol, action, lit) in [
             ("sidebar.right", "agent-panel", agent_shown),
             ("folder", "files", explorer_shown),
-            ("sidebar.left", "connections", false),
+            ("sidebar.left", "connections", connections_shown),
             ("arrow.triangle.branch", "git", false),
             ("magnifyingglass", "find", false),
             ("doc.text.magnifyingglass", "quick-open", false),
@@ -2067,7 +2165,16 @@ impl Workspace {
         let dot = ui.px(5.0);
         let x = rect.x + ui.px(12.0);
         ui.painter.scene.fill(x, middle - dot * 0.5, dot, dot, if running { theme::ACCENT } else { theme::TEXT_SECONDARY });
-        ui.text(if running { "Local shell" } else { "Session ended" }, x + dot + ui.px(7.0), middle, 10.0, 500, false, theme::TEXT_SECONDARY);
+        let remote = self.tabs.get(self.shown).and_then(Tab::terminal).and_then(|terminal| terminal.remote.clone());
+        ui.text(if !running { "Session ended" } else if remote.is_some() { "SSH" } else { "Local shell" }, x + dot + ui.px(7.0), middle, 10.0, 500, false, theme::TEXT_SECONDARY);
+        if let Some(remote) = remote {
+            // A remote session shows where it is connected, not a local folder.
+            let right = rect.right() - ui.px(12.0);
+            let fitted = ui.fit_middle(&remote, rect.width * 0.5, 10.0, 400, true);
+            let width = ui.text_right(&fitted, right, middle, 10.0, 400, true, theme::TEXT_SECONDARY);
+            ui.icon("network", 10.0, IconWeight::Regular, right - width - ui.px(7.0 + 6.0), middle, theme::TEXT_SECONDARY);
+            return;
+        }
         let directory = self.shown_directory.clone();
         let right = rect.right() - ui.px(12.0);
         let fitted = ui.fit_middle(&directory, rect.width * 0.5, 10.0, 400, true);
@@ -2334,6 +2441,11 @@ impl Content for Workspace {
                 (Next::Idle, Next::Idle) => Next::Idle,
             };
         }
+        if self.connections.visible {
+            let rect = self.connections_rect;
+            let shown = self.tabs.get(self.shown).and_then(Tab::terminal).and_then(|terminal| terminal.remote.clone());
+            self.connections.build(painter, rect, frame.scale, shown.as_deref());
+        }
         if self.dock.visible {
             let (rect, cell, window_focused) = (self.dock_rect, self.cell, self.focused);
             let dock_next = self.dock.build(painter, rect, frame.scale, cell, window_focused, frame.display, period);
@@ -2358,6 +2470,7 @@ impl Content for Workspace {
         self.draw_creation(painter);
         self.draw_closing(painter);
         self.draw_recent(painter);
+        self.connections.draw_sheet(painter, frame.scale, self.window);
         if let Some(mut launcher) = self.launcher.take() {
             let mut ui = Ui { painter, scale: self.scale };
             launcher.draw(&mut ui, self.window);
@@ -2405,7 +2518,7 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
-        signature.add(self.strip_scroll.to_bits() as u64);
+        signature.add(self.strip_scroll.to_bits() as u64).add(self.connections.signature());
         if let Some((text, since)) = &self.tip {
             // The same text before and after its delay is a different picture.
             signature.add((crate::clock::now() >= since + 0.8) as u64 + 3).text(text).add(self.pointer.0.to_bits() as u64);

@@ -219,6 +219,57 @@ fn interface_family(fonts: &FontSystem) -> String {
 
 impl TextSystem {
     /// The icon `name` (an SF Symbol name) at `points` for a display of `scale` pixels per point.
+    /// A PNG file scaled to `pixels` square, as a colour sprite. `None` if it cannot be read.
+    pub fn image(&mut self, queue: &wgpu::Queue, path: &std::path::Path, pixels: u32) -> Option<Sprite> {
+        let key = (format!("image:{}", path.display()), (pixels as f32).to_bits(), crate::icons::IconWeight::Regular);
+        if let Some(sprite) = self.icons.get(&key) {
+            return *sprite;
+        }
+        let sprite = (|| {
+            let mut decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).ok()?));
+            decoder.set_transformations(png::Transformations::normalize_to_color8());
+            let mut reader = decoder.read_info().ok()?;
+            let mut buffer = vec![0u8; reader.output_buffer_size()?];
+            let info = reader.next_frame(&mut buffer).ok()?;
+            let channels = match info.color_type {
+                png::ColorType::Rgba => 4,
+                png::ColorType::Rgb => 3,
+                _ => return None,
+            };
+            let (width, height) = (info.width as usize, info.height as usize);
+            let size = pixels.max(1) as usize;
+            // Average each destination pixel's source box; store premultiplied.
+            let mut data = vec![0u8; size * size * 4];
+            for y in 0..size {
+                let (from_y, to_y) = (y * height / size, ((y + 1) * height / size).max(y * height / size + 1).min(height));
+                for x in 0..size {
+                    let (from_x, to_x) = (x * width / size, ((x + 1) * width / size).max(x * width / size + 1).min(width));
+                    let mut sum = [0u64; 4];
+                    for source_y in from_y..to_y {
+                        for source_x in from_x..to_x {
+                            let at = (source_y * width + source_x) * channels;
+                            let alpha = if channels == 4 { buffer[at + 3] as u64 } else { 255 };
+                            for channel in 0..3 {
+                                sum[channel] += buffer[at + channel] as u64 * alpha;
+                            }
+                            sum[3] += alpha;
+                        }
+                    }
+                    let count = ((to_y - from_y) * (to_x - from_x)) as u64;
+                    let at = (y * size + x) * 4;
+                    for channel in 0..3 {
+                        data[at + channel] = (sum[channel] / (count * 255)) as u8;
+                    }
+                    data[at + 3] = (sum[3] / count) as u8;
+                }
+            }
+            let (x, y) = self.atlas.upload(queue, SpriteKind::Color, size as u32, size as u32, &data)?;
+            Some(Sprite { kind: SpriteKind::Color, atlas_x: x as u16, atlas_y: y as u16, width: size as u16, height: size as u16, left: 0, top: 0 })
+        })();
+        self.icons.insert(key, sprite);
+        sprite
+    }
+
     pub fn icon(&mut self, queue: &wgpu::Queue, name: &str, points: f32, weight: crate::icons::IconWeight, scale: f32) -> Icon {
         let pixels = points * scale;
         let key = (name.to_string(), pixels.to_bits(), weight);

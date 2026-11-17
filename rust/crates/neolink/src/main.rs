@@ -3,6 +3,7 @@ mod bench;
 mod capture;
 mod chrome;
 mod clock;
+mod connections;
 mod dock;
 mod editor;
 mod explorer;
@@ -269,7 +270,7 @@ impl App {
             "t" => self.new_tab(),
             "w" if shifted => event_loop.exit(),
             "n" if shifted => {
-                self.with_workspace(|workspace, _| workspace.unavailable("SSH connections"));
+                self.with_workspace(|workspace, _| workspace.new_connection());
                 self.invalidate();
             }
             "a" if controlled => {
@@ -277,7 +278,7 @@ impl App {
                 self.invalidate();
             }
             "s" if controlled => {
-                self.with_workspace(|workspace, _| workspace.unavailable("The connections sidebar"));
+                self.with_workspace(|workspace, _| workspace.toggle_connections());
                 self.invalidate();
             }
             "b" if controlled => {

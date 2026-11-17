@@ -12,6 +12,7 @@ pub mod paths;
 pub mod profile;
 pub mod scroll;
 pub mod search;
+pub mod sessions;
 pub mod stats;
 pub mod tabs;
 pub mod tree;
