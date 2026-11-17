@@ -1,0 +1,10 @@
+[package]
+name = "neolink-nvim"
+description = "Neovim as NeoLink's editor engine: msgpack-RPC framing and the ext_linegrid screen model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rmpv = "1.3"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/neolink-core", "crates/neolink"]
+members = ["crates/neolink-core", "crates/neolink-nvim", "crates/neolink"]
 exclude = ["spikes"]
 
 [workspace.package]
