@@ -130,6 +130,14 @@ pub struct Workspace {
     recent: Vec<std::path::PathBuf>,
     recent_sheet: Option<Vec<(Rect, String)>>,
     explorer_options: Option<(bool, bool, bool, bool, bool)>,
+    /// How far the tab strip is scrolled, its content width, and the tab to bring into view.
+    strip_scroll: f32,
+    strip_content: f32,
+    strip_reveal: Option<u64>,
+    /// The help text for what the pointer rests on, since when, and whether it is showing.
+    tip: Option<(String, f64)>,
+    tip_shown: bool,
+    tip_changed: bool,
     /// A file or folder copied in the explorer ("Copy", then "Paste Here").
     copied: Option<std::path::PathBuf>,
     /// The explorer's width in points, and whether its edge is being dragged.
@@ -206,6 +214,12 @@ impl Workspace {
             recent: Vec::new(),
             recent_sheet: None,
             explorer_options: None,
+            strip_scroll: 0.0,
+            strip_content: 0.0,
+            strip_reveal: None,
+            tip: None,
+            tip_shown: false,
+            tip_changed: false,
             copied: None,
             explorer_points: crate::explorer::WIDTH_POINTS,
             dragging_divider: false,
@@ -434,6 +448,7 @@ impl Workspace {
     /// Makes the active tab's pane the one to show (a document asks Neovim for its buffer).
     fn reselect(&mut self) {
         self.selection += 1;
+        self.strip_reveal = self.tabs.get(self.active).map(|tab| tab.id);
         if let Some(path) = self.active_document() {
             // `onChange(of: activeFileURL)`: the tree follows the active file while the option is on.
             if self.explorer.reveal_active {
@@ -815,6 +830,13 @@ impl Workspace {
             return;
         }
         let (cell, period) = (self.cell, self.period);
+        self.tip = None;
+        if self.strip.contains(self.pointer.0, self.pointer.1) {
+            // Either axis moves the tabs sideways.
+            let delta = if _delta_x.abs() > delta_y.abs() { _delta_x } else { delta_y };
+            self.strip_scroll -= delta as f32 * self.scale;
+            return;
+        }
         if self.dock.contains(self.pointer.0, self.pointer.1) {
             if let Some(terminal) = self.dock.terminal() {
                 terminal.scroll_input(time, delta_y, phase, cell, period);
@@ -1242,6 +1264,88 @@ impl Workspace {
         true
     }
 
+    /// The help text for what is under `(x, y)`, as the Swift app's `.help(...)` texts.
+    fn tip_at(&self, x: f32, y: f32) -> Option<String> {
+        if self.menu.is_some() || self.creation.is_some() || self.search.is_some() || self.git.is_some() || self.closing.is_some() || self.launcher.is_some() || self.recent_sheet.is_some() {
+            return None;
+        }
+        if let Some((_, action)) = self.header_buttons.iter().find(|(rect, _)| rect.contains(x, y)) {
+            return Some(
+                match *action {
+                    "project" => "Open project and remember folder access",
+                    "agent" => "Launch a coding agent (\u{2303}\u{2318}A)",
+                    "quick-open" => "Quick Open (\u{2318}P)",
+                    "find" => "Find in Files (\u{21e7}\u{2318}F)",
+                    "git" => "Source Control (\u{21e7}\u{2318}G)",
+                    "connections" => "Toggle connections sidebar (\u{2303}\u{2318}S)",
+                    "files" => "Toggle file browser (\u{21e7}\u{2318}E)",
+                    "agent-panel" => "Toggle agent panel (\u{2303}\u{2318}B)",
+                    _ => return None,
+                }
+                .to_string(),
+            );
+        }
+        if self.close_rects.iter().any(|rect| rect.contains(x, y)) {
+            return Some("Close tab".into());
+        }
+        if let Some(index) = self.tab_rects.iter().position(|rect| rect.contains(x, y)) {
+            return self.tabs.get(index).map(|tab| match &tab.pane {
+                Pane::Document { path, .. } => path.clone(),
+                Pane::Terminal(terminal) => terminal.title(),
+            });
+        }
+        if self.plus_rect.contains(x, y) {
+            return Some("New local terminal (\u{2318}T)".into());
+        }
+        if self.shown == self.active && self.active_is_document() {
+            if let Some((_, what)) = self.toolbar_buttons.iter().find(|(rect, _)| rect.contains(x, y)) {
+                return Some(
+                    match *what {
+                        "save" => "Save file (\u{2318}S)",
+                        "run" => "Save and run file in a terminal",
+                        "diagnostics" => "Show diagnostics",
+                        "size" => "Text size",
+                        "code" => "Code actions",
+                        _ => return None,
+                    }
+                    .to_string(),
+                );
+            }
+        }
+        for (name, text) in [("explorer-new", "Create file or folder"), ("explorer-collapse", "Collapse all folders"), ("explorer-refresh", "Refresh files"), ("explorer-options", "File browser options"), ("explorer-filter", "Filter loaded branches. Use \u{2318}P to search the entire project.")] {
+            if self.explorer.visible && self.explorer.control_rect(name).is_some_and(|rect| rect.contains(x, y)) {
+                return Some(text.into());
+            }
+        }
+        None
+    }
+
+    fn draw_tip(&mut self, painter: &mut Painter) -> Option<f64> {
+        const DELAY: f64 = 0.8;
+        self.tip_shown = false;
+        let (text, since) = self.tip.clone()?;
+        let now = crate::clock::now();
+        if now < since + DELAY {
+            return Some(since + DELAY);
+        }
+        self.tip_shown = true;
+        let mut ui = Ui { painter, scale: self.scale };
+        let text = ui.fit_middle(&text, ui.px(520.0), 11.0, 400, false);
+        let width = ui.measure(&text, 11.0, 400, false) + ui.px(14.0);
+        let height = ui.px(22.0);
+        let x = (self.pointer.0 + ui.px(8.0)).min(self.window.0 - width - ui.px(6.0)).max(ui.px(6.0));
+        let mut y = self.pointer.1 + ui.px(20.0);
+        if y + height > self.window.1 - ui.px(4.0) {
+            y = self.pointer.1 - height - ui.px(8.0);
+        }
+        let rect = Rect::new(x.round(), y.round(), width, height);
+        ui.shadow(rect, 5.0);
+        ui.rounded(rect, 5.0, theme::rgb(0x2C2C2C));
+        ui.outline(rect, 5.0, theme::white(0.14));
+        ui.text(&text, rect.x + ui.px(7.0), rect.y + height * 0.5, 11.0, 400, false, theme::TEXT_PRIMARY);
+        None
+    }
+
     /// Which pointer the window should show at `(x, y)`: `true` for the column-resize arrows.
     /// The pointer should be the row-resize arrows (the top edge of the terminal under the code).
     pub fn wants_row_resize_cursor(&self, x: f32, y: f32) -> bool {
@@ -1384,6 +1488,7 @@ impl Workspace {
 
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        self.tip = None;
         if let Some(menu) = self.menu.take() {
             if let Some(action) = menu.action_at(x, y) {
                 self.perform(action);
@@ -1591,6 +1696,15 @@ impl Workspace {
     /// The pointer moved to `(x, y)`. Returns `true` if a hover highlight changed.
     pub fn pointer(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
+        // The help text follows what the pointer rests on; moving to something else starts over.
+        let tip = self.tip_at(x, y);
+        let was_shown = self.tip_shown;
+        if tip.as_deref() != self.tip.as_ref().map(|tip| tip.0.as_str()) {
+            self.tip = tip.map(|text| (text, crate::clock::now()));
+            if was_shown || self.tip.is_some() {
+                self.tip_changed = true;
+            }
+        }
         if self.dragging_dock {
             use crate::dock::Side;
             let changed;
@@ -1636,7 +1750,7 @@ impl Workspace {
         self.hover = hover;
         self.hover_close = hover_close;
         changed |= self.explorer.pointer(x, y);
-        changed
+        changed | std::mem::take(&mut self.tip_changed)
     }
 
     /// The shown pane's scroll position and received input, in lines.
@@ -1737,9 +1851,9 @@ impl Workspace {
         self.close_rects.clear();
         let middle = strip.y + strip.height * 0.5;
         let line = ui.px(1.0).max(1.0);
-        let mut x = strip.x;
         let plus_width = ui.px(44.0);
-        ui.painter.scene.set_clip(Some(Rect::new(strip.x, strip.y, (strip.width - plus_width).max(1.0), strip.height)));
+        let viewport = (strip.width - plus_width).max(1.0);
+        ui.painter.scene.set_clip(Some(Rect::new(strip.x, strip.y, viewport, strip.height)));
         let tabs: Vec<(String, bool, bool)> = self
             .tabs
             .iter()
@@ -1748,12 +1862,38 @@ impl Workspace {
                 Pane::Document { path, title } => (title.clone(), true, self.editor.as_ref().is_some_and(|editor| editor.is_modified(path))),
             })
             .collect();
+        // Files with the same name show the folder that tells them apart (`TabPresentation`).
+        let titles: Vec<String> = tabs.iter().map(|tab| tab.0.clone()).collect();
+        let paths: Vec<Option<String>> = self.tabs.iter().map(|tab| tab.document().map(str::to_string)).collect();
+        let contexts = neolink_core::tabs::contexts(&titles, &paths);
+        // Widths from names and paths alone: 96 pt of chrome, between 120 and 320 pt.
+        let mut layout: Vec<(String, String, f32, f32)> = Vec::new();
+        for (index, (title, _, _)) in tabs.iter().enumerate() {
+            let context = ui.fit_middle(&contexts[index], ui.px(100.0), 11.0, 400, false);
+            let context_width = if context.is_empty() { 0.0 } else { ui.measure(&context, 11.0, 400, false).min(ui.px(100.0)) + ui.px(8.0) };
+            let fitted = ui.fit_middle(title, (ui.px(320.0 - 96.0) - context_width).max(ui.px(100.0)), 12.0, 400, false);
+            let width = (ui.measure(&fitted, 12.0, 400, false) + ui.px(96.0) + context_width).clamp(ui.px(120.0), ui.px(320.0));
+            layout.push((fitted, context, context_width, width));
+        }
+        let content: f32 = layout.iter().map(|tab| tab.3).sum();
+        self.strip_content = content;
+        // A newly selected tab comes into view by the nearest edge; scrolling stays inside the tabs.
+        if let Some(id) = self.strip_reveal.take() {
+            if let Some(index) = self.tabs.iter().position(|tab| tab.id == id) {
+                let start: f32 = layout[..index].iter().map(|tab| tab.3).sum();
+                self.strip_scroll = neolink_core::tabs::reveal(self.strip_scroll, viewport, start, start + layout[index].3);
+            }
+        }
+        self.strip_scroll = self.strip_scroll.clamp(0.0, (content - viewport).max(0.0)).round();
+        let mut x = strip.x - self.strip_scroll;
         for (index, (title, is_document, modified)) in tabs.iter().enumerate() {
-            // Width from the title alone: 96 pt of chrome, between 120 and 320 pt.
-            let fitted = ui.fit_middle(title, ui.px(320.0 - 96.0), 12.0, 400, false);
-            let width = (ui.measure(&fitted, 12.0, 400, false) + ui.px(96.0)).clamp(ui.px(120.0), ui.px(320.0));
+            let (fitted, context, _, width) = &layout[index];
+            let width = *width;
             let rect = Rect::new(x, strip.y, width, strip.height);
-            self.tab_rects.push(rect);
+            // Only the part inside the viewport takes clicks.
+            let visible_left = rect.x.max(strip.x);
+            let visible_right = rect.right().min(strip.x + viewport);
+            self.tab_rects.push(Rect::new(visible_left, rect.y, (visible_right - visible_left).max(0.0), rect.height));
             let selected = index == self.shown;
             let hovered = self.hover == Some(index);
             if !selected && hovered {
@@ -1761,7 +1901,10 @@ impl Workspace {
             }
             let icon = if *is_document { if title.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" } } else { "terminal" };
             ui.icon(icon, 12.0, IconWeight::Regular, rect.x + ui.px(11.0 + 7.0), middle, if selected { theme::ACCENT } else { theme::TEXT_SECONDARY });
-            ui.text(&fitted, rect.x + ui.px(11.0 + 14.0 + 8.0), middle, 12.0, 400, false, if selected { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY });
+            let title_width = ui.text(fitted, rect.x + ui.px(11.0 + 14.0 + 8.0), middle, 12.0, 400, false, if selected { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY });
+            if !context.is_empty() {
+                ui.text(context, rect.x + ui.px(11.0 + 14.0 + 8.0) + title_width + ui.px(8.0), middle, 11.0, 400, false, theme::TEXT_SECONDARY);
+            }
             let close = Rect::new(rect.right() - ui.px(3.0 + 27.0), middle - ui.px(15.0), ui.px(27.0), ui.px(30.0));
             if *modified {
                 let dot = ui.px(6.0);
@@ -1769,13 +1912,14 @@ impl Workspace {
             }
             let strong = selected || hovered;
             ui.icon("xmark", 9.0, IconWeight::Semibold, close.x + close.width * 0.5, middle, faded(theme::TEXT_SECONDARY, if strong { 1.0 } else { 0.55 }));
-            self.close_rects.push(close);
+            self.close_rects.push(if close.x >= strip.x && close.right() <= strip.x + viewport { close } else { Rect::default() });
             ui.painter.scene.fill(rect.right() - line, rect.y, line, rect.height, theme::SEPARATOR);
             if selected {
                 ui.painter.scene.fill(rect.x, rect.bottom() - line, rect.width, line, theme::ACCENT);
             }
             x += width;
         }
+        let x = (strip.x + content - self.strip_scroll).min(strip.x + viewport);
         ui.painter.scene.set_clip(None);
         // New local terminal.
         self.plus_rect = Rect::new((x + ui.px(5.0)).min(strip.right() - ui.px(39.0)), middle - ui.px(15.0), ui.px(34.0), ui.px(30.0));
@@ -2079,6 +2223,13 @@ impl Content for Workspace {
             menu.draw(&mut ui, self.window);
             self.menu = Some(menu);
         }
+        if let Some(at) = self.draw_tip(painter) {
+            next = match next {
+                Next::Idle => Next::At(at),
+                Next::At(other) => Next::At(other.min(at)),
+                Next::Soon => Next::Soon,
+            };
+        }
         let (scroll_lines, input_lines) = self.scroll_lines();
         self.marks = FrameMarks { scroll_lines, input_lines, output, selection: self.shown_selection, instances: 0 };
         // Everything that decides a pixel of this frame. Equal to the last one: nothing to present.
@@ -2091,6 +2242,11 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
+        signature.add(self.strip_scroll.to_bits() as u64);
+        if let Some((text, since)) = &self.tip {
+            // The same text before and after its delay is a different picture.
+            signature.add((crate::clock::now() >= since + 0.8) as u64 + 3).text(text).add(self.pointer.0.to_bits() as u64);
+        }
         signature.add(self.recent.len() as u64 ^ (self.recent_sheet.is_some() as u64) << 20);
         signature.add(self.explorer_points.to_bits() as u64).add(self.agent.signature()).add(self.dock.signature());
         if let Some(launcher) = &self.launcher {

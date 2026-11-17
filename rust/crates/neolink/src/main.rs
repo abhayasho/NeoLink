@@ -583,6 +583,11 @@ impl ApplicationHandler<UserEvent> for App {
                             workspace.close_tab(index);
                             return;
                         }
+                        // "hover:<control>" only moves the pointer there.
+                        if let Some((x, y)) = name.strip_prefix("hover:").and_then(|name| workspace.control_point(name)) {
+                            workspace.pointer(x, y);
+                            return;
+                        }
                         // "right:<control>" is a secondary click.
                         if let Some((x, y)) = name.strip_prefix("right:").and_then(|name| workspace.control_point(name)) {
                             workspace.pointer(x, y);
