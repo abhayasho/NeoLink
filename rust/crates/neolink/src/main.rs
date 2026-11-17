@@ -17,6 +17,7 @@ mod menubar;
 mod present;
 mod render;
 mod search;
+mod settings;
 mod spike;
 mod term;
 mod text;
@@ -55,6 +56,9 @@ struct App {
     modifiers: ModifiersState,
     pointer: (f32, f32),
     resize_cursor: u8,
+    /// The settings as last written, and when they were last compared.
+    saved: settings::Settings,
+    settings_checked: f64,
     bench: Arc<BenchState>,
     #[cfg(target_os = "macos")]
     menu_bar: Option<muda::Menu>,
@@ -162,6 +166,28 @@ impl App {
             }
         });
         self.invalidate();
+    }
+
+    /// Writes the settings file if anything it holds changed.
+    fn save_settings(&mut self) {
+        if self.spike.is_some() || settings::path().is_none() {
+            return;
+        }
+        let Some(window) = &self.window else { return };
+        let mut current = self.saved.clone();
+        // A full-screen or minimized window keeps the frame it had before.
+        if window.fullscreen().is_none() && window.is_minimized() != Some(true) {
+            let scale = window.scale_factor();
+            if let Ok(position) = window.outer_position() {
+                let (position, size) = (position.to_logical::<f64>(scale), window.inner_size().to_logical::<f64>(scale));
+                current.window = Some((position.x.round(), position.y.round(), size.width.round(), size.height.round()));
+            }
+        }
+        let Some(current) = self.with_workspace(|workspace, _| workspace.settings(current)) else { return };
+        if current != self.saved {
+            settings::save(&current);
+            self.saved = current;
+        }
     }
 
     /// A menu bar choice (see `menubar`).
@@ -360,9 +386,11 @@ impl App {
 
     fn start(&mut self, event_loop: &ActiveEventLoop) {
         // As the Swift app's window: 1280 x 800, at least 900 x 560, dark.
+        let saved = if self.spike.is_some() { settings::Settings::default() } else { settings::load() };
+        let frame = saved.window.filter(|frame| frame.2 >= 900.0 && frame.3 >= 560.0 && frame.2 <= 10_000.0 && frame.3 <= 10_000.0);
         let attributes = Window::default_attributes()
             .with_title("NeoLink")
-            .with_inner_size(LogicalSize::new(1280.0, 800.0))
+            .with_inner_size(LogicalSize::new(frame.map_or(1280.0, |frame| frame.2), frame.map_or(800.0, |frame| frame.3)))
             .with_min_inner_size(LogicalSize::new(900.0, 560.0))
             .with_theme(Some(winit::window::Theme::Dark));
         #[cfg(target_os = "macos")]
@@ -370,6 +398,15 @@ impl App {
             use winit::platform::macos::WindowAttributesExtMacOS;
             // A hidden title over a transparent title bar, in the sidebar's colour.
             attributes.with_title_hidden(true).with_titlebar_transparent(true)
+        };
+        // The remembered position, if a screen still shows that place.
+        let attributes = match frame {
+            Some(frame) if event_loop.available_monitors().any(|monitor| {
+                let (origin, size, scale) = (monitor.position(), monitor.size(), monitor.scale_factor());
+                let (x, y) = (frame.0 * scale, frame.1 * scale);
+                x >= origin.x as f64 - 40.0 && y >= origin.y as f64 - 40.0 && x < origin.x as f64 + size.width as f64 - 80.0 && y < origin.y as f64 + size.height as f64 - 80.0
+            }) => attributes.with_position(winit::dpi::LogicalPosition::new(frame.0, frame.1)),
+            _ => attributes,
         };
         let window = Arc::new(event_loop.create_window(attributes).expect("a window"));
         let gpu = gpu::Gpu::new().expect("a GPU");
@@ -380,14 +417,16 @@ impl App {
         let size = window.inner_size();
         let scale = window.scale_factor();
         let period = display_period(&window);
-        let text = text::TextSystem::new(&gpu.device, DEFAULT_FONT_POINTS, scale as f32);
+        let text = text::TextSystem::new(&gpu.device, saved.font_points.clamp(10.0, 24.0), scale as f32);
         let font_family = text.family().to_string();
 
         let shared = if let Some(mode) = &self.spike {
             eprintln!("PERIOD {period:.6}");
             Shared::new(Box::new(spike::SpikeGrid::new(mode == "motion")), (size.width, size.height), scale, period)
         } else {
-            let mut workspace = Workspace::new(text.cell, DEFAULT_FONT_POINTS, scale as f32, (size.width, size.height), period);
+            let mut workspace = Workspace::new(text.cell, saved.font_points.clamp(10.0, 24.0), scale as f32, (size.width, size.height), period);
+            workspace.apply_settings(&saved);
+            self.saved = saved.clone();
             let proxy = self.proxy.clone();
             workspace.set_on_empty(Box::new(move || {
                 let _ = proxy.send_event(UserEvent::Quit);
@@ -397,14 +436,16 @@ impl App {
                 let mut state = shared.state.lock();
                 if let Some(workspace) = state.content.as_any().downcast_mut::<Workspace>() {
                     workspace.attach(&shared);
-                    if let Err(error) = workspace.new_tab(&shared) {
-                        eprintln!("cannot start a shell: {error}");
-                    }
                     // Files named on the command line open as document tabs.
                     // A folder named on the command line is the project; files open as document tabs.
                     let arguments: Vec<std::path::PathBuf> = std::env::args().skip(1).filter(|argument| !argument.starts_with("--")).map(std::path::PathBuf::from).collect();
-                    if let Some(folder) = arguments.iter().find(|path| path.is_dir()) {
-                        workspace.set_project(neolink_core::paths::canonical(folder));
+                    // A folder on the command line is the project; otherwise the one open last time.
+                    if let Some(folder) = arguments.iter().find(|path| path.is_dir()).cloned().or_else(|| saved.project.clone().filter(|path| path.is_dir() && arguments.is_empty())) {
+                        workspace.set_project(neolink_core::paths::canonical(&folder));
+                    }
+                    // The first shell starts in the project.
+                    if let Err(error) = workspace.new_tab(&shared) {
+                        eprintln!("cannot start a shell: {error}");
                     }
                     if std::env::var("NEOLINK_EXPLORER").as_deref() == Ok("0") {
                         workspace.explorer.visible = false;
@@ -710,9 +751,10 @@ impl ApplicationHandler<UserEvent> for App {
                     shared.invalidate();
                 }
                 // "Choose Folder...": the system's panel, shown without holding the workspace.
-                if self.with_workspace(|workspace, _| workspace.take_folder_request()) == Some(true) {
+                if let Some(for_project) = self.with_workspace(|workspace, _| workspace.take_folder_request()).flatten() {
                     if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                        self.with_workspace(|workspace, _| workspace.set_launcher_directory(neolink_core::paths::canonical(&folder)));
+                        let folder = neolink_core::paths::canonical(&folder);
+                        self.with_workspace(|workspace, _| if for_project { workspace.set_project(folder) } else { workspace.set_launcher_directory(folder) });
                     }
                     shared.invalidate();
                 }
@@ -735,9 +777,15 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(shared) = &self.shared {
             shared.publish_main_cpu();
         }
+        // At most once a second, and only after something happened (this runs after events).
+        if clock::now() - self.settings_checked > 1.0 {
+            self.settings_checked = clock::now();
+            self.save_settings();
+        }
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.save_settings();
         if let Some(shared) = &self.shared {
             shared.state.lock().quit = true;
             shared.nudge();
@@ -762,6 +810,8 @@ fn main() {
         modifiers: ModifiersState::empty(),
         pointer: (-1.0, -1.0),
         resize_cursor: 0,
+        saved: settings::Settings::default(),
+        settings_checked: 0.0,
         bench: Arc::new(BenchState::default()),
         #[cfg(target_os = "macos")]
         menu_bar: None,

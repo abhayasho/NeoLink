@@ -124,7 +124,12 @@ pub struct Workspace {
     dock: crate::dock::Dock,
     dock_rect: Rect,
     dragging_dock: bool,
-    folder_request: bool,
+    /// The system's folder panel was asked for: `true` for a project, `false` for the launcher.
+    folder_request: Option<bool>,
+    /// Recent projects, newest first, and the sheet that manages them.
+    recent: Vec<std::path::PathBuf>,
+    recent_sheet: Option<Vec<(Rect, String)>>,
+    explorer_options: Option<(bool, bool, bool, bool, bool)>,
     /// A file or folder copied in the explorer ("Copy", then "Paste Here").
     copied: Option<std::path::PathBuf>,
     /// The explorer's width in points, and whether its edge is being dragged.
@@ -197,7 +202,10 @@ impl Workspace {
             dock: crate::dock::Dock::new(),
             dock_rect: Rect::default(),
             dragging_dock: false,
-            folder_request: false,
+            folder_request: None,
+            recent: Vec::new(),
+            recent_sheet: None,
+            explorer_options: None,
             copied: None,
             explorer_points: crate::explorer::WIDTH_POINTS,
             dragging_divider: false,
@@ -296,9 +304,13 @@ impl Workspace {
 
     /// Shows a different folder in the explorer.
     pub fn set_project(&mut self, root: std::path::PathBuf) {
-        let visible = self.explorer.visible;
+        let options = (self.explorer.visible, self.explorer.compact(), self.explorer.show_hidden(), self.explorer.hide_ignored, self.explorer.reveal_active);
+        self.recent.retain(|path| path != &root);
+        self.recent.insert(0, root.clone());
+        self.recent.truncate(12);
         self.explorer = Explorer::new(root);
-        self.explorer.visible = visible;
+        self.explorer_options = Some(options);
+        self.apply_explorer_options();
         if let Some(shared) = self.shared.upgrade() {
             self.explorer.attach(&shared);
         }
@@ -520,8 +532,138 @@ impl Workspace {
     }
 
     /// "Choose Folder..." was pressed in the launcher (the caller shows the system's panel).
-    pub fn take_folder_request(&mut self) -> bool {
-        std::mem::take(&mut self.folder_request)
+    pub fn take_folder_request(&mut self) -> Option<bool> {
+        self.folder_request.take()
+    }
+
+    /// What is remembered between runs (the window itself is the caller's).
+    pub fn settings(&self, mut settings: crate::settings::Settings) -> crate::settings::Settings {
+        settings.font_points = self.font_points;
+        settings.explorer_visible = self.explorer.visible;
+        settings.explorer_points = self.explorer_points;
+        settings.compact_folders = self.explorer.compact();
+        settings.show_hidden = self.explorer.show_hidden();
+        settings.hide_ignored = self.explorer.hide_ignored;
+        settings.reveal_active = self.explorer.reveal_active;
+        settings.agent_visible = self.agent.visible;
+        settings.agent_points = self.agent.width_points;
+        settings.dock_right = self.dock.side == crate::dock::Side::Right;
+        settings.dock_height = self.dock.height_points;
+        settings.dock_width = self.dock.width_points;
+        settings.custom_agent_name = self.custom_agent.0.clone();
+        settings.custom_agent_executable = self.custom_agent.1.clone();
+        settings.project = Some(self.explorer.root().to_path_buf());
+        settings.recent_projects = self.recent.clone();
+        settings
+    }
+
+    /// Applies remembered settings to a new workspace (the project is opened by the caller).
+    pub fn apply_settings(&mut self, settings: &crate::settings::Settings) {
+        self.font_points = settings.font_points.clamp(MIN_FONT_POINTS, MAX_FONT_POINTS);
+        self.explorer_points = settings.explorer_points.clamp(200.0, 400.0);
+        self.agent.visible = settings.agent_visible;
+        self.agent.width_points = settings.agent_points.clamp(240.0, 480.0);
+        self.dock.side = if settings.dock_right { crate::dock::Side::Right } else { crate::dock::Side::Bottom };
+        self.dock.height_points = settings.dock_height.clamp(80.0, 900.0);
+        self.dock.width_points = settings.dock_width.clamp(160.0, 1600.0);
+        self.custom_agent = (settings.custom_agent_name.clone(), settings.custom_agent_executable.clone());
+        self.recent = settings.recent_projects.iter().filter(|path| path.is_dir()).take(12).cloned().collect();
+        self.explorer_options = Some((settings.explorer_visible, settings.compact_folders, settings.show_hidden, settings.hide_ignored, settings.reveal_active));
+        self.apply_explorer_options();
+    }
+
+    fn apply_explorer_options(&mut self) {
+        if let Some((visible, compact, hidden, hide_ignored, reveal)) = self.explorer_options {
+            self.explorer.visible = visible;
+            if self.explorer.compact() != compact {
+                self.explorer.toggle_compact();
+            }
+            if self.explorer.show_hidden() != hidden {
+                self.explorer.toggle_hidden();
+            }
+            self.explorer.hide_ignored = hide_ignored;
+            self.explorer.reveal_active = reveal;
+        }
+    }
+
+    fn draw_recent(&mut self, painter: &mut Painter) {
+        if self.recent_sheet.is_none() {
+            return;
+        }
+        let mut buttons: Vec<(Rect, String)> = Vec::new();
+        let recent = self.recent.clone();
+        let mut ui = Ui { painter, scale: self.scale };
+        ui.fill(Rect::new(0.0, 0.0, self.window.0, self.window.1), [0, 0, 0, 90]);
+        let (width, height, pad) = (ui.px(510.0), ui.px(360.0), ui.px(22.0));
+        let sheet = Rect::new(((self.window.0 - width) * 0.5).round(), ((self.window.1 - height) * 0.35).round().max(ui.px(20.0)), width, height);
+        ui.shadow(sheet, 10.0);
+        ui.rounded(sheet, 10.0, theme::SIDEBAR_BACKGROUND);
+        ui.outline(sheet, 10.0, theme::white(0.12));
+        let (left, right) = (sheet.x + pad, sheet.right() - pad);
+        let mut y = sheet.y + pad;
+        ui.text("Recent Projects", left, y + ui.px(11.0), 18.0, 600, false, theme::TEXT_PRIMARY);
+        y += ui.px(22.0 + 14.0);
+        ui.text("Remove shortcuts without deleting folders or closing your current project.", left, y + ui.px(8.0), 12.0, 400, false, theme::TEXT_SECONDARY);
+        y += ui.px(16.0 + 14.0);
+        let bottom = sheet.bottom() - pad - ui.px(22.0 + 14.0);
+        let list = Rect::new(left, y, right - left, bottom - y);
+        if recent.is_empty() {
+            let middle = list.y + list.height * 0.5;
+            ui.icon("folder", 24.0, IconWeight::Regular, list.x + list.width * 0.5, middle - ui.px(14.0), theme::TEXT_SECONDARY);
+            let label = "No recent projects";
+            let label_width = ui.measure(label, 13.0, 400, false);
+            ui.text(label, list.x + (list.width - label_width) * 0.5, middle + ui.px(16.0), 13.0, 400, false, theme::TEXT_SECONDARY);
+        } else {
+            ui.rounded(list, 6.0, theme::EDITOR_BACKGROUND);
+            ui.painter.scene.set_clip(Some(list));
+            let row_height = ui.px(10.0 + 32.0 + 10.0);
+            let line = ui.px(1.0).max(1.0);
+            for (index, folder) in recent.iter().enumerate() {
+                let row = Rect::new(list.x, list.y + index as f32 * (row_height + line), list.width, row_height);
+                let middle = row.y + row.height * 0.5;
+                let icon = ui.icon("folder", 12.0, IconWeight::Regular, row.x + ui.px(10.0 + 8.0), middle, theme::TEXT_SECONDARY).max(ui.px(16.0));
+                let text_x = row.x + ui.px(10.0) + icon + ui.px(10.0);
+                let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                ui.text(&name, text_x, middle - ui.px(9.0), 12.0, 500, false, theme::TEXT_PRIMARY);
+                let path = ui.fit_middle(&folder.display().to_string(), row.right() - text_x - ui.px(44.0), 11.0, 400, false);
+                ui.text(&path, text_x, middle + ui.px(9.0), 11.0, 400, false, theme::TEXT_SECONDARY);
+                let remove = Rect::new(row.right() - ui.px(10.0 + 22.0), middle - ui.px(11.0), ui.px(22.0), ui.px(22.0));
+                ui.icon("xmark", 10.0, IconWeight::Regular, remove.x + remove.width * 0.5, middle, theme::TEXT_SECONDARY);
+                buttons.push((remove, format!("forget:{index}")));
+                ui.painter.scene.fill(row.x, row.bottom(), row.width, line, theme::SEPARATOR);
+            }
+            ui.painter.scene.set_clip(None);
+        }
+        let button_y = sheet.bottom() - pad - ui.px(22.0);
+        let clear_width = ui.measure("Clear Recent Projects", 12.0, 500, false) + ui.px(20.0);
+        let clear = Rect::new(left, button_y, clear_width, ui.px(22.0));
+        ui.rounded(clear, 5.0, theme::rgb(0x3A3A3A));
+        ui.text("Clear Recent Projects", clear.x + ui.px(10.0), button_y + ui.px(11.0), 12.0, 500, false, if recent.is_empty() { faded(theme::TEXT_SECONDARY, 0.6) } else { theme::TEXT_PRIMARY });
+        if !recent.is_empty() {
+            buttons.push((clear, "clear".into()));
+        }
+        let done_width = ui.measure("Done", 12.0, 500, false) + ui.px(24.0);
+        let done = Rect::new(right - done_width, button_y, done_width, ui.px(22.0));
+        ui.rounded(done, 5.0, theme::rgb(0x2F6FDB));
+        ui.text("Done", done.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, theme::rgb(0xFFFFFF));
+        buttons.push((done, "done".into()));
+        self.recent_sheet = Some(buttons);
+    }
+
+    fn click_recent(&mut self, x: f32, y: f32) {
+        let Some(buttons) = &self.recent_sheet else { return };
+        let Some((_, what)) = buttons.iter().find(|(rect, _)| rect.contains(x, y)).cloned() else { return };
+        match what.as_str() {
+            "done" => self.recent_sheet = None,
+            "clear" => self.recent.clear(),
+            other => {
+                if let Some(index) = other.strip_prefix("forget:").and_then(|index| index.parse::<usize>().ok()) {
+                    if index < self.recent.len() {
+                        self.recent.remove(index);
+                    }
+                }
+            }
+        }
     }
 
     pub fn set_launcher_directory(&mut self, directory: std::path::PathBuf) {
@@ -544,7 +686,7 @@ impl Workspace {
             Outcome::OpenLauncher => self.open_launcher(),
             Outcome::Hide => self.toggle_agent_panel(),
             Outcome::Menu(menu) => self.menu = Some(menu),
-            Outcome::ChooseFolder => self.folder_request = true,
+            Outcome::ChooseFolder => self.folder_request = Some(false),
             Outcome::Launch { agent, directory, docked } => {
                 if !directory.is_dir() {
                     if let Some(launcher) = &mut self.launcher {
@@ -755,6 +897,12 @@ impl Workspace {
         if self.menu.is_some() {
             if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.menu = None;
+            }
+            return true;
+        }
+        if self.recent_sheet.is_some() {
+            if matches!(key, Key::Named(NamedKey::Escape | NamedKey::Enter)) {
+                self.recent_sheet = None;
             }
             return true;
         }
@@ -1179,6 +1327,17 @@ impl Workspace {
                 self.explorer.mark_stale();
             }
             Action::ToggleReveal => self.explorer.reveal_active = !self.explorer.reveal_active,
+            Action::OpenProject => self.folder_request = Some(true),
+            Action::Project(path) => {
+                if path.is_dir() {
+                    self.set_project(path);
+                } else {
+                    self.recent.retain(|recent| recent != &path);
+                    self.notice = Some("That folder no longer exists; it was removed from the recent projects.".into());
+                }
+            }
+            Action::ManageRecent => self.recent_sheet = Some(Vec::new()),
+            Action::ClearRecent => self.recent.clear(),
             Action::NewFile => self.begin_create(false),
             Action::NewFolder => self.begin_create(true),
             Action::File(what, path, is_directory) => self.file_action(what, path, is_directory),
@@ -1231,6 +1390,10 @@ impl Workspace {
             } else if menu.contains(x, y) {
                 self.menu = Some(menu);
             }
+            return true;
+        }
+        if self.recent_sheet.is_some() {
+            self.click_recent(x, y);
             return true;
         }
         if self.launcher.is_some() {
@@ -1337,6 +1500,21 @@ impl Workspace {
         }
         if let Some((_, action)) = self.header_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
             match action {
+                "project" => {
+                    let rect = self.header_buttons.iter().find(|(_, name)| *name == "project").map(|(rect, _)| *rect).unwrap_or_default();
+                    let mut items = vec![Item::entry("Open Project\u{2026}", Action::OpenProject)];
+                    if !self.recent.is_empty() {
+                        items.push(Item::Separator);
+                        for folder in &self.recent {
+                            let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| folder.display().to_string());
+                            items.push(Item::toggle(&name, Action::Project(folder.clone()), folder == self.explorer.root()));
+                        }
+                        items.push(Item::Separator);
+                        items.push(Item::entry("Manage Recent Projects\u{2026}", Action::ManageRecent));
+                        items.push(Item::entry("Clear Recent Projects", Action::ClearRecent));
+                    }
+                    self.menu = Some(Menu::new(rect, items));
+                }
                 "files" => self.toggle_explorer(),
                 "agent-panel" => self.toggle_agent_panel(),
                 "agent" => self.open_launcher(),
@@ -1347,7 +1525,6 @@ impl Workspace {
                 // agent launcher do not exist in this build yet (PLAN.md).
                 _ => self.notice = Some(format!("{} is not available in this build yet.", match action {
                     "connections" => "The connections sidebar",
-                    "project" => "The project menu",
                     _ => "This",
                 })),
             }
@@ -1875,6 +2052,7 @@ impl Content for Workspace {
         }
         self.draw_creation(painter);
         self.draw_closing(painter);
+        self.draw_recent(painter);
         if let Some(mut launcher) = self.launcher.take() {
             let mut ui = Ui { painter, scale: self.scale };
             launcher.draw(&mut ui, self.window);
@@ -1913,6 +2091,7 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
+        signature.add(self.recent.len() as u64 ^ (self.recent_sheet.is_some() as u64) << 20);
         signature.add(self.explorer_points.to_bits() as u64).add(self.agent.signature()).add(self.dock.signature());
         if let Some(launcher) = &self.launcher {
             signature.add(0x4C41554E).add(launcher.signature());

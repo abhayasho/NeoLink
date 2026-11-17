@@ -17,6 +17,11 @@ pub enum Action {
     ToggleReveal,
     NewFile,
     NewFolder,
+    OpenProject,
+    /// Switch to a recent project.
+    Project(std::path::PathBuf),
+    ManageRecent,
+    ClearRecent,
     /// An explorer row's context-menu choice: what, the row's path, whether it is a folder.
     File(&'static str, std::path::PathBuf, bool),
     /// Show this agent session in the panel.
