@@ -75,6 +75,6 @@ if [[ -n "$neolink_backup" ]]; then
   printf 'Previous app saved in %s\n' "$neolink_saved"
 fi
 printf 'Installed %s\nOpen NeoLink from Applications. Rerun this command to update.\n' "$neolink_destination"
-printf 'This preview is ad-hoc signed, not notarized. macOS may require first-launch approval.\n'
+printf 'NeoLink is ad-hoc signed, not notarized: macOS may ask you to allow the first launch.\n'
 }
 main "$@"
