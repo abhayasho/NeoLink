@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
   <img src="https://img.shields.io/badge/status-preview-yellow" alt="Preview">
   <a href="https://github.com/abhayasho/NeoLink/actions/workflows/checks.yml"><img src="https://github.com/abhayasho/NeoLink/actions/workflows/checks.yml/badge.svg" alt="macOS checks"></a>
+  <a href="https://github.com/abhayasho/NeoLink/actions/workflows/rust.yml"><img src="https://github.com/abhayasho/NeoLink/actions/workflows/rust.yml/badge.svg" alt="Rust app checks"></a>
 </p>
 
 **NeoLink** is a native macOS coding workspace and terminal that puts tabbed local and SSH sessions next to a file browser, so you can work with local and remote files from one window. I wanted a terminal like this for macOS and couldn't find one I liked, so I started building it.
@@ -20,6 +21,34 @@
 > NeoLink is in preview. Automated release checks are included; public notarization and authenticated remote release checks remain outstanding.
 
 Build 29 (1.11.5) adds controls to remove individual recent projects or clear the list. It includes the Build 28 fix for a crash when opening or switching projects through an empty file tree. It retains readable, content-sized tabs with duplicate-filename context, stable editor geometry when switching to terminals, and nonblocking language-service errors. [Project-switch fix and verification](docs/PROJECT_SWITCHING.md). It preserves cached explorer highlights and minimal reveal from Build 26. [Current interaction evidence and limits](docs/TAB_INTERACTIONS.md). **NeoGPU** is the custom retained Metal scene engine. The terminal/editor and explorer share one display deadline, command buffer and workspace presentation, with native-resolution text and bounded in-flight work. Native controls, SSH/SFTP, Neovim, document tabs and agents keep their existing behavior. See [architecture](docs/NEOGPU.md) and [release validation](docs/RENDERING.md).
+
+## NeoLink in Rust (preview)
+
+The [`rust/`](rust) folder holds a rewrite of NeoLink in Rust for **macOS and Windows**, meant to look and behave like the Swift app while being faster. It is a separate app (bundle identifier `com.neolink.app.rust`), so it installs next to the Swift version without touching its settings or folder permissions. The Swift app above remains the released product.
+
+What the Rust app has today (macOS):
+
+- **Workspace:** connections sidebar, file explorer, tabbed terminals and documents, agent panel; panel sizes, window position, text size and recent projects are remembered.
+- **Terminal:** local shells and SSH sessions in tabs, pixel-smooth scrollback, selection and copy, **⌘F** search, the shell's folder in the status bar and **Follow terminal** in the explorer.
+- **Terminal under or beside the code:** **⌃`** opens a terminal panel under the editor, **⌃⇧`** puts it beside the editor (several shells, resizable). The Swift app doesn't have this.
+- **Editor:** the same shared Neovim engine and `neolink.lua` as the Swift app, as a native grid client, with pixel-smooth vertical scrolling, instant switches back to unchanged files, language servers, diagnostics, the **Code** menu, **Run** and REPLs.
+- **Explorer:** project tree and Folder List, Git colours and badges, error counts, deleted-file placeholders, filter, right-click actions (create, rename, copy and paste, Trash, copy path, Finder, terminal here), drag-and-drop copies.
+- **Search and Git:** Quick Open (**⌘P**), Find in Files (**⇧⌘F**) and the Source Control review (**⇧⌘G**): diffs, stage, unstage, commit, branches, stashes.
+- **Remote files:** saved SSH connections and a remote file browser over the SSH tab's connection (browse, create, rename, delete, upload, download, read-only previews).
+- **Agents:** terminal agents and native ACP conversations (streaming, tool previews, permissions, modes, stop).
+- **Rendering:** its own GPU renderer (wgpu on Metal) that presents a frame only when something changed. In full screen on an M2 Max it measured about 7 ms from key press to screen, against 14-15 ms for the Swift app under the same display conditions.
+
+Not there yet: PDF tabs (PDFs open in the system viewer), saved SSH passwords (the system's `ssh` asks in the terminal), sideways smooth scrolling in the editor, the Performance Monitor, a fallback editor without Neovim, and accessibility. Menus and dialogs inside the window are drawn by the app, so they look close to, but not exactly like, the native ones. On Windows the app builds and its tests pass in CI, but it has not been run there. The full checklist and every measurement are in [`rust/PLAN.md`](rust/PLAN.md).
+
+Build and install it (needs [Rust](https://rustup.rs), Neovim and ripgrep):
+
+```bash
+cd rust
+./scripts/build-app.sh        # makes rust/target/NeoLink.app
+ditto target/NeoLink.app "/Applications/NeoLink Rust.app"
+```
+
+Or run it straight from the source tree with `cargo run --release -p neolink -- <project folder>`. Tests: `cargo test --workspace`.
 
 ## Features
 
@@ -212,6 +241,11 @@ Sources/
 ├── SFTP/           SFTP manager, connection pool, browser view, Keychain passwords
 └── NeoLinkTheme.swift
 Vendor/SwiftTerm/   SwiftTerm 1.20.0 with NeoLink's rendering changes (see UPSTREAM.md)
+rust/               the Rust rewrite (see rust/PLAN.md)
+├── crates/neolink-core/   platform-independent logic: scrolling, frame pacing, tree, Git, search, files
+├── crates/neolink-nvim/   Neovim client (RPC, grid model)
+├── crates/neolink-acp/    Agent Client Protocol client
+└── crates/neolink/        the app: window, GPU renderer, terminal, editor, panels
 ```
 
 ## Roadmap
