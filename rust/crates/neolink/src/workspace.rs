@@ -120,6 +120,10 @@ pub struct Workspace {
     custom_agent: (String, String),
     agent_rect: Rect,
     dragging_agent: bool,
+    /// The terminal docked under or beside the code.
+    dock: crate::dock::Dock,
+    dock_rect: Rect,
+    dragging_dock: bool,
     folder_request: bool,
     /// A file or folder copied in the explorer ("Copy", then "Paste Here").
     copied: Option<std::path::PathBuf>,
@@ -190,6 +194,9 @@ impl Workspace {
             custom_agent: ("My agent".into(), String::new()),
             agent_rect: Rect::default(),
             dragging_agent: false,
+            dock: crate::dock::Dock::new(),
+            dock_rect: Rect::default(),
+            dragging_dock: false,
             folder_request: false,
             copied: None,
             explorer_points: crate::explorer::WIDTH_POINTS,
@@ -235,6 +242,22 @@ impl Workspace {
         self.agent_rect = Rect::new(width - agent_width, top, agent_width, (bottom - top).max(1.0));
         let center_right = if agent_width > 0.0 { width - agent_width - line } else { width };
         self.center = Rect::new(center_x, top, (center_right - center_x).max(1.0), (bottom - top).max(1.0));
+        // The docked terminal takes its share of the centre: under the code, or beside it.
+        if self.dock.visible {
+            use crate::dock::Side;
+            match self.dock.side {
+                Side::Bottom => {
+                    let height = px(self.dock.height_points).min(self.center.height - px(120.0)).max(px(80.0));
+                    self.dock_rect = Rect::new(self.center.x, self.center.bottom() - height, self.center.width, height);
+                    self.center.height = (self.center.height - height - line).max(1.0);
+                }
+                Side::Right => {
+                    let width = px(self.dock.width_points).min(self.center.width - px(240.0)).max(px(160.0));
+                    self.dock_rect = Rect::new(self.center.right() - width, self.center.y, width, self.center.height);
+                    self.center.width = (self.center.width - width - line).max(1.0);
+                }
+            }
+        }
         self.strip = Rect::new(center_x, top, self.center.width, px(34.0));
         let below = self.strip.bottom() + line;
         self.status_bar = Rect::new(center_x, self.center.bottom() - px(28.0), self.center.width, px(28.0));
@@ -428,6 +451,9 @@ impl Workspace {
     /// The terminal that typed bytes go to: the agent panel's when it has the keyboard, else the
     /// active tab's.
     pub fn keyboard_terminal(&mut self) -> Option<&mut Terminal> {
+        if self.dock.focused && self.dock.visible {
+            return self.dock.terminal();
+        }
         if self.agent.focused && self.agent.visible {
             return self.agent.terminal();
         }
@@ -436,7 +462,38 @@ impl Workspace {
 
     /// Key presses are the editor's (Neovim notation) rather than a terminal's.
     pub fn keys_go_to_editor(&self) -> bool {
-        self.active_is_document() && !(self.agent.focused && self.agent.visible)
+        self.active_is_document() && !(self.agent.focused && self.agent.visible) && !(self.dock.focused && self.dock.visible)
+    }
+
+    /// Shows the docked terminal under (`below`) or beside the code with the keyboard in it; if it
+    /// is already there with the keyboard, hides it.
+    pub fn toggle_dock(&mut self, below: bool) {
+        use crate::dock::Side;
+        let side = if below { Side::Bottom } else { Side::Right };
+        if self.dock.visible && self.dock.side != side {
+            self.dock.side = side;
+            self.dock.focused = true;
+        } else {
+            self.dock.side = side;
+            if self.dock.toggle() {
+                self.dock_shell();
+            }
+        }
+        if self.dock.focused {
+            self.agent.focused = false;
+            self.explorer.focused = false;
+            self.explorer.filter_focused = false;
+        }
+    }
+
+    fn dock_shell(&mut self) {
+        let Some(shared) = self.shared.upgrade() else { return };
+        let directory = self.active_document().and_then(|path| std::path::Path::new(&path).parent().map(std::path::Path::to_path_buf)).filter(|_| false).unwrap_or_else(|| self.explorer.root().to_path_buf());
+        if let Err(error) = self.dock.open_shell(&shared, &directory, self.cell) {
+            self.notice = Some(format!("Could not start a shell: {error}"));
+            self.dock.visible = false;
+            self.dock.focused = false;
+        }
     }
 
     /// Sends the prompt of the shown conversation, with the active file as its context.
@@ -578,6 +635,12 @@ impl Workspace {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if self.dock.focused && self.dock.visible {
+            if let Some(terminal) = self.dock.terminal() {
+                terminal.paste(text);
+            }
+            return;
+        }
         if self.agent.focused && self.agent.visible {
             if let Some(terminal) = self.agent.terminal() {
                 terminal.paste(text);
@@ -610,6 +673,12 @@ impl Workspace {
             return;
         }
         let (cell, period) = (self.cell, self.period);
+        if self.dock.contains(self.pointer.0, self.pointer.1) {
+            if let Some(terminal) = self.dock.terminal() {
+                terminal.scroll_input(time, delta_y, phase, cell, period);
+            }
+            return;
+        }
         if self.agent.contains(self.pointer.0, self.pointer.1) {
             if self.agent.scroll_conversation(delta_y as f32 * self.scale) {
                 return;
@@ -661,6 +730,9 @@ impl Workspace {
         }
         if let Some(part) = name.strip_prefix("launcher:") {
             return self.launcher.as_ref()?.control_rect(part).map(middle);
+        }
+        if let Some(part) = name.strip_prefix("dock:") {
+            return self.dock.control_rect(part).map(middle);
         }
         if let Some(part) = name.strip_prefix("agent:") {
             return self.agent.control_rect(part).map(middle);
@@ -1023,7 +1095,17 @@ impl Workspace {
     }
 
     /// Which pointer the window should show at `(x, y)`: `true` for the column-resize arrows.
+    /// The pointer should be the row-resize arrows (the top edge of the terminal under the code).
+    pub fn wants_row_resize_cursor(&self, x: f32, y: f32) -> bool {
+        let modal = self.menu.is_some() || self.creation.is_some() || self.search.is_some() || self.git.is_some() || self.closing.is_some() || self.launcher.is_some();
+        self.dock.side == crate::dock::Side::Bottom && (self.dragging_dock || (!modal && self.dock.over_edge(x, y, 3.0 * self.scale)))
+    }
+
     pub fn wants_resize_cursor(&self, x: f32, y: f32) -> bool {
+        let modal = self.menu.is_some() || self.creation.is_some() || self.search.is_some() || self.git.is_some() || self.closing.is_some() || self.launcher.is_some();
+        if self.dock.side == crate::dock::Side::Right && (self.dragging_dock || (!modal && self.dock.over_edge(x, y, 3.0 * self.scale))) {
+            return true;
+        }
         self.dragging_divider || self.dragging_agent || self.over_divider(x, y) || self.over_agent_divider(x, y)
     }
 
@@ -1191,7 +1273,24 @@ impl Workspace {
             self.dragging_agent = true;
             return true;
         }
+        if self.dock.over_edge(x, y, 3.0 * self.scale) {
+            self.dragging_dock = true;
+            return true;
+        }
+        if self.dock.contains(x, y) {
+            if let crate::dock::Pressed::NewShell = self.dock.click(x, y) {
+                self.dock_shell();
+            }
+            if self.dock.focused {
+                self.agent.focused = false;
+                self.explorer.focused = false;
+                self.explorer.filter_focused = false;
+            }
+            return true;
+        }
+        self.dock.focused = false;
         if self.agent.contains(x, y) {
+            self.dock.focused = false;
             let outcome = self.agent.click(x, y);
             self.explorer.focused = false;
             self.explorer.filter_focused = false;
@@ -1301,7 +1400,7 @@ impl Workspace {
     }
 
     pub fn release(&mut self, x: f32, y: f32) {
-        if std::mem::take(&mut self.dragging_divider) | std::mem::take(&mut self.dragging_agent) {
+        if std::mem::take(&mut self.dragging_divider) | std::mem::take(&mut self.dragging_agent) | std::mem::take(&mut self.dragging_dock) {
             return;
         }
         if self.editor_pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
@@ -1315,6 +1414,23 @@ impl Workspace {
     /// The pointer moved to `(x, y)`. Returns `true` if a hover highlight changed.
     pub fn pointer(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
+        if self.dragging_dock {
+            use crate::dock::Side;
+            let changed;
+            match self.dock.side {
+                Side::Bottom => {
+                    let points = ((self.dock_rect.bottom() - y) / self.scale).clamp(80.0, 900.0).round();
+                    changed = points != self.dock.height_points;
+                    self.dock.height_points = points;
+                }
+                Side::Right => {
+                    let points = ((self.dock_rect.right() - x) / self.scale).clamp(160.0, 1600.0).round();
+                    changed = points != self.dock.width_points;
+                    self.dock.width_points = points;
+                }
+            }
+            return changed;
+        }
         if self.dragging_agent {
             let points = ((self.window.0 - x) / self.scale).clamp(240.0, 480.0).round();
             let changed = points != self.agent.width_points;
@@ -1695,7 +1811,7 @@ impl Content for Workspace {
         }
         self.draw_header(painter);
         self.draw_strip(painter);
-        let (pane, focused, period) = (self.pane, self.focused && !(self.agent.focused && self.agent.visible), frame.period);
+        let (pane, focused, period) = (self.pane, self.focused && !(self.agent.focused && self.agent.visible) && !(self.dock.focused && self.dock.visible), frame.period);
         let editor_pane = self.editor_pane;
         let mut chrome: Option<Option<String>> = None;
         let mut output = 0;
@@ -1730,6 +1846,16 @@ impl Content for Workspace {
             let sidebar = self.sidebar;
             let explorer_next = self.explorer.build(painter, sidebar, frame.scale, active_file.as_deref(), frame.display, period);
             next = match (next, explorer_next) {
+                (Next::Soon, _) | (_, Next::Soon) => Next::Soon,
+                (Next::At(a), Next::At(b)) => Next::At(a.min(b)),
+                (Next::At(a), Next::Idle) | (Next::Idle, Next::At(a)) => Next::At(a),
+                (Next::Idle, Next::Idle) => Next::Idle,
+            };
+        }
+        if self.dock.visible {
+            let (rect, cell, window_focused) = (self.dock_rect, self.cell, self.focused);
+            let dock_next = self.dock.build(painter, rect, frame.scale, cell, window_focused, frame.display, period);
+            next = match (next, dock_next) {
                 (Next::Soon, _) | (_, Next::Soon) => Next::Soon,
                 (Next::At(a), Next::At(b)) => Next::At(a.min(b)),
                 (Next::At(a), Next::Idle) | (Next::Idle, Next::At(a)) => Next::At(a),
@@ -1787,7 +1913,7 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
-        signature.add(self.explorer_points.to_bits() as u64).add(self.agent.signature());
+        signature.add(self.explorer_points.to_bits() as u64).add(self.agent.signature()).add(self.dock.signature());
         if let Some(launcher) = &self.launcher {
             signature.add(0x4C41554E).add(launcher.signature());
         }

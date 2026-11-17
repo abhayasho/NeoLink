@@ -3,6 +3,7 @@ mod bench;
 mod capture;
 mod chrome;
 mod clock;
+mod dock;
 mod editor;
 mod explorer;
 mod frame;
@@ -53,7 +54,7 @@ struct App {
     shared: Option<Arc<Shared>>,
     modifiers: ModifiersState,
     pointer: (f32, f32),
-    resize_cursor: bool,
+    resize_cursor: u8,
     bench: Arc<BenchState>,
     #[cfg(target_os = "macos")]
     menu_bar: Option<muda::Menu>,
@@ -185,6 +186,8 @@ impl App {
             self.modifiers = held;
         } else if let Some(action) = command.strip_prefix("editor:") {
             self.with_workspace(|workspace, _| workspace.editor_action(action));
+        } else if let Some(side) = command.strip_prefix("dock:") {
+            self.with_workspace(|workspace, _| workspace.toggle_dock(side == "bottom"));
         } else if let Some(program) = command.strip_prefix("repl:") {
             self.with_workspace(|workspace, _| workspace.open_repl(program));
         }
@@ -195,6 +198,13 @@ impl App {
     fn shortcut(&self, key: &Key, event_loop: &ActiveEventLoop) -> bool {
         let modifiers = self.modifiers;
         let command = if cfg!(target_os = "macos") { modifiers.super_key() } else { modifiers.control_key() && modifiers.shift_key() };
+        // Control-` shows the terminal under the code and puts the keyboard in it (again: hides it).
+        if modifiers.control_key() && !modifiers.super_key() && !modifiers.alt_key() && matches!(key, Key::Character(text) if text.as_str() == "`" || text.as_str() == "~") {
+            let below = !modifiers.shift_key();
+            self.with_workspace(|workspace, _| workspace.toggle_dock(below));
+            self.invalidate();
+            return true;
+        }
         if !command {
             if modifiers.shift_key() && !modifiers.control_key() && !modifiers.alt_key() {
                 let pages = match key {
@@ -523,6 +533,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 Injected::Control(name) => {
                     self.with_workspace(|workspace, _| {
+                        if name == "dock-bottom" || name == "dock-right" {
+                            workspace.toggle_dock(name == "dock-bottom");
+                            return;
+                        }
                         if name == "close-active" {
                             let index = workspace.active_index();
                             workspace.close_tab(index);
@@ -673,11 +687,15 @@ impl ApplicationHandler<UserEvent> for App {
                 if self.with_workspace(|workspace, _| workspace.pointer(pointer.0, pointer.1)) == Some(true) {
                     shared.invalidate();
                 }
-                let resize = self.with_workspace(|workspace, _| workspace.wants_resize_cursor(pointer.0, pointer.1)) == Some(true);
+                let resize = self.with_workspace(|workspace, _| if workspace.wants_row_resize_cursor(pointer.0, pointer.1) { 2 } else { workspace.wants_resize_cursor(pointer.0, pointer.1) as u8 }).unwrap_or(0);
                 if resize != self.resize_cursor {
                     self.resize_cursor = resize;
                     if let Some(window) = &self.window {
-                        window.set_cursor(if resize { winit::window::CursorIcon::ColResize } else { winit::window::CursorIcon::Default });
+                        window.set_cursor(match resize {
+                            2 => winit::window::CursorIcon::RowResize,
+                            1 => winit::window::CursorIcon::ColResize,
+                            _ => winit::window::CursorIcon::Default,
+                        });
                     }
                 }
             }
@@ -743,7 +761,7 @@ fn main() {
         shared: None,
         modifiers: ModifiersState::empty(),
         pointer: (-1.0, -1.0),
-        resize_cursor: false,
+        resize_cursor: 0,
         bench: Arc::new(BenchState::default()),
         #[cfg(target_os = "macos")]
         menu_bar: None,

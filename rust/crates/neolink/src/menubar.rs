@@ -112,6 +112,8 @@ pub fn install(on_command: impl Fn(String) + Send + Sync + 'static) -> Option<Me
         &key("Toggle File Browser", "cs", 'e'),
         &key("Toggle Agent Panel", "cx", 'b'),
         &key("Source Control\u{2026}", "cs", 'g'),
+        &plain("dock:bottom", "Terminal Under Code  \u{2303}`"),
+        &plain("dock:right", "Terminal Beside Code  \u{2303}\u{21e7}`"),
         &separator(),
         &key("Next Tab", "cs", ']'),
         &key("Previous Tab", "cs", '['),
