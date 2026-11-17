@@ -6,9 +6,11 @@
 //! buffer. That ordering is the display half of the correct-buffer guarantee.
 //!
 //! Input is the other half, and ordering does not give it: `nvim_input` is handled the moment it is
-//! read, ahead of an `open` request that is still waiting for Neovim's main loop, so keys sent right
-//! after an `open` are typed into the buffer being left (tested against a real Neovim). Input sent
-//! while a selection is unconfirmed is therefore held here and released when Neovim confirms it.
+//! read, while an `open` request waits for Neovim's main loop, so keys sent right after an `open` can be
+//! typed into the buffer being left. Against a real Neovim they usually were, and sometimes were not:
+//! it is a race, which is worse than either rule. Input sent while a selection is unconfirmed is
+//! therefore held here and released when Neovim confirms it; held input is then written before the next
+//! queued switch, an order in which arrival and Neovim's input-first rule agree.
 
 use crate::grid::{GridModel, Screen};
 use crate::rpc::{self, Decoder, Message};
@@ -33,6 +35,8 @@ pub struct State {
     pub last_reply: Option<serde_json::Value>,
     /// Requests whose reply has been read (for tests and the benchmark).
     pub replies: u64,
+    /// Files with unsaved changes, as Neovim reports them when they change (`neolink_modified`).
+    pub modified: std::collections::HashSet<String>,
 }
 
 type Reply = Result<Value, Value>;
@@ -96,6 +100,18 @@ impl From<std::io::Error> for ClientError {
     }
 }
 
+const MODIFIED_NOTICE: &str = r#"
+local channel = ...
+vim.api.nvim_create_autocmd({'BufModifiedSet', 'BufWritePost', 'BufReadPost', 'BufDelete'}, {callback = function(event)
+  local name = vim.api.nvim_buf_get_name(event.buf)
+  if name ~= '' then
+    local modified = event.event ~= 'BufDelete' and vim.fn.getbufvar(event.buf, '&modified') == 1
+    pcall(vim.rpcnotify, channel, 'neolink_modified', name, modified)
+  end
+end})
+return true
+"#;
+
 /// Escapes text for `nvim_input`, where `<` starts a key name.
 pub fn literal_keys(text: &str) -> String {
     text.replace('<', "<lt>")
@@ -125,7 +141,7 @@ impl Client {
             stdin: Mutex::new(stdin),
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
-            state: Mutex::new(State { screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, replies: 0 }),
+            state: Mutex::new(State { screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, replies: 0, modified: Default::default() }),
             exited: AtomicBool::new(false),
             on_change: Box::new(on_change),
         });
@@ -174,6 +190,9 @@ impl Client {
         if attached.as_bool() != Some(true) {
             return Err(ClientError::Neovim("the editor configuration did not load (NeoLink is not defined)".into()));
         }
+        // Tell this UI when a file gains or loses unsaved changes. (`getbufvar`, not `vim.bo`: reading a
+        // hidden buffer's option through `vim.bo` redraws the whole screen; see AGENTS.md.)
+        client.call("nvim_exec_lua", vec![Value::from(MODIFIED_NOTICE), Value::Array(vec![Value::from(channel)])], Duration::from_secs(10))?;
         Ok(client)
     }
 
@@ -385,6 +404,16 @@ impl Inner {
                     }
                     self.release(Some(token), None);
                     true
+                }
+                "neolink_modified" => {
+                    let path = params.first().and_then(Value::as_str).unwrap_or("").to_string();
+                    let modified = params.get(1).and_then(Value::as_bool).unwrap_or(false);
+                    let mut state = self.state.lock().unwrap();
+                    if modified {
+                        state.modified.insert(path)
+                    } else {
+                        state.modified.remove(&path)
+                    }
                 }
                 "neolink_touch" => {
                     let path = params.first().and_then(Value::as_str).unwrap_or("").to_string();

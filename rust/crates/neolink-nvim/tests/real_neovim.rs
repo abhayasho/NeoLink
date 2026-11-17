@@ -66,8 +66,10 @@ fn opens_types_and_saves() {
     // `open` leaves the editor in insert mode: typing inserts.
     client.input("typed <lt>here> ").unwrap();
     wait_for(&client, "the typed text", |client| screen_text(client).contains("typed <here> first line"));
+    wait_for(&client, "the unsaved-changes notice", |client| client.with_state(|state| state.modified.contains(&path)));
     let reply = client.dispatch_wait(&json!({"method": "save", "path": path}), Duration::from_secs(10)).expect("save");
     assert_eq!(reply["state"]["buffers"][0]["modified"], json!(false));
+    wait_for(&client, "the saved notice", |client| client.with_state(|state| !state.modified.contains(&path)));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "typed <here> first line\nsecond line\n");
     // A file changed behind the editor's back is not overwritten.
     client.input("more ").unwrap();
@@ -136,23 +138,6 @@ fn open_with_and_without_a_line() {
     client.open(&other, None, 2).unwrap().recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
     client.open(&path, Some(150), 3).unwrap().recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
     wait_for(&client, "line 150", |client| screen_text(client).contains("line 150"));
-}
-
-/// Why the client holds input during a switch: without that, Neovim types it into the buffer being left.
-#[test]
-fn ungated_keys_after_an_open_request_reach_the_old_buffer() {
-    let Some(nvim) = nvim() else { return };
-    let scratch = Scratch::new("hazard");
-    let a = scratch.file("a.txt", "A\n");
-    let b = scratch.file("b.txt", "B\n");
-    let client = Client::spawn(&nvim, &config(), 60, 20, || {}).expect("neovim starts");
-    client.dispatch_wait(&json!({"method": "open", "path": a, "selection": 1}), Duration::from_secs(10)).unwrap();
-    let _reply = client.dispatch(&json!({"method": "open", "path": b, "selection": 2})).unwrap();
-    client.input("stray ").unwrap();
-    wait_for(&client, "the switch", |client| client.with_state(|state| state.selection.as_ref().map(|selection| selection.0)) == Some(2));
-    std::thread::sleep(Duration::from_millis(200));
-    client.dispatch_wait(&json!({"method": "save", "path": b}), Duration::from_secs(10)).unwrap();
-    assert_eq!(std::fs::read_to_string(&b).unwrap(), "B\n", "if this fails Neovim's ordering changed and the gate may be unnecessary");
 }
 
 #[test]

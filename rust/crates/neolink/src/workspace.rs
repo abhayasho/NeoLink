@@ -55,6 +55,8 @@ pub struct Workspace {
     pub explorer: Explorer,
     sidebar: Rect,
     notice: Option<String>,
+    /// The document whose unsaved changes the user has just been warned about.
+    close_warned: Option<String>,
     pointer: (f32, f32),
     next_id: u64,
     pub cell: CellMetrics,
@@ -89,6 +91,7 @@ impl Workspace {
             explorer: Explorer::new(project_directory()),
             sidebar: Rect::default(),
             notice: None,
+            close_warned: None,
             pointer: (-1.0, -1.0),
             next_id: 1,
             cell,
@@ -228,10 +231,23 @@ impl Workspace {
         }
     }
 
+    /// Closes a tab. A document with unsaved changes is kept the first time, with a message saying
+    /// how to save or discard; asking again discards.
     pub fn close_tab(&mut self, index: usize) {
         if index >= self.tabs.len() {
             return;
         }
+        if let Some(path) = self.tabs[index].document().map(str::to_string) {
+            let unsaved = self.editor.as_ref().is_some_and(|editor| editor.is_modified(&path));
+            if unsaved && self.close_warned.as_deref() != Some(path.as_str()) {
+                let name = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or(&path).to_string();
+                let (save, close) = if cfg!(target_os = "macos") { ("Command-S", "Command-W") } else { ("Ctrl-Shift-S", "Ctrl-Shift-W") };
+                self.notice = Some(format!("{name} has unsaved changes. {save} saves; {close} again closes without saving."));
+                self.close_warned = Some(path);
+                return;
+            }
+        }
+        self.close_warned = None;
         let shown_id = self.tabs.get(self.shown).map(|tab| tab.id);
         let removed = self.tabs.remove(index);
         if let (Pane::Document { path, .. }, Some(editor)) = (&removed.pane, &self.editor) {

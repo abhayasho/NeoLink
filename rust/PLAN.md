@@ -325,8 +325,8 @@ tests run and pass there is whatever the latest run of that workflow says; they 
 - **Input needs its own rule, found by test:** Neovim handles `nvim_input` the moment it is read, ahead of an `open`
   that is still queued, and runs queued requests back to back. So keys sent right after a switch were typed into the
   buffer being left. The client keeps one switch in flight and holds everything sent after it until that switch is
-  confirmed (`keys_sent_right_after_a_switch_reach_the_new_buffer`, 5 of 5 runs after the fix; the hazard itself is
-  pinned by `ungated_keys_after_an_open_request_reach_the_old_buffer`).
+  confirmed (`keys_sent_right_after_a_switch_reach_the_new_buffer`). Without the hold the outcome is a race: in
+  about a dozen runs the keys reached the old buffer every time, then once the new one after an unrelated change.
 - **Explorer.** `neolink_core::tree` (tests) plus a sidebar drawn by the same renderer; folders are read on
   background threads; Cmd-B hides it; a folder on the command line is the project.
 - Captures: `docs/milestone-2-editor-capture.png`, `docs/milestone-2-explorer-capture.png`.

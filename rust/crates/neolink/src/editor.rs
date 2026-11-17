@@ -153,16 +153,9 @@ impl Editor {
         })
     }
 
-    /// Whether Neovim reported unsaved changes in `path` in its last reply.
+    /// Whether `path` has unsaved changes.
     pub fn is_modified(&self, path: &str) -> bool {
-        self.client.with_state(|state| {
-            state
-                .last_reply
-                .as_ref()
-                .and_then(|reply| reply["state"]["buffers"].as_array().cloned())
-                .map(|buffers| buffers.iter().any(|buffer| buffer["path"].as_str() == Some(path) && buffer["modified"].as_bool() == Some(true)))
-                .unwrap_or(false)
-        })
+        self.client.with_state(|state| state.modified.contains(path))
     }
 
     /// A wheel report of `delta` device pixels at grid cell `(row, column)`: whole lines go to Neovim.
