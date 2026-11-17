@@ -159,6 +159,7 @@ struct LineKey {
 }
 
 pub struct TextSystem {
+    clusters: HashMap<(String, bool, bool), std::sync::Arc<[CellGlyph]>>,
     lines: HashMap<LineKey, std::sync::Arc<ShapedLine>>,
     ui_family: String,
     fonts: FontSystem,
@@ -252,6 +253,7 @@ impl TextSystem {
         let scratch = Buffer::new_empty(Metrics::new(16.0, 20.0));
         let ui_family = interface_family(&fonts);
         let mut system = TextSystem {
+            clusters: HashMap::new(),
             lines: HashMap::new(),
             ui_family,
             swash: SwashCache::new(),
@@ -292,6 +294,7 @@ impl TextSystem {
         }
         self.cell = CellMetrics { width: width.round().max(1.0), height, baseline: baseline.round(), font_pixels };
         self.cells.clear();
+        self.clusters.clear();
         self.lines.clear();
     }
 
@@ -326,6 +329,40 @@ impl TextSystem {
         })();
         self.sprites.insert(key, sprite);
         sprite
+    }
+
+    /// The glyphs of a cell that holds more than one scalar (a base character with combining marks, an
+    /// emoji sequence): shaped together, positioned relative to the cell's pen origin.
+    pub fn cluster_glyphs(&mut self, queue: &wgpu::Queue, text: &str, bold: bool, italic: bool) -> std::sync::Arc<[CellGlyph]> {
+        let key = (text.to_string(), bold, italic);
+        if let Some(glyphs) = self.clusters.get(&key) {
+            return glyphs.clone();
+        }
+        if self.clusters.len() > 8192 {
+            self.clusters.clear();
+        }
+        let mut attrs = Attrs::new().family(Family::Name(&self.family));
+        if bold {
+            attrs = attrs.weight(Weight::BOLD);
+        }
+        if italic {
+            attrs = attrs.style(Style::Italic);
+        }
+        self.scratch.set_text(text, &attrs, Shaping::Advanced, None);
+        self.scratch.shape_until_scroll(&mut self.fonts, false);
+        let physical: Vec<_> = self.scratch.layout_runs().next().map(|run| run.glyphs.iter().map(|glyph| glyph.physical((0.0, 0.0), 1.0)).collect()).unwrap_or_default();
+        let mut glyphs = Vec::with_capacity(physical.len());
+        for glyph in physical {
+            let mut cache_key = glyph.cache_key;
+            cache_key.x_bin = cosmic_text::SubpixelBin::Zero;
+            cache_key.y_bin = cosmic_text::SubpixelBin::Zero;
+            if let Some(sprite) = self.sprite(queue, cache_key) {
+                glyphs.push(CellGlyph { sprite, x: glyph.x as i16, y: glyph.y as i16 });
+            }
+        }
+        let glyphs: std::sync::Arc<[CellGlyph]> = glyphs.into();
+        self.clusters.insert(key, glyphs.clone());
+        glyphs
     }
 
     /// The glyph for one terminal cell. `None` for blanks and characters no font has.

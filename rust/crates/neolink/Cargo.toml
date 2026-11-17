@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 neolink-core = { path = "../neolink-core" }
+neolink-nvim = { path = "../neolink-nvim" }
 winit = "0.30.13"
 wgpu = "30"
 cosmic-text = "0.19"

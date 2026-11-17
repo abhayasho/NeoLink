@@ -1,6 +1,7 @@
 mod bench;
 mod capture;
 mod clock;
+mod editor;
 mod frame;
 mod gpu;
 mod input;
@@ -102,9 +103,23 @@ impl App {
     fn write(&self, bytes: Vec<u8>) {
         // No frame for the key itself: the frame belongs to the program's answer, which arrives a
         // moment later and would otherwise find this refresh already taken.
-        if self.with_workspace(|workspace, _| workspace.write(bytes)) == Some(true) {
+        let changed = self.with_workspace(|workspace, _| {
+            if workspace.active_is_document() {
+                // Injected text for the editor: literal characters.
+                workspace.editor_input(&String::from_utf8_lossy(&bytes).replace('<', "<lt>"));
+                false
+            } else {
+                workspace.write(bytes)
+            }
+        });
+        if changed == Some(true) {
             self.invalidate();
         }
+    }
+
+    fn open_document(&self, path: &std::path::Path) {
+        self.with_workspace(|workspace, _| workspace.open_document(path));
+        self.invalidate();
     }
 
     /// A scroll report in device pixels.
@@ -171,6 +186,16 @@ impl App {
                 self.invalidate();
             }
             "q" => event_loop.exit(),
+            "s" => {
+                self.with_workspace(|workspace, _| workspace.save_active());
+            }
+            "z" => {
+                let action = if modifiers.shift_key() { "redo" } else { "undo" };
+                self.with_workspace(|workspace, _| workspace.editor_action(action));
+            }
+            "f" => {
+                self.with_workspace(|workspace, _| workspace.editor_action("find"));
+            }
             "v" => {
                 if let Ok(text) = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
                     self.with_workspace(|workspace, _| workspace.paste(&text));
@@ -233,8 +258,13 @@ impl App {
             {
                 let mut state = shared.state.lock();
                 if let Some(workspace) = state.content.as_any().downcast_mut::<Workspace>() {
+                    workspace.attach(&shared);
                     if let Err(error) = workspace.new_tab(&shared) {
                         eprintln!("cannot start a shell: {error}");
+                    }
+                    // Files named on the command line open as document tabs.
+                    for argument in std::env::args().skip(1).filter(|argument| !argument.starts_with("--")) {
+                        workspace.open_document(std::path::Path::new(&argument));
                     }
                 }
             }
@@ -314,7 +344,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        if let (Some(shared), UserEvent::Injected(Injected::Text { .. } | Injected::Scroll { .. } | Injected::SelectTab { .. }) | UserEvent::SpikeChange) = (&self.shared, &event) {
+        if let (Some(shared), UserEvent::Injected(Injected::Text { .. } | Injected::Scroll { .. } | Injected::SelectTab { .. } | Injected::OpenDocument { .. } | Injected::Keys(_)) | UserEvent::SpikeChange) = (&self.shared, &event) {
             shared.note_input();
         }
         match event {
@@ -338,6 +368,15 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
                 Injected::NewTab => self.new_tab(),
+                Injected::OpenDocument { path, sent } => {
+                    let handled = clock::now();
+                    self.open_document(std::path::Path::new(&path));
+                    let generation = self.with_workspace(|workspace, _| workspace.selection_generation()).unwrap_or(0);
+                    self.bench.selections.lock().push((sent, handled, generation));
+                }
+                Injected::Keys(keys) => {
+                    self.with_workspace(|workspace, _| workspace.editor_input(&keys));
+                }
                 Injected::SelectTab { index, sent } => self.select_tab(index, sent),
                 Injected::Finished => event_loop.exit(),
             },
@@ -400,6 +439,15 @@ impl ApplicationHandler<UserEvent> for App {
                 if cfg!(target_os = "macos") && self.modifiers.super_key() {
                     return;
                 }
+                if self.with_workspace(|workspace, _| workspace.dismiss_notice()) == Some(true) {
+                    shared.invalidate();
+                }
+                if self.with_workspace(|workspace, _| workspace.active_is_document()) == Some(true) {
+                    if let Some(keys) = input::neovim_keys(&event.logical_key, event.text.as_deref(), self.modifiers) {
+                        self.with_workspace(|workspace, _| workspace.editor_input(&keys));
+                    }
+                    return;
+                }
                 let application_cursor = self.with_workspace(|workspace, _| workspace.active().map(|terminal| terminal.mode().contains(alacritty_terminal::term::TermMode::APP_CURSOR))).flatten().unwrap_or(false);
                 if let Some(bytes) = input::encode(&event.logical_key, event.text.as_deref(), self.modifiers, application_cursor) {
                     self.write(bytes);
@@ -440,6 +488,10 @@ impl ApplicationHandler<UserEvent> for App {
                 if self.with_workspace(|workspace, _| workspace.click(pointer.0, pointer.1)) == Some(true) {
                     shared.invalidate();
                 }
+            }
+            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
+                let pointer = self.pointer;
+                self.with_workspace(|workspace, _| workspace.release(pointer.0, pointer.1));
             }
             _ => {}
         }

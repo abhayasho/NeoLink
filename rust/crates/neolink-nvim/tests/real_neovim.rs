@@ -123,6 +123,21 @@ fn keys_sent_right_after_a_switch_reach_the_new_buffer() {
     }
 }
 
+#[test]
+fn open_with_and_without_a_line() {
+    let Some(nvim) = nvim() else { return };
+    let scratch = Scratch::new("line");
+    let path = scratch.file("lines.txt", &(1..=200).map(|n| format!("line {n}\n")).collect::<String>());
+    let client = Client::spawn(&nvim, &config(), 60, 20, || {}).expect("neovim starts");
+    let reply = client.open(&path, None, 1).unwrap().recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    assert!(reply.as_str().unwrap().contains("\"ok\":true"), "{reply}");
+    wait_for(&client, "the top of the file", |client| screen_text(client).contains("line 1 "));
+    let other = scratch.file("other.txt", "other\n");
+    client.open(&other, None, 2).unwrap().recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    client.open(&path, Some(150), 3).unwrap().recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    wait_for(&client, "line 150", |client| screen_text(client).contains("line 150"));
+}
+
 /// Why the client holds input during a switch: without that, Neovim types it into the buffer being left.
 #[test]
 fn ungated_keys_after_an_open_request_reach_the_old_buffer() {

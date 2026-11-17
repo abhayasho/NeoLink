@@ -33,6 +33,10 @@ pub enum Injected {
     Busy(f64),
     NewTab,
     SelectTab { index: usize, sent: f64 },
+    /// Open (or select) a file in the editor.
+    OpenDocument { path: String, sent: f64 },
+    /// Keys for the editor in Neovim's notation.
+    Keys(String),
     Finished,
 }
 
@@ -419,8 +423,92 @@ impl Runner {
         Value::Object(report)
     }
 
+    /// A scratch copy of a source file to edit (`NEOLINK_BENCHMARK_FILE`, default a file of the Swift app).
+    fn scratch_copy(&self, name: &str) -> Option<String> {
+        let source = std::env::var_os("NEOLINK_BENCHMARK_FILE").map(std::path::PathBuf::from).or_else(|| {
+            let mut directory = std::env::current_exe().ok()?;
+            for _ in 0..8 {
+                directory = directory.parent()?.to_path_buf();
+                let candidate = directory.join("Sources/Documents/WorkspaceDocument.swift");
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+            None
+        })?;
+        let directory = std::env::temp_dir().join(format!("neolink-bench-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).ok()?;
+        let target = directory.join(name);
+        std::fs::copy(&source, &target).ok()?;
+        target.canonicalize().ok()?.to_str().map(str::to_string)
+    }
+
+    /// Waits until the frame log's newest frame shows selection `generation` (the document is on screen).
+    fn wait_for_selection(&self, seconds: f64) {
+        let deadline = clock::now() + seconds;
+        while clock::now() < deadline {
+            let shown = with_workspace(&self.shared, |workspace| !workspace.active_is_document() || workspace.shows_active());
+            if shown == Some(true) {
+                return;
+            }
+            sleep(0.01);
+        }
+    }
+
+    /// Typing in the editor: 75 keys in insert mode at 25 a second.
+    fn editor_typing(&self) -> Value {
+        let Some(path) = self.scratch_copy("typing.swift") else { return json!({"error": "no file to edit"}) };
+        (self.post)(Injected::OpenDocument { path, sent: clock::now() });
+        self.wait_for_selection(10.0);
+        sleep(0.5);
+        let report = self.typing(75, 1.0 / 25.0);
+        (self.post)(Injected::Keys("<Esc>u".into()));
+        sleep(0.2);
+        report
+    }
+
+    /// Switching between two documents (and a shell): when the confirmed buffer reached the display.
+    fn editor_tabs(&self) -> Value {
+        let (Some(first), Some(second)) = (self.scratch_copy("first.swift"), self.scratch_copy("second.swift")) else { return json!({"error": "no file to edit"}) };
+        // Make the two files look different near the top.
+        let _ = std::fs::write(&second, format!("// second\n{}", std::fs::read_to_string(&second).unwrap_or_default()));
+        (self.post)(Injected::OpenDocument { path: first.clone(), sent: clock::now() });
+        self.wait_for_selection(10.0);
+        (self.post)(Injected::OpenDocument { path: second.clone(), sent: clock::now() });
+        self.wait_for_selection(10.0);
+        sleep(0.5);
+        let measurement = self.measure(|| {
+            let mut next = clock::now();
+            for index in 0..24 {
+                wait_until(next);
+                let path = if index % 2 == 0 { first.clone() } else { second.clone() };
+                (self.post)(Injected::OpenDocument { path, sent: clock::now() });
+                next += 0.25;
+            }
+            sleep(0.3);
+        });
+        let selections = self.state.selections.lock().clone();
+        let mut frames = measurement.frames.clone();
+        frames.sort_by(|a, b| a.planned.partial_cmp(&b.planned).unwrap());
+        let mut latency = Vec::new();
+        let mut missing = 0;
+        for (sent, _handled, generation) in &selections {
+            match frames.iter().find(|frame| frame.marks.selection >= *generation && frame.displayed > 0.0) {
+                Some(frame) => latency.push((frame.displayed - sent) * 1000.0),
+                None => missing += 1,
+            }
+        }
+        let mut report = self.frame_report(&measurement);
+        report.insert("switches".into(), json!(selections.len()));
+        report.insert("switchesWithoutDisplayedFrame".into(), json!(missing));
+        report.insert("switchToDisplayMs".into(), summary(&latency));
+        Value::Object(report)
+    }
+
     fn run(&self, scenario: &str) -> Value {
         match scenario {
+            "editor-type" => self.editor_typing(),
+            "editor-tabs" => self.editor_tabs(),
             "idle" => self.idle(),
             "terminal-type" => self.typing(75, 1.0 / 25.0),
             "terminal-type-sparse" => self.typing(6, 1.6),

@@ -303,6 +303,10 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
                 shared.dirty.store(true, Ordering::Release);
             }
         }
+        if capture.as_ref().is_some_and(|(_, after)| clock::now() - started_at >= *after) {
+            // The capture wants a frame even if nothing changed.
+            shared.dirty.store(true, Ordering::Release);
+        }
         let mut warming = false;
         if !(shared.dirty.load(Ordering::Acquire) && visible) {
             // Idle. A display that is given no frames lowers its refresh rate within a second, and the
@@ -318,6 +322,8 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
                 if let Some(at) = scheduled {
                     let start = at - (pacer.depth() as f64 + 1.0) * pacer.period() + 0.0005;
                     std::thread::park_timeout(Duration::from_secs_f64((start - now).clamp(0.0002, 0.25)));
+                } else if capture.is_some() {
+                    std::thread::park_timeout(Duration::from_millis(100));
                 } else if warm {
                     std::thread::park_timeout(Duration::from_secs_f64((last_frame_at + warm_interval - now).clamp(0.001, warm_interval)));
                 } else if presenter.in_flight() > 0 {

@@ -232,7 +232,12 @@ impl Client {
     /// is typed into that buffer, never the one being left. The screen belongs to the buffer once
     /// [`State::selection`] carries `token`.
     pub fn open(&self, path: &str, line: Option<u64>, token: u64) -> Result<Receiver<Reply>, ClientError> {
-        let command = serde_json::json!({"method": "open", "path": path, "line": line, "selection": token});
+        // A JSON null would reach Lua as `vim.NIL`, which the editor's `open` cannot compare: leave an
+        // absent line out.
+        let mut command = serde_json::json!({"method": "open", "path": path, "selection": token});
+        if let Some(line) = line {
+            command["line"] = serde_json::json!(line);
+        }
         let mut gate = self.inner.gate.lock().unwrap();
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = channel();

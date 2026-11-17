@@ -109,10 +109,89 @@ pub fn encode(key: &Key, text: Option<&str>, modifiers: ModifiersState, applicat
     }
 }
 
+/// A key press in Neovim's notation for `nvim_input` (`<CR>`, `<C-w>`, `<S-Tab>`, text with `<` as `<lt>`).
+pub fn neovim_keys(key: &Key, text: Option<&str>, modifiers: ModifiersState) -> Option<String> {
+    let wrap = |name: &str, shift_matters: bool| {
+        let mut prefix = String::new();
+        if modifiers.control_key() {
+            prefix.push_str("C-");
+        }
+        if modifiers.alt_key() {
+            prefix.push_str("M-");
+        }
+        if shift_matters && modifiers.shift_key() {
+            prefix.push_str("S-");
+        }
+        format!("<{prefix}{name}>")
+    };
+    match key {
+        Key::Named(named) => {
+            let name = match named {
+                NamedKey::Enter => "CR",
+                NamedKey::Backspace => "BS",
+                NamedKey::Tab => "Tab",
+                NamedKey::Escape => "Esc",
+                NamedKey::Space => "Space",
+                NamedKey::ArrowUp => "Up",
+                NamedKey::ArrowDown => "Down",
+                NamedKey::ArrowLeft => "Left",
+                NamedKey::ArrowRight => "Right",
+                NamedKey::Home => "Home",
+                NamedKey::End => "End",
+                NamedKey::Insert => "Insert",
+                NamedKey::Delete => "Del",
+                NamedKey::PageUp => "PageUp",
+                NamedKey::PageDown => "PageDown",
+                NamedKey::F1 => "F1",
+                NamedKey::F2 => "F2",
+                NamedKey::F3 => "F3",
+                NamedKey::F4 => "F4",
+                NamedKey::F5 => "F5",
+                NamedKey::F6 => "F6",
+                NamedKey::F7 => "F7",
+                NamedKey::F8 => "F8",
+                NamedKey::F9 => "F9",
+                NamedKey::F10 => "F10",
+                NamedKey::F11 => "F11",
+                NamedKey::F12 => "F12",
+                _ => return None,
+            };
+            if *named == NamedKey::Space && !modifiers.control_key() && !modifiers.alt_key() {
+                return Some(" ".to_string());
+            }
+            Some(wrap(name, true))
+        }
+        Key::Character(characters) => {
+            if modifiers.control_key() {
+                // The unshifted character names the key: Control-Shift-P is <C-S-p> only where it matters.
+                let name = characters.to_lowercase().replace('<', "lt");
+                return Some(wrap(&name, false));
+            }
+            let typed = text.filter(|text| !text.is_empty()).unwrap_or(characters.as_str());
+            Some(typed.replace('<', "<lt>"))
+        }
+        _ => text.filter(|text| !text.is_empty()).map(|text| text.replace('<', "<lt>")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use winit::keyboard::SmolStr;
+
+    #[test]
+    fn neovim_notation() {
+        let none = ModifiersState::empty();
+        assert_eq!(neovim_keys(&Key::Character(SmolStr::new("a")), Some("a"), none).as_deref(), Some("a"));
+        assert_eq!(neovim_keys(&Key::Character(SmolStr::new("<")), Some("<"), ModifiersState::SHIFT).as_deref(), Some("<lt>"));
+        assert_eq!(neovim_keys(&Key::Character(SmolStr::new("w")), None, ModifiersState::CONTROL).as_deref(), Some("<C-w>"));
+        assert_eq!(neovim_keys(&Key::Named(NamedKey::Enter), None, none).as_deref(), Some("<CR>"));
+        assert_eq!(neovim_keys(&Key::Named(NamedKey::Tab), None, ModifiersState::SHIFT).as_deref(), Some("<S-Tab>"));
+        assert_eq!(neovim_keys(&Key::Named(NamedKey::Space), None, none).as_deref(), Some(" "));
+        assert_eq!(neovim_keys(&Key::Named(NamedKey::Space), None, ModifiersState::CONTROL).as_deref(), Some("<C-Space>"));
+        assert_eq!(neovim_keys(&Key::Named(NamedKey::ArrowUp), None, ModifiersState::ALT).as_deref(), Some("<M-Up>"));
+        assert_eq!(neovim_keys(&Key::Character(SmolStr::new("e")), Some("é"), ModifiersState::ALT).as_deref(), Some("é"));
+    }
 
     fn character(c: &str) -> Key {
         Key::Character(SmolStr::new(c))
