@@ -27,6 +27,8 @@ pub enum Clicked {
     File(PathBuf),
     /// The pane's close button.
     Close,
+    /// A deleted file's placeholder: its deletion is reviewed in Source Control.
+    Missing,
     /// The "new" and "options" menus, with the control they hang from.
     NewMenu(Rect),
     OptionsMenu(Rect),
@@ -114,6 +116,8 @@ pub struct Explorer {
     /// The tree shows the shown terminal's working directory instead of the project.
     pub follow_terminal: bool,
     follow_rect: Rect,
+    /// Rows that stand for files deleted from the working tree.
+    missing: std::collections::HashSet<PathBuf>,
     /// Diagnostics of open files: `(path, count, errors)`.
     diagnostics: Vec<(PathBuf, u64, u64)>,
     /// The pane as last drawn, and what it was drawn from: an unchanged pane is replayed.
@@ -202,6 +206,7 @@ impl Explorer {
             focused: false,
             follow_terminal: false,
             follow_rect: Rect::default(),
+            missing: Default::default(),
             diagnostics: Vec::new(),
             drawn: None,
             git: Decorations::default(),
@@ -279,6 +284,7 @@ impl Explorer {
         if self.stale {
             self.stale = false;
             let rows = self.tree.rows();
+            let rows = self.with_deleted(rows);
             self.rows = self.filtered(rows);
             self.revision += 1;
             self.request_listings();
@@ -287,6 +293,31 @@ impl Explorer {
 
     /// Applies the filter text and the "hide ignored" option to the tree's rows: a row stays if its
     /// name matches, or if something beneath it does (loaded branches only, as in the Swift app).
+    /// Adds a row for each file Git says was deleted, under its folder if that folder is open
+    /// (docs/EXPLORER.md: deleted files stay visible as placeholders).
+    fn with_deleted(&mut self, mut rows: Vec<Row>) -> Vec<Row> {
+        self.missing.clear();
+        let root = self.tree.root().to_path_buf();
+        for path in self.git.deleted() {
+            if path.exists() || rows.iter().any(|row| row.path == path) {
+                continue;
+            }
+            let Some(parent) = path.parent() else { continue };
+            let label = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            let (at, depth) = if parent == root {
+                (rows.len(), 0)
+            } else {
+                let Some(index) = rows.iter().position(|row| row.path == parent && matches!(row.kind, RowKind::Folder { expanded: true, .. })) else { continue };
+                let depth = rows[index].depth;
+                // After everything inside the folder.
+                (rows[index + 1..].iter().position(|row| row.depth <= depth).map_or(rows.len(), |offset| index + 1 + offset), depth + 1)
+            };
+            rows.insert(at, Row { path: path.to_path_buf(), label, depth, kind: RowKind::File });
+            self.missing.insert(path.to_path_buf());
+        }
+        rows
+    }
+
     fn filtered(&self, rows: Vec<Row>) -> Vec<Row> {
         let needle = self.filter.trim().to_lowercase();
         let hide_ignored = self.hide_ignored;
@@ -460,6 +491,9 @@ impl Explorer {
         };
         self.selected = Some(row.path.clone());
         self.focused = true;
+        if self.missing.contains(&row.path) {
+            return Clicked::Missing;
+        }
         match row.kind {
             RowKind::File => Clicked::File(row.path),
             RowKind::Folder { .. } => {

@@ -1927,6 +1927,7 @@ impl Workspace {
             match self.explorer.click(x, y) {
                 crate::explorer::Clicked::File(file) => self.open_document(&file),
                 crate::explorer::Clicked::Close => self.toggle_explorer(),
+                crate::explorer::Clicked::Missing => self.open_git(),
                 crate::explorer::Clicked::NewMenu(rect) => self.menu = Some(Menu::new(rect, vec![Item::entry("New File\u{2026}", Action::NewFile), Item::entry("New Folder\u{2026}", Action::NewFolder)])),
                 crate::explorer::Clicked::OptionsMenu(rect) => {
                     self.menu = Some(Menu::new(rect, vec![

@@ -116,6 +116,13 @@ impl Decorations {
         self.whole_folders.iter().find(|(folder, _)| path.starts_with(folder)).map(|(_, status)| *status)
     }
 
+    /// Files Git knows that are gone from the working tree.
+    pub fn deleted(&self) -> Vec<&Path> {
+        let mut paths: Vec<&Path> = self.statuses.iter().filter(|(_, status)| **status == Status::Deleted).map(|(path, _)| path.as_path()).collect();
+        paths.sort();
+        paths
+    }
+
     pub fn is_empty(&self) -> bool {
         self.statuses.is_empty()
     }
