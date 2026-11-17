@@ -312,9 +312,9 @@ private struct ScrollSimulation {
     var drawn: Double { grid + model.offset }
     static let range = -50.0...50.0
 
-    mutating func scroll(_ lines: Double, at time: Double, phase: SmoothScrollModel.Phase = .changed) {
+    mutating func scroll(_ lines: Double, at time: Double, phase: SmoothScrollModel.Phase = .changed, touching: Bool = false) {
         input += lines
-        answer(model.input(lines, at: time, phase: phase, range: Self.range), at: time)
+        answer(model.input(lines, at: time, phase: phase, touching: touching, range: Self.range), at: time)
     }
 
     /// One frame of the window clock; returns whether the model keeps animating.
@@ -375,6 +375,34 @@ final class SmoothScrollModelTests: XCTestCase {
         XCTAssertEqual(sim.model.offset, 0)
         XCTAssertEqual(sim.model.pending, 0)
         XCTAssertEqual(sim.drawn, sim.grid, "Lands on a whole line")
+    }
+
+    func testASlowFingerThatIsStillDownIsNotSettledBetweenItsReports() {
+        // One point (1/16 line) every 120 ms with the fingers on the trackpad: about 8 points per second.
+        var sim = ScrollSimulation()
+        var time = 1.0
+        for _ in 0..<20 {
+            sim.scroll(1.0 / 16, at: time, touching: true)
+            for step in 1...14 {
+                sim.frame(at: time + Double(step) * frame)
+                XCTAssertFalse(sim.model.settling, "the gap between two reports is not the end of the scroll")
+                XCTAssertEqual(sim.drawn, sim.input, accuracy: 1e-9, "the content stays where the finger left it")
+            }
+            time += 0.12
+        }
+        XCTAssertEqual(sim.input, 1.25, accuracy: 1e-9)
+        // A device without phases, or a finger that lifted, still settles after the usual wait.
+        var classic = ScrollSimulation()
+        classic.scroll(1.0 / 16, at: 1)
+        var settled = false
+        for step in 1...14 { classic.frame(at: 1 + Double(step) * frame); settled = settled || classic.model.settling }
+        XCTAssertTrue(settled)
+        // Fingers resting for a whole second: the content is settled rather than parked between lines forever.
+        sim.scroll(1.0 / 16, at: time, touching: true)
+        var active = true, frames = 0
+        while active, frames < 400 { time += frame; active = sim.frame(at: time); frames += 1 }
+        XCTAssertFalse(active)
+        XCTAssertEqual(sim.model.offset, 0)
     }
 
     func testMomentumContinuesTheGestureAndItsEndSettles() {

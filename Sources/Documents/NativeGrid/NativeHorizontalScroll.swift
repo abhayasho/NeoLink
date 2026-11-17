@@ -39,6 +39,7 @@ final class NativeHorizontalScroll {
     private var position = 0.0
     private var unanchored = 0.0
     private var resampler = ScrollResampler()
+    private var sampleClock = DisplaySampleClock()
     private var outstanding: (token: UInt64, target: Int?, sent: Double)?
     private var token: UInt64 = 0
     private var direction = 0
@@ -103,18 +104,18 @@ final class NativeHorizontalScroll {
         lastInput = now
         direction = columns > 0 ? 1 : -1
         guard leftcol != nil else { unanchored += columns; return true }
-        move(by: columns, at: sampled)
+        move(by: columns, at: sampled, arrived: now)
         requestIfNeeded(at: now)
         startAnimating()
         return true
     }
 
-    private func move(by columns: Double, at time: Double) {
+    private func move(by columns: Double, at time: Double, arrived: Double? = nil) {
         var next = max(0, position + columns)
         if let highest { next = min(Double(highest), next) }
         let applied = next - position
         position = next
-        resampler.input(applied, at: time)
+        resampler.input(applied, at: time, arrived: arrived)
     }
 
     private func begin(row: Int, column: Int, direction: Int) {
@@ -202,15 +203,15 @@ final class NativeHorizontalScroll {
             // No more display frames (occluded, minimized, closing): nothing is being watched, so show
             // Neovim's own screen now instead of leaving a band in place.
             guard time.isFinite else { self.animating = false; self.abort(); return false }
-            let keep = self.step(at: CACurrentMediaTime())
+            let keep = self.step(at: CACurrentMediaTime(), sample: self.sampleClock.time(target: time, now: CACurrentMediaTime()))
             if !keep { self.animating = false }
             return keep
         }
     }
 
-    private func step(at now: Double) -> Bool {
+    private func step(at now: Double, sample: Double? = nil) -> Bool {
         steps += 1
-        _ = resampler.advance(to: now)
+        _ = resampler.advance(to: sample ?? now)
         if let request = outstanding, now - request.sent > Self.answerTimeout { abort(); return false }
         guard let leftcol else { return true }
         if settling == nil, (lifted && now - lastInput >= Self.momentumWait) || now - lastInput >= Self.idleSettle {

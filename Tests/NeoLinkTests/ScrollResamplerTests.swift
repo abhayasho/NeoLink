@@ -183,20 +183,26 @@ final class ScrollResamplerTests: XCTestCase {
         (0..<count).map { index in inputs.filter { $0.0 <= Double(index) * frame + 1e-9 }.reduce(0) { $0 + $1.1 } }
     }
 
-    func testTheFirstEventOfAGestureIsDrawnAtOnceOutsideClassic() {
+    func testTheFirstEventOfAGestureMovesAtOnceAndIsEasedInNotStepped() {
         for mode in [ScrollResampler.Mode.adaptive, .predict] {
             var resampler = ScrollResampler()
             resampler.mode = mode
-            resampler.input(0.25, at: 10)
-            XCTAssertEqual(resampler.lag, 0, "\(mode): nothing earlier to interpolate from")
+            resampler.input(0.5, at: 10)
+            var drawn: [Double] = []
+            for frame in 1...8 { resampler.advance(to: 10 + Double(frame) / 120); drawn.append(0.5 - resampler.lag) }
+            XCTAssertGreaterThan(drawn[0], 0.12, "\(mode): visible motion on the very next frame")
+            XCTAssertLessThan(drawn[0], 0.3, "\(mode): not the whole event in one step")
+            XCTAssertGreaterThan(drawn[5], 0.45, "\(mode): most of it within 50 ms")
+            XCTAssertTrue(zip(drawn.dropFirst(), drawn).allSatisfy { $0 >= $1 - 1e-9 })
         }
         var classic = ScrollResampler()
         classic.mode = .classic
-        classic.input(0.25, at: 10)
-        XCTAssertEqual(classic.lag, 0.25, accuracy: 1e-9, "classic ramps the first event in")
+        classic.input(0.5, at: 10)
+        classic.advance(to: 10 + 1.0 / 120)
+        XCTAssertLessThan(0.5 - classic.lag, 0.08, "classic holds the first event back for its jitter margin")
     }
 
-    func testAdaptiveMarginFollowsMeasuredJitterAndNeverExceedsTheFixedOne() {
+    func testAdaptiveMarginFollowsMeasuredJitterWithinItsBounds() {
         var clean = ScrollResampler(), noisy = ScrollResampler()
         clean.mode = .adaptive; noisy.mode = .adaptive
         let jitter = [0.0, 0.004, -0.004, 0.003, -0.003, 0.004, -0.002, 0.002]
@@ -206,7 +212,7 @@ final class ScrollResamplerTests: XCTestCase {
         }
         XCTAssertEqual(clean.jitterAllowance, ScrollResampler.minimumJitterMargin, accuracy: 0.0005)
         XCTAssertGreaterThan(noisy.jitterAllowance, 0.0045)
-        XCTAssertLessThanOrEqual(noisy.jitterAllowance, ScrollResampler.jitterMargin)
+        XCTAssertLessThanOrEqual(noisy.jitterAllowance, ScrollResampler.maximumMeasuredMargin)
         XCTAssertLessThan(clean.delay, 1.0 / 60 + 0.003, "clean 60 Hz input trails by an interval plus about 2 ms, not 6")
     }
 
@@ -251,7 +257,7 @@ final class ScrollResamplerTests: XCTestCase {
         XCTAssertTrue(deltas(Array(drawn.prefix(175))).allSatisfy { $0 >= -1e-9 }, "never backwards while the input keeps moving")
     }
 
-    func testAfterAnAbruptStopThePredictedRemainderHoldsThenEasesOntoTheInput() {
+    func testAfterAnAbruptStopThePredictedRemainderGlidesOntoTheInput() {
         let rate = 60.0, perEvent = 0.4, frame = 1.0 / 120
         let inputs = (0..<60).map { (Double($0) / rate, perEvent) }   // stops dead at full speed
         let run = simulate(inputs: inputs, frame: frame, until: 2.0, mode: .predict)
@@ -259,12 +265,12 @@ final class ScrollResamplerTests: XCTestCase {
         let after = Array(run.drawn[stop...])
         XCTAssertLessThanOrEqual(after.max()! - run.total, perEvent * rate * frame + 1e-6)
         let steps = deltas(after)
-        XCTAssertLessThanOrEqual(-steps.min()!, 0.05, "the correction is eased, never one jump back")
+        XCTAssertLessThanOrEqual(-steps.min()!, 0.07, "the overshoot (0.2 lines here) is returned over several frames, never in one jump")
         XCTAssertEqual(run.drawn.last!, run.total, accuracy: 1e-6, "ends exactly on the input")
         XCTAssertEqual(run.finalLag, 0)
     }
 
-    func testAReversalIsFollowedAtOnceAndTheOvershootIsBounded() {
+    func testAReversalIsFollowedWithinAFewFramesAndTheOvershootIsBounded() {
         var inputs: [(Double, Double)] = []
         for index in 0..<60 { inputs.append((Double(index) / 60.0, index < 30 ? 0.4 : -0.4)) }
         let frame = 1.0 / 120
@@ -272,27 +278,40 @@ final class ScrollResamplerTests: XCTestCase {
         let peakInput = 30 * 0.4
         XCTAssertLessThanOrEqual(run.drawn.max()! - peakInput, 0.4 * 60 * frame + 1e-6, "overshoot at the turn is at most one frame of travel")
         let turn = Int((30.0 / 60) / frame)
-        // Within three frames of the first reversed event the content is moving the new way.
-        XCTAssertLessThan(run.drawn[turn + 3], run.drawn[turn], "the reversal is not held back by the old prediction")
+        XCTAssertLessThan(run.drawn[turn + 4], run.drawn[turn], "the reversal is not held back by the old prediction")
         XCTAssertEqual(run.drawn.last!, 0, accuracy: 1e-6)
     }
 
-    func testUnsteadySpeedPredictsLessThanSteadySpeed() {
-        func ahead(_ deltas: [Double]) -> Double {
-            var resampler = ScrollResampler()
-            resampler.mode = .predict
-            var maximum = 0.0
-            for (index, delta) in deltas.enumerated() {
-                let time = Double(index) / 60
-                resampler.input(delta, at: time)
-                for sub in 1...2 { resampler.advance(to: time + Double(sub) / 120 - 0.0005); maximum = max(maximum, resampler.predictedAhead) }
-            }
-            return maximum
-        }
-        let steady = ahead(Array(repeating: 0.4, count: 40))
-        let erratic = ahead((0..<40).map { $0 % 2 == 0 ? 0.1 : 0.7 })
-        XCTAssertGreaterThan(steady, 0.05)
-        XCTAssertLessThan(erratic, steady * 0.6, "a speed that keeps changing is trusted less")
+    /// Largest change of step between consecutive frames, relative to the mean step (0 = perfectly even).
+    private func unevenness(_ drawn: [Double]) -> Double {
+        let steps = deltas(drawn)
+        let mean = steps.reduce(0, +) / Double(steps.count)
+        return zip(steps.dropFirst(), steps).map { abs($0 - $1) }.max()! / abs(mean)
+    }
+
+    func testJitteredArrivalAndQuantizedDistancesDoNotMakeThePredictionTwitch() {
+        // 60 Hz reports that arrive up to 3 ms early or late and alternate between 5 and 7 points (0.31 and 0.44
+        // lines): what a real trackpad's whole-point deltas look like at a steady speed.
+        let jitter = [0.0, 0.003, -0.002, 0.001, -0.003, 0.002, 0.0, -0.001]
+        var inputs: [(Double, Double)] = []
+        for index in 0..<150 { inputs.append((Double(index) / 60 + jitter[index % jitter.count] + 0.004, index % 2 == 0 ? 0.3125 : 0.4375)) }
+        let frame = 1.0 / 120
+        let predict = Array(simulate(inputs: inputs, frame: frame, until: 2.4, mode: .predict).drawn[100..<260])
+        let classic = Array(simulate(inputs: inputs, frame: frame, until: 2.4, mode: .classic).drawn[100..<260])
+        XCTAssertTrue(deltas(predict).allSatisfy { $0 > 0 }, "every frame moves forward")
+        XCTAssertLessThan(unevenness(predict), 0.8, "no frame changes speed by as much as a whole step")
+        XCTAssertLessThan(unevenness(predict), unevenness(classic) * 1.6, "not much rougher than pure interpolation of the same input")
+    }
+
+    func testAChangingSpeedIsDrawnWithoutSteps() {
+        // Speed swelling between 120 and 900 points per second (16-point lines), 60 Hz reports.
+        var inputs: [(Double, Double)] = []
+        for index in 0..<180 { inputs.append((Double(index) / 60, (510 + 390 * sin(Double(index) / 60 * 2 * .pi * 1.1)) / 60 / 16)) }
+        let drawn = Array(simulate(inputs: inputs, frame: 1.0 / 120, until: 2.9, mode: .predict).drawn[40..<340])
+        let steps = deltas(drawn)
+        XCTAssertTrue(steps.allSatisfy { $0 > 0 })
+        let worst = zip(steps.dropFirst(), steps).map { abs($0 - $1) / max($0, $1) }.max()!
+        XCTAssertLessThan(worst, 0.45, "consecutive frames never differ by half a step")
     }
 
     func testAbsorbedInputAtAnEndDoesNotLeaveAPredictionPastIt() {
@@ -328,5 +347,60 @@ final class ScrollResamplerTests: XCTestCase {
             XCTAssertLessThan(frames, 40, "\(mode): it ends within a few frames of the input going quiet")
             XCTAssertEqual(resampler.lag, 0)
         }
+    }
+
+    func testACreepingFingerIsDrawnAsEvenSmallStepsNotBursts() {
+        // One-point reports (1/16 line, two device pixels) every 80 ms: 12.5 points per second.
+        let inputs = (0..<40).map { (Double($0) * 0.08, 1.0 / 16) }
+        let frame = 1.0 / 120
+        for mode in [ScrollResampler.Mode.classic, .predict] {
+            let drawn = Array(simulate(inputs: inputs, frame: frame, until: 3.3, mode: mode).drawn[150..<380])
+            let steps = deltas(drawn)
+            // Each report is two pixels; spread over its 80 ms gap that is about 0.2 px per frame.
+            XCTAssertLessThan(steps.max()! * 32, 0.5, "\(mode): no frame carries a visible fraction of a report at once")
+            XCTAssertGreaterThan(Double(steps.filter { $0 > 0 }.count) / Double(steps.count), 0.9, "\(mode): the content keeps moving between reports")
+        }
+    }
+
+    func testAPauseInsideAFastGestureDoesNotHoldItToTheSlowPace() {
+        var resampler = ScrollResampler()
+        resampler.mode = .classic
+        for index in 0..<30 { resampler.input(0.4, at: Double(index) / 60) }
+        resampler.input(0.4, at: 0.5 + 0.16)                    // one 160 ms pause, fingers down
+        XCTAssertGreaterThan(resampler.delay, 0.1)
+        for index in 1...8 { resampler.input(0.4, at: 0.66 + Double(index) / 60) }
+        XCTAssertLessThan(resampler.delay, 0.045, "back near one fast interval within eight reports")
+    }
+
+    func testTheMarginCoversHowLateEventsAreDelivered() {
+        var prompt = ScrollResampler(), late = ScrollResampler()
+        prompt.mode = .predict; late.mode = .predict
+        for index in 0..<60 {
+            let time = Double(index) / 60
+            prompt.input(0.3, at: time, arrived: time + 0.0005)
+            late.input(0.3, at: time, arrived: time + (index % 4 == 0 ? 0.005 : 0.001))   // every fourth is 5 ms late
+        }
+        XCTAssertEqual(prompt.jitterAllowance, ScrollResampler.minimumJitterMargin, accuracy: 0.0005)
+        XCTAssertGreaterThan(late.jitterAllowance, 0.0045, "a delivery that is sometimes 5 ms late needs about that much slack")
+        XCTAssertLessThanOrEqual(late.jitterAllowance, ScrollResampler.maximumMeasuredMargin)
+        XCTAssertGreaterThan(late.delay, prompt.delay + 0.002)
+    }
+
+    func testTheDisplayClockIgnoresLateCallbacksAndEqualsNowForOnTimeOnes() {
+        var clock = DisplaySampleClock()
+        let period = 1.0 / 120
+        var samples: [Double] = []
+        for frame in 0..<60 {
+            let vsync = 100 + Double(frame) * period
+            // Callbacks run 0.2 ms after the refresh, except every third one, which is 1 to 3 ms late.
+            let late = frame % 3 == 2 ? 0.001 * Double(1 + frame % 3) : 0
+            let now = vsync + 0.0002 + late
+            samples.append(clock.time(target: vsync + period, now: now))
+            XCTAssertLessThanOrEqual(samples.last!, now + 1e-9, "never ahead of the clock")
+        }
+        let steps = zip(samples.dropFirst(5), samples.dropFirst(4)).map { $0 - $1 }
+        XCTAssertLessThan(steps.max()! - steps.min()!, 0.0001, "sample times are one period apart whatever the callbacks did")
+        XCTAssertEqual(samples[30], 100 + 30 * period + 0.0002, accuracy: 0.0002, "an on-time callback samples at about now")
+        XCTAssertEqual(clock.time(target: .infinity, now: 5), 5)
     }
 }

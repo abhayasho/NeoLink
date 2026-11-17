@@ -159,6 +159,66 @@ Same-binary-source A/B, release, native full screen, unlocked, native editor cli
 
 The slow-scroll gap is the intended effect: content now moves on (almost) every refresh instead of every other one. The cost is about 15 ms more input-to-display latency for slow 60 Hz input and 3–6 ms for 120 Hz input. The harness's per-frame velocity error against its input timeline is higher after the change for flicks (about 8–12 vs 6 lines/s, with one 40 lines/s outlier run with 3 jump frames) and reversals (4–15 vs 0.2 lines/s) because the drawn motion is a delayed, interpolated copy of the input, which the benchmark scores against the raw trajectory. The unmodified baseline also has outlier runs (a 28-jump `terminal-scroll` run and an 8.8 lines/s `editor-reversal` run). Whether this feels smoother on a real trackpad, and how it feels at the start and end of a gesture, is not established by these runs.
 
+## Smooth motion: slow scrolling, the display's clock and eased prediction (responsiveness pass 5)
+
+Reported from real use after pass 4: scrolling is responsive but not smooth, and scrolling very slowly on the trackpad is choppy. Measured on the M2 Max's built-in 120 Hz display, full screen, frontmost, on battery. Raw reports (gzip): `docs/responsiveness-pass-5/`. Input is synthesized; nothing here is a physical-trackpad measurement, and the slow-scroll report itself came from a real hand.
+
+### What the benchmark was hiding
+
+- **Synthesized scroll events carried no timestamp.** `NSEvent(cgEvent:)` reports 0 unless `CGEvent.timestamp` is set, so the resampler fell back to the time each event was delivered. Real events carry their sampling time. Every earlier scroll measurement therefore included delivery jitter that real input does not have. The benchmark now stamps its events.
+- **The main thread was idle.** `NEOLINK_BENCHMARK_BUSY=1` holds it for a pseudo-random 0.3-3.5 ms every 9.1 ms during a scroll, as layout, RPC handling and timers do in use. All numbers below use it.
+- **Slow input was sent as a steady stream.** A creeping finger reports one point every 40-250 ms and nothing in between; the benchmark sent an empty event every refresh, which kept telling the app that the gesture was alive. `ScrollProfile.crawl` (4-24 pt/s) skips empty reports.
+- **Evenness was only judged after removing the best constant delay from positions.** New per-frame metrics: `jerkPixels` (change of step from one refresh to the next beyond what the input did, in device pixels), `unevenFrames` (more than 1.5 px), and for slow motion `burstFrames` (two or more pixels in a frame while the finger moves less than one per refresh), `largestStepPixels` and `stepGapSpread` (coefficient of variation of the time between pixel steps).
+
+### Causes found and fixed
+
+1. **The editor settled between a slow finger's reports.** `SmoothScrollModel` treated 80 ms without input as the end of the scroll and glided the content to the next line boundary in the direction of travel. With reports further apart than that, every report was followed by a snap: in `editor-crawl` the content travelled 9 lines for 4.66 lines of finger travel, in 2-3 px bursts. While the fingers are down (`began`/`changed` phases) idle time no longer settles; a whole second of rest still does, so a missed `ended` cannot leave the content between lines. `NEOLINK_TOUCH_SETTLE=0` restores the old rule.
+2. **Sparse reports were drawn as bursts.** The resampler's delay was capped at 30 ms and a gap of 100 ms started a new gesture, so a report every 50-250 ms was shown at once (both of its pixels within a frame or two) and then nothing moved until the next. Reports more than 30 ms apart are now interpolated across their gap (delay up to 150 ms, same gesture up to 0.3 s); a longer gap is followed at once and a shorter one quickly. The content then trails by one report, which at that speed is one point. `NEOLINK_SPARSE_SCROLL=0` restores the caps.
+3. **Motion was sampled when the callback ran, not when the frame is shown.** All three consumers called `advance(to: CACurrentMediaTime())`. A callback that runs 2 ms late draws 2 ms more travel in a frame shown at the same refresh, and 2 ms less in the next: at 720 pt/s that is 2.9 px. `DisplaySampleClock` samples on the display link's periodic target time, shifted by the lead of on-time callbacks. `NEOLINK_SCROLL_CLOCK=wall` restores wall-clock sampling.
+4. **Frames arrive out of time order.** With that clock a frame can sample a few milliseconds before an event or a clamp that was applied on arrival; the history kept one event before the sampled time, so such a frame found its segment gone and repeated the previous position. Two are kept.
+5. **Prediction showed its corrections.** Pass 4's `predict` scaled the prediction by a confidence, held a shrinking prediction and stepped onto the input. It now extrapolates at a speed smoothed over about 15 ms (40 ms trailed a changing speed: median change of step 0.4-0.9 px against 0.3-0.4), fades out when the next report is overdue instead of holding, and whatever an event changes about where the content should be at that moment (all of a gesture's first event; a prediction that was off) is added to a correction that decays with a 20 ms time constant. The drawn position is continuous. The first event of a gesture moves on the next frame and is eased in, not shown as a step.
+6. **The measured margin ignored delivery.** It was derived from the gaps between samples (2 ms for a clean stream), but a frame can only use what has been delivered. It now also covers the peak of recent sampled-to-delivered delays, between 2 and 8 ms.
+
+### Rejected in this pass
+
+- **Comparing the path before and after an event at the frame's time** (a copy of the resampler kept until the next frame). After the event was due, the path without it is a hold that was never going to be drawn; easing toward it stalled the motion on every event (steps differing by 2.1-2.8 times at steady 60 and 80 Hz input). The comparison is made at the event's own sampled time.
+- **Repeats after input with one frame in flight**, always or only while frames appear late, against the dense-typing state in which every frame is shown three refreshes after it was submitted (key to display 27-31 ms). Each variant removed that state in its 12 scenario runs but put 5 of them one refresh behind (about 16 ms at the display stage) where the empty-queue rule had 7.5 ms; the empty-queue rule showed the slow state in 3 of 12 scenario runs in one set and 0 of 12 in the next. Not adopted; the state is not understood (see below).
+
+### Matched comparison: installed build vs this one
+
+Three alternating pairs, both binaries built with this pass's benchmark so they receive the same stamped events and busy main thread: **A** = `0128868` (binary `833662a16219`), **B** = this pass (binary `652c968608f1`; the committed source differs from it in comments only). Runs 1 / 2 / 3.
+
+| | A | B |
+|---|---|---|
+| `editor-crawl`: lines travelled for 4.66 lines of finger | 9 / 9 / 9 | 5 / 5 / 5 |
+| `editor-crawl` burst frames, largest step (px) | 66, 65, 70; 3 | 2, 2, 2; 2 |
+| `terminal-crawl` burst frames, step-gap spread | 22, 18, 22; 1.09 | 0, 0, 0; 0.70 |
+| `explorer-crawl` burst frames, step-gap spread | 17, 18, 18; 1.10 | 0, 0, 0; 0.70 |
+| `editor-steady60` uneven frames (of about 360) | 75 / 35 / 75 | 6 / 14 / 9 |
+| `editor-swell` uneven frames; jerk p50, p95 (px) | 91, 112, 90; 0.5-0.8, 3.4-4.0 | 32, 38, 42; 0.3-0.4, 1.7-2.0 |
+| `terminal-scroll` uneven frames | 82 / 75 / 82 | 11 / 32 / 38 |
+| `terminal-swell` uneven frames | 140 / 88 / 97 | 29 / 58 / 33 |
+| `explorer-steady` uneven frames | 60 / 75 / 76 | 8 / 25 / 12 |
+| `explorer-swell` uneven frames | 101 / 112 / 112 | 52 / 27 / 40 |
+| Flicks (editor, shell, explorer) uneven frames (of about 122) | 49-59, 53-60, 58-68 | 21-28, 17-26, 31-39 |
+| Lag: `editor-steady60`, `terminal-scroll`, `explorer-steady` (ms) | 34-35, 26-27, 34 | 35-36, 27, 36 |
+| Lag in the crawl scenarios: editor, shell, explorer (ms) | not comparable (overshoot), 50, 60 | 73, 73, 84-86 |
+| Typing p50: shell, editor (ms) | 28.8-29.2, 30.2-32.1 | 28.8-30.2, 30.7-31.7 |
+| `render-motion` repeated frames; idle CPU (%) | 1, 1, 1; 5.4-5.6 | 3, 0, 1; 5.5-5.7 |
+
+Step-gap spread is 0.70 for the crawl input itself: its speed varies sixfold, so a perfect rendering is not a metronome.
+
+Same-binary rounds of the two modes (`Q*`, before the 15 ms speed smoothing and the delivery margin): `classic` with the new clock and sparse handling is the most even where the speed changes (`editor-swell` 2 and 12 uneven frames, jerk p50 0.3 px; `explorer-swell` 6 and 13) and `predict` the most even where input arrives at the display's rate and is delivered late (`terminal-scroll` 9 and 9 against 99 and 7); `predict` trails by 24-27 ms where `classic` trails by 38-40 ms. The crawl scenarios are identical in both.
+
+Reading it honestly:
+
+- **Slow scrolling is fixed as far as this benchmark can show**: no line snaps, no bursts, one-pixel steps at an even cadence in the editor, the shell and the explorer. The cost is delay at crawl speed (73-86 ms), which is one report, one point.
+- **Ordinary scrolling is two to ten times more even**, with the same lag as the installed build. With the main thread busy and delivery measured, `predict` no longer trails less than pass 4's version did; it trails less than `classic` by about 12 ms.
+- **Flicks are still the roughest case** (17-39 uneven frames in about 122, jerk p95 6-20 px in both builds): the speed changes by tens of pixels per frame and any timing error is large in pixels.
+- **Prediction is still rougher than interpolation when the speed changes** (jerk p50 0.3-0.4 px against 0.05-0.35). View -> Low-Latency Scrolling off selects `classic`, which now has the same clock and slow-scroll fixes.
+- **Typing did not change, and in this session it was slow in both builds**: 29-32 ms p50 with every frame shown three refreshes (24 ms) after submission and the workspace presenting about 50 frames a second, where pass 4 measured 12-19 ms. Short runs on the same battery charge gave 12-14 ms in some launches and 27-31 ms in others. It appears to be the display (or the compositor) following how often it is given frames; whether mains power, the order of scenarios or something else selects the state was not established.
+- Tab switching and divider dragging were not touched or remeasured. No Zed or VS Code measurement was made.
+
 ## Scroll latency, bounded prediction and the axis lock (responsiveness pass 4)
 
 Measured on the M2 Max's built-in 120 Hz display, full screen, frontmost, unlocked. Raw reports (gzip): `docs/responsiveness-pass-4/`. Scroll input is synthesized trackpad events; none of this is a physical-trackpad measurement.

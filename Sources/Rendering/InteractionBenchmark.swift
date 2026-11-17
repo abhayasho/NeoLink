@@ -184,12 +184,14 @@ final class InteractionBenchmark {
                 guard let view = await focusShell() else { fail(scenario, "no shell terminal"); continue }
                 await measure(scenario, expectKeys: 75) { await self.type(count: 75, interval: 1.0 / 25, into: view) }
                 await postKeys(["\u{15}"], interval: 0.05) // Ctrl-U clears the typed line.
-            case "terminal-scroll", "terminal-flick":
+            case "terminal-scroll", "terminal-flick", "terminal-swell", "terminal-crawl":
                 guard let view = await focusShell() else { fail(scenario, "no shell terminal"); continue }
                 await postKeys(Array("clear; seq 1 6000\r").map(String.init), interval: 0.01)
                 await sleep(1.5)
                 // The viewport starts at the newest output: scroll back first, then forward.
-                let profile = scenario == "terminal-flick" ? ScrollProfile.flick(towardTop: true) : .steady(pointsPerSecond: 720, seconds: 2.5, towardTopFirst: true)
+                let profile = scenario == "terminal-flick" ? ScrollProfile.flick(towardTop: true)
+                    : scenario == "terminal-swell" ? .swell(towardTop: true)
+                    : scenario == "terminal-crawl" ? .crawl(towardTop: true) : .steady(pointsPerSecond: 720, seconds: 2.5, towardTopFirst: true)
                 await measureScroll(scenario, view: view, profile: profile)
             case "terminal-flood":
                 guard let view = await focusShell() else { fail(scenario, "no shell terminal"); continue }
@@ -273,7 +275,7 @@ final class InteractionBenchmark {
                 }
                 horizontal?.recordsSamples = false
                 try? FileManager.default.removeItem(at: directory)
-            case "explorer-steady", "explorer-flick":
+            case "explorer-steady", "explorer-flick", "explorer-swell", "explorer-crawl":
                 guard let scroll = Self.explorerScrollView(in: window), let table = scroll.documentView as? ExplorerNSTableView,
                       let coordinator = table.coordinator else { fail(scenario, "native explorer unavailable"); continue }
                 _ = await wait(8) { !coordinator.rows.isEmpty }
@@ -290,7 +292,9 @@ final class InteractionBenchmark {
                       await wait(8, { surface.isCoveringNativeRows }) else { fail(scenario, "explorer Metal surface did not present"); continue }
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: 0)); scroll.reflectScrolledClipView(scroll.contentView)
                 await sleep(0.4)
-                let profile: ScrollProfile = scenario == "explorer-flick" ? .flick(towardTop: false) : .steady60(pointsPerSecond: 600, seconds: 3, towardTopFirst: false)
+                let profile: ScrollProfile = scenario == "explorer-flick" ? .flick(towardTop: false)
+                    : scenario == "explorer-swell" ? .swell() : scenario == "explorer-crawl" ? .crawl()
+                    : .steady60(pointsPerSecond: 600, seconds: 3, towardTopFirst: false)
                 surface.recordsMotionSamples = true
                 let start = CACurrentMediaTime()
                 var timeline: [(Double, Double)] = []
@@ -315,7 +319,7 @@ final class InteractionBenchmark {
                     sampling = false
                 }
                 surface.recordsMotionSamples = false
-            case "editor-scroll", "editor-slow", "editor-flick", "editor-reversal", "editor-steady60":
+            case "editor-scroll", "editor-slow", "editor-flick", "editor-reversal", "editor-steady60", "editor-swell", "editor-crawl":
                 guard let view = await editor() else { fail(scenario, "editor did not open"); continue }
                 await home(view)
                 let profile: ScrollProfile
@@ -324,6 +328,8 @@ final class InteractionBenchmark {
                 case "editor-flick": profile = .flick(towardTop: false)
                 case "editor-reversal": profile = .reversal()
                 case "editor-steady60": profile = .steady60(pointsPerSecond: 360, seconds: 3, towardTopFirst: false)
+                case "editor-swell": profile = .swell()
+                case "editor-crawl": profile = .crawl()
                 default: profile = .steady(pointsPerSecond: 720, seconds: 2.5, towardTopFirst: false)
                 }
                 await measureScroll(scenario, view: view, profile: profile)
@@ -740,6 +746,23 @@ final class InteractionBenchmark {
         var events: [Event]
         /// Seconds between events (trackpads report a moving finger at about 60 Hz; momentum follows the display).
         var interval = 1.0 / 120
+        /// A trackpad reports nothing while the finger has not moved a whole point: skip such events instead
+        /// of delivering empty ones (which would also keep telling the app that the gesture is alive).
+        var skipsEmptyReports = false
+
+        /// A finger creeping at 4 to 24 points per second: one-point reports 40 to 250 ms apart, fingers down
+        /// throughout. This is the input that showed line snaps and bursts in real use.
+        static func crawl(seconds: Double = 5, towardTop: Bool = false) -> ScrollProfile {
+            let count = Int(seconds * 120), sign = towardTop ? 1.0 : -1.0
+            var events: [Event] = []
+            for i in 0..<count {
+                let speed = 14 + 10 * sin(Double(i) / 120 * 2 * .pi * 0.35)
+                events.append(Event(delta: sign * speed / 120, phase: i == count - 1 ? 4 : 2, momentum: 0))
+            }
+            var profile = ScrollProfile(events: events)
+            profile.skipsEmptyReports = true
+            return profile
+        }
 
         /// A finger moving mostly vertically at 60 Hz reports, drifting sideways the way a real hand does
         /// (a slow sinusoid of up to 35% of the vertical motion). Used to check that diagonal noise does not
@@ -764,6 +787,20 @@ final class InteractionBenchmark {
             for i in 0..<count {
                 let sideways = (i / 3) % 2 == 1
                 events.append(Event(delta: sideways ? -3 : -9, phase: i == 0 ? 1 : (i == count - 1 ? 4 : 2), momentum: 0, deltaX: sideways ? -9 : -3))
+            }
+            var profile = ScrollProfile(events: events)
+            profile.interval = 1.0 / 60
+            return profile
+        }
+
+        /// A finger whose speed keeps changing (120 to 900 points per second, about one swell a second) at the
+        /// 60 Hz report rate, in one direction. Nothing is steady for more than a few reports.
+        static func swell(seconds: Double = 3, towardTop: Bool = false) -> ScrollProfile {
+            let count = Int(seconds * 60), sign = towardTop ? 1.0 : -1.0
+            var events: [Event] = []
+            for i in 0..<count {
+                let speed = 510 + 390 * sin(Double(i) / 60 * 2 * .pi * 1.1)
+                events.append(Event(delta: sign * speed / 60, phase: i == 0 ? 1 : (i == count - 1 ? 4 : 2), momentum: 0))
             }
             var profile = ScrollProfile(events: events)
             profile.interval = 1.0 / 60
@@ -847,8 +884,24 @@ final class InteractionBenchmark {
         let frames = window.frames
         let location = Self.pointerLocation(over: target)
         let timeline = TimelineRecorder()
+        // `NEOLINK_BENCHMARK_BUSY=1`: other main-thread work (layout, RPC handling, timers) competes with the
+        // frame callbacks, as it does in real use: a block every 9.1 ms that holds the main thread for a
+        // pseudo-random 0.3 to 3.5 ms. An idle main thread hides anything that depends on when a callback runs.
+        var busy: DispatchSourceTimer?
+        if ProcessInfo.processInfo.environment["NEOLINK_BENCHMARK_BUSY"] == "1" {
+            let timer = DispatchSource.makeTimerSource(flags: .strict, queue: eventQueue)
+            var seed: UInt64 = 0x9E3779B97F4A7C15
+            timer.schedule(deadline: .now(), repeating: 0.0091, leeway: .nanoseconds(0))
+            timer.setEventHandler {
+                seed = seed &* 6364136223846793005 &+ 1442695040888963407
+                let hold = 0.0003 + 0.0032 * Double(seed >> 40) / Double(1 << 24)
+                DispatchQueue.main.async { let until = CACurrentMediaTime() + hold; while CACurrentMediaTime() < until {} }
+            }
+            timer.resume(); busy = timer
+        }
+        defer { busy?.cancel() }
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            var index = 0, position = 0.0, carried = 0.0, carriedX = 0.0
+            var index = 0, position = 0.0, carried = 0.0, carriedX = 0.0, began = false
             let timer = DispatchSource.makeTimerSource(flags: .strict, queue: eventQueue)
             timer.schedule(deadline: .now(), repeating: profile.interval, leeway: .nanoseconds(0))
             timer.setEventHandler {
@@ -870,10 +923,21 @@ final class InteractionBenchmark {
                 carriedX -= wholeX
                 cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: wholeX)
                 cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: wholeX)
-                cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: step.phase)
-                cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: step.momentum)
                 position += step.delta / cell
-                timeline.append(CACurrentMediaTime(), position)
+                if profile.skipsEmptyReports, whole == 0, wholeX == 0, step.phase == 2, step.momentum == 0 {
+                    timeline.append(CACurrentMediaTime(), position)   // the finger moved; nothing was reported
+                    return
+                }
+                // The first report of a gesture carries the "began" phase, whichever tick it falls on.
+                let phase: Int64 = profile.skipsEmptyReports && !began && step.phase == 2 ? 1 : step.phase
+                began = true
+                cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+                cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: step.momentum)
+                // A hardware event carries the time its input was sampled; a synthesized one carries 0 unless
+                // it is set, and the app would fall back to the (later, uneven) time it was delivered.
+                let sampledAt = CACurrentMediaTime()
+                cg.timestamp = UInt64(sampledAt * 1_000_000_000)
+                timeline.append(sampledAt, position)
                 guard let event = NSEvent(cgEvent: cg) else { return }
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
@@ -996,9 +1060,47 @@ final class InteractionBenchmark {
                     backwardFrames += 1; backwardMax = max(backwardMax, abs(step))
                 }
             }
+            // Visual smoothness: how much the distance moved changes from one refresh to the next, in device
+            // pixels, beyond what the input itself did over the same (lag-corrected) refreshes. A game at a
+            // steady 120 fps has none; one held frame at 4 px per frame is 4, then 4 again.
+            var jerk: [Double] = [], stepErrors: [Double] = []
+            for i in 2..<frames.count where frames[i].0 <= end + lag {
+                let gapA = frames[i].0 - frames[i - 1].0, gapB = frames[i - 1].0 - frames[i - 2].0
+                guard gapA < 1.5 * period, gapB < 1.5 * period else {
+                    // A skipped refresh is itself a visible change of speed: the whole step it should have shown.
+                    jerk.append(abs(ideal(at: frames[i].0 - lag) - ideal(at: frames[i - 1].0 - lag)) * cellPixels / max(1, (gapA / period).rounded()))
+                    continue
+                }
+                let stepA = frames[i].1 - frames[i - 1].1, stepB = frames[i - 1].1 - frames[i - 2].1
+                let wantA = ideal(at: frames[i].0 - lag) - ideal(at: frames[i - 1].0 - lag)
+                let wantB = ideal(at: frames[i - 1].0 - lag) - ideal(at: frames[i - 2].0 - lag)
+                guard abs(wantA) + abs(wantB) > 0.5 * pixel else { continue }
+                jerk.append(abs((stepA - stepB) - (wantA - wantB)) * cellPixels)
+                stepErrors.append(abs(stepA - wantA) * cellPixels)
+            }
+            // Slow motion is judged by its pixel steps: how large the largest one was, how many frames moved two
+            // pixels or more while the finger moved less than one per refresh, and how regular the time
+            // between steps was (0 = a metronome; a burst-and-wait pattern is near or above 1).
+            var largestStep = 0.0, burstFrames = 0, stepTimes: [Double] = []
+            for i in 1..<frames.count where frames[i].0 <= end + lag + 0.2 {
+                let step = abs(frames[i].1 - frames[i - 1].1) * cellPixels
+                guard step > 0.5 else { continue }
+                largestStep = max(largestStep, step)
+                stepTimes.append(frames[i].0)
+                let fingerPerFrame = abs(ideal(at: frames[i].0 - lag) - ideal(at: frames[i].0 - lag - 0.1)) * cellPixels / 12
+                if step >= 1.5, fingerPerFrame < 0.75 { burstFrames += 1 }
+            }
+            let stepGaps = zip(stepTimes.dropFirst(), stepTimes).map { $0 - $1 }
+            let meanGap = stepGaps.isEmpty ? 0 : stepGaps.reduce(0, +) / Double(stepGaps.count)
+            let gapSpread = stepGaps.isEmpty || meanGap == 0 ? 0
+                : (stepGaps.reduce(0) { $0 + ($1 - meanGap) * ($1 - meanGap) } / Double(stepGaps.count)).squareRoot() / meanGap
             let p = PresentationTiming.percentile
             func r(_ v: Double, _ digits: Double = 1000) -> Double { (v * digits).rounded() / digits }
             return ["scroll": [
+                "largestStepPixels": r(largestStep, 10), "burstFrames": burstFrames, "pixelSteps": stepTimes.count,
+                "stepGapSpread": r(gapSpread, 100), "stepGapMeanMs": r(meanGap * 1000, 10),
+                "jerkPixelsP50": r(p(jerk, 0.5), 100), "jerkPixelsP95": r(p(jerk, 0.95), 100), "jerkPixelsMax": r(jerk.max() ?? 0, 100),
+                "unevenFrames": jerk.filter { $0 > 1.5 }.count, "stepErrorPixelsP95": r(p(stepErrors, 0.95), 100),
                 "firstMotionMs": firstMotion.map { r(($0 - start) * 1000, 10) } ?? -1,
                 "aheadLinesMax": r(aheadMax), "backwardFrames": backwardFrames, "backwardLinesMax": r(backwardMax),
                 "trailingLinesP50": r(p(trailing, 0.5)), "trailingLinesP95": r(p(trailing, 0.95)),

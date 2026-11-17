@@ -312,6 +312,7 @@ final class NeoGPUWorkspace: NSView {
     private var lastPresentation = -Double.infinity
     static let quietInterval = 0.05
     static let repeatsAfterInput = ProcessInfo.processInfo.environment["NEOLINK_HOLD_REPEAT"] != "0"
+
     /// Refresh callbacks that found nothing new and presented nothing (diagnostic).
     private(set) var idleCallbacks = 0
 
@@ -371,6 +372,11 @@ final class NeoGPUWorkspace: NSView {
         let moving = nodes.contains { $0.0.needsAnotherFrame }
         var holding = false
         if Self.repeatsAfterInput, #available(macOS 14, *), let direct = source as? NeoGPUDirectFrameSource {
+            // Typing sometimes runs in a state where each frame appears three refreshes after it was submitted
+            // and, with this rule, one is submitted only every 25 ms (key to display 27-31 ms instead of
+            // 12-14). Allowing a repeat with one frame in flight, always or only while frames appear late,
+            // removed that state in 12 runs but put 5 of 12 a refresh behind instead (16 ms) where this rule
+            // had 7.5 ms; the state itself is not understood. Measured and not adopted (`docs/RENDERING.md`).
             holding = ((window as? WorkspaceWindow)?.frames.isRunning ?? false) && direct.isQueueEmpty
         }
         let changed = forcePresent || repeatOnce || moving || holding || allowOffscreen || continuousRefresh || captureNextFrame != nil

@@ -552,6 +552,7 @@ final class ExplorerScrollView: NSScrollView {
     /// Trackpad input is drawn at the display's cadence (see `ScrollResampler`): a finger reports about 60 times
     /// a second, so moving the clip view on each event alone held every other 120 Hz frame still.
     private var resampler = ScrollResampler()
+    private var sampleClock = DisplaySampleClock()
     private var targetY: CGFloat?
     private var drawnY: CGFloat?
     private var animating = false
@@ -569,7 +570,8 @@ final class ExplorerScrollView: NSScrollView {
             // A new gesture while the previous one is still gliding continues the same live scroll.
             if endPending { endPending = false } else { center.post(name: NSScrollView.willStartLiveScrollNotification, object: self) }
         }
-        queue(event.scrollingDeltaY, at: scrollInputTime(event, now: CACurrentMediaTime()))
+        let arrived = CACurrentMediaTime()
+        queue(event.scrollingDeltaY, at: scrollInputTime(event, now: arrived), arrived: arrived)
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) {
             if animating { endPending = true } else { center.post(name: NSScrollView.didEndLiveScrollNotification, object: self) }
         }
@@ -589,7 +591,7 @@ final class ExplorerScrollView: NSScrollView {
 
     private func cancelGlide() { resampler.reset(); targetY = nil; drawnY = nil }
 
-    private func queue(_ delta: CGFloat, at time: Double) {
+    private func queue(_ delta: CGFloat, at time: Double, arrived: Double? = nil) {
         guard delta.isFinite, delta != 0 else { return }
         let current = contentView.bounds.origin.y
         // Something else moved the content (keyboard, reveal, resize): start from where it is.
@@ -602,7 +604,7 @@ final class ExplorerScrollView: NSScrollView {
         guard applied != 0 else { return }
         if targetY == nil { resampler.reset() }
         targetY = target.origin.y
-        resampler.input(Double(applied), at: time)
+        resampler.input(Double(applied), at: time, arrived: arrived)
         apply()
         startGliding()
     }
@@ -630,7 +632,7 @@ final class ExplorerScrollView: NSScrollView {
         frames.animate(ObjectIdentifier(self)) { [weak self] time in
             guard let self else { return false }
             guard time.isFinite, self.targetY != nil else { self.finishGlide(); return false }
-            let active = self.resampler.advance(to: CACurrentMediaTime())
+            let active = self.resampler.advance(to: self.sampleClock.time(target: time, now: CACurrentMediaTime()))
             self.apply()
             if !active { self.finishGlide() }
             return active
