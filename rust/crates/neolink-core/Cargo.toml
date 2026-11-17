@@ -1,0 +1,9 @@
+[package]
+name = "neolink-core"
+description = "Platform-independent logic for NeoLink: scrolling, frame pacing, benchmark profiles and analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
