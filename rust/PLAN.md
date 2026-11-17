@@ -3,7 +3,8 @@
 Living document for the Rust rebuild (branch `rust-rewrite`, directory `rust/`). The Swift app in `Sources/` stays the
 working product until this reaches parity; nothing here replaces or modifies it.
 
-Status line (update every milestone): **Stack decided by a measured spike; milestone 1 (terminal skeleton) in progress.**
+Status line (update every milestone): **Milestone 1 (terminal skeleton, harness, first comparison) is done and
+measured on macOS. Windows: type-checked only. Milestones 2-5 not started.**
 
 ## 1. Why a rewrite, and what "better" has to mean
 
@@ -113,7 +114,7 @@ write, and accessibility and IME start from winit's level.
 | Need | Crate | Version | Notes |
 | --- | --- | --- | --- |
 | Terminal model | `alacritty_terminal` | 0.26.0 | Apache-2.0; VT parser and grid with scrollback |
-| PTY | `portable-pty` | 0.9.0 | MIT; ConPTY on Windows |
+| PTY | `alacritty_terminal::tty` | 0.26.0 | its own PTY layer (ConPTY on Windows), so `portable-pty` is not needed |
 | SSH / SFTP | `russh` / `russh-sftp` | 0.65.2 / 3.0.1 | Apache-2.0 |
 | Neovim RPC | `rmpv` | 1.3.1 | MIT; msgpack values, own RPC framing |
 | Git review | `git` CLI first | - | same bounded porcelain queries as the Swift app; `gix` 0.90 only if a subprocess is too slow |
@@ -124,48 +125,65 @@ write, and accessibility and IME start from winit's level.
 
 ```
 main thread (winit)            render thread                      I/O threads
-  OS events, stamped     -->   sleeps until woken           <--   PTY readers (alacritty_terminal event loops),
-  UI state, layout             plans the frame (Pacer)            Neovim RPC reader, SSH, git, agents
-  scene description            samples scroll/animation at        each marks its pane dirty and wakes the
-  input injection (bench)      the frame's display time           render thread; never touches the main thread
-                               snapshots terminal grids
-                               encodes, submits, presents
-                               receives presented timestamps
+  OS events, stamped     -->   parked until invalidated     <--   PTY readers (alacritty_terminal event loops);
+  shortcuts, key encoding      plans the frame (Pacer)            later: Neovim RPC, SSH, git, agents
+  benchmark injection          builds the scene, skips it         each invalidates lock-free and never
+                               if nothing visible changed         touches the main thread
+                               acquires, encodes, presents
+                               receives displayed timestamps
 ```
 
-- **Presentation.** macOS: own `CAMetalLayer` (2 drawables, VSync on), `nextDrawable()` on the render thread, present
-  on commit, presented handler feeds the pacer and the harness. Windows: wgpu surface, FIFO, frame latency 1.
-- **Pacing (`neolink-core::pacer`).** At most one frame per refresh slot. If the slot for the next refresh is free when
-  something changes, the frame starts immediately; otherwise it starts when that slot closes. Nothing is presented when
-  nothing changed. The pipeline depth (0 in full screen, 2 windowed) and the commit margin (2.7 ms and 0.3 ms) are
-  learned from displayed times, not assumed.
-- **One opaque layer.** Everything in the window is drawn by the one renderer into one opaque `CAMetalLayer`; no
-  native views or transparent overlays over it, so full screen keeps direct scan-out.
-- **Scrolling (`neolink-core::scroll`).** Deltas reach the next frame. Smoothing is off for input at the display's
-  rate. The only smoothing is *spreading*: when reports are measurably slower than the display (60 Hz finger on a
-  120 Hz panel, or a creeping finger at one point every 40-250 ms) an event's distance is released linearly over the
-  measured report interval, starting with the next frame, capped at 150 ms. The added delay is reported by the harness.
-  To be enabled by default only if the immediate mode measures held frames for that input (section 5).
-- **Gesture state** comes from the OS phases; a gap with the fingers down is never the end of a gesture. Shell
-  scrollback rests at any pixel; nothing settles.
-- **Text.** Glyph atlas keyed by font, glyph and size; monospace cells snapped to whole device pixels (one raster
-  phase); UI text with four horizontal subpixel bins.
-- **Harness.** In the app (`NEOLINK_BENCHMARK=...`), same scenario names, scroll profiles and analysis formulas as
-  `Sources/Rendering/InteractionBenchmark.swift`, so numbers line up with the Swift app's reports.
+Crates: `neolink-core` (no dependencies: scroll model, pacer, benchmark profiles and analysis, statistics; 36 tests)
+and `neolink` (the app). Source map of the app: `frame.rs` render thread and frame log, `present/` presenters,
+`render.rs` quads and retained rows, `text.rs` glyphs, `term.rs` terminal pane, `workspace.rs` tabs and layout,
+`input.rs` key encoding, `bench.rs` harness, `capture.rs` off-screen PNG, `spike.rs` the stack spike.
+
+Rules the measurements produced (each has a number behind it in section 5):
+
+- **One opaque layer.** Everything is drawn by the one renderer into one opaque `CAMetalLayer`: no native views or
+  transparent overlays over it, so full screen can be scanned out directly.
+- **Own presenter (macOS).** The app calls `nextDrawable()` itself and presents on commit with a presented handler.
+  Three drawables: with two, `nextDrawable()` blocks until the next refresh whenever a frame is waiting and that frame
+  then shows two events (108 of 300 scroll frames carried zero or two events). The second, empty command buffer per
+  frame (wgpu 30 refuses `presentDrawable` on its own encoder) is a known cost.
+- **Pacing (`neolink-core::pacer`).** A frame is drawn only when something changed. At most one commit per refresh.
+  A frame starts the moment a change arrives if the coming refresh has no frame yet, otherwise just after that
+  refresh. Depth (refreshes between latch and display: 0 scanned out directly, 2 through the compositor) and the
+  commit margin (about 2.7 ms and 0.3 ms) are learned from displayed times. Three late frames in a row give up one
+  slot (a standing queue); a depth that survives three such drains is adopted.
+- **No frame for nothing.** The scene is built before a drawable is taken; if its signature equals the last frame's
+  (output in a hidden tab, scroll distance under a pixel) nothing is presented. A key press does not draw: the frame
+  belongs to the program's echo (drawing at the key cost 8 ms: the echo found its refresh taken).
+- **Keep the panel fast while the user is active.** A panel given no frames lowers its refresh rate within a second:
+  the next frame took 6 ms after a 0.2-0.4 s pause, 13 ms after 1 s and about 50 ms after several. For 3 s after the
+  last input (`NEOLINK_WARM_SECONDS`) the last frame is repeated every 250 ms (`NEOLINK_WARM_MS`, 0 = off). After
+  that the render thread is parked and nothing runs.
+- **Scrolling (`neolink-core::scroll`).** Deltas reach the next frame; nothing is resampled or predicted. Input slower
+  than 1.5 refreshes per report is *spread*: an event's distance is released linearly over the measured report
+  interval starting with the next frame, capped at 150 ms. `NEOLINK_SCROLL_SMOOTHING=off` disables it. Frames are
+  scheduled only for the refreshes in which a device pixel changes. Shell scrollback rests at any pixel.
+- **Retained rows.** A terminal row becomes GPU instances once, keyed by its resolved cells; later frames draw it
+  with a 16-byte translation (wgpu immediates). While the grid is unchanged a scroll looks at no cell.
+- **Text.** cosmic-text/swash on every system; monospace cells are whole device pixels (one raster phase). Combining
+  marks stored as zero-width extras are not drawn yet.
 
 ## 4. Parity checklist (from README, AGENTS.md and docs/)
 
-Legend: done / partial / not started. "Verified" names the system it was actually run on.
+Legend: done / partial / not started. "Verified" names the system it was actually run on. "macOS, synthetic" means
+exercised by the in-app benchmark or the capture, not by a person at the keyboard.
 
 | Area | Feature | State | Verified on |
 | --- | --- | --- | --- |
-| Shell | Window, GPU text, 120 Hz demand-driven presentation | not started | - |
-| Shell | Local shell tabs on a real PTY, persistent across tab switches | not started | - |
-| Shell | Pixel-smooth scrollback, fractional rest, mouse-aware programs get wheel reports | not started | - |
-| Shell | Text size 9-32 pt, persisted; copy/paste/selection | not started | - |
-| Shell | Working-directory reporting from the shell (per-tab browser state) | not started | - |
-| Shell | IME / marked text | not started | - |
-| Harness | Synthetic input with timestamps, busy main thread, key-to-present, evenness, idle CPU | not started | - |
+| Shell | Window, GPU text, demand-driven presentation at 120 Hz | done | macOS, synthetic (capture: `docs/milestone-1-capture.png`) |
+| Shell | Local shell tabs on a real PTY, alive across tab switches (Cmd-T/W, Cmd-1..9, Ctrl-Tab, click) | done | macOS, synthetic (`ui-tabs`); shortcuts not exercised by a person |
+| Shell | Pixel-smooth scrollback, fractional rest; wheel reports for mouse-aware and alternate-screen programs | partial | scrollback: macOS, synthetic; program wheel reports: written, never exercised |
+| Shell | Colours, bold/italic/underline/strike/inverse/dim, wide characters, emoji, cursor shapes | partial | macOS capture; combining marks missing, cursor blink missing |
+| Shell | Text size 9-32 pt (Cmd +/-/0) | partial | written, not exercised; not persisted |
+| Shell | Paste (Cmd-V, bracketed); copy and mouse selection | partial | paste written, not exercised; selection not started |
+| Shell | Working-directory reporting from the shell, titles | partial | OSC titles handled; directory tracking not started |
+| Shell | IME / marked text; accessibility | not started | - |
+| Shell | Window resize (smooth live resize), display changes | partial | resize relays out the grid; live-resize smoothness not measured |
+| Harness | Synthetic input with timestamps, busy main thread, key-to-display, evenness, idle CPU, per-thread CPU | done | macOS |
 | Explorer | Lazy project tree, compact folders, reveal active file, filter | not started | - |
 | Explorer | Git decorations and ignore dimming, diagnostics counters, icons | not started | - |
 | Explorer | File actions (create, rename, trash, copy path, open terminal here, drag/drop copy) | not started | - |
@@ -173,7 +191,7 @@ Legend: done / partial / not started. "Verified" names the system it was actuall
 | Editor | Shared headless Neovim, `ext_linegrid` client, `Resources/Editor/neolink.lua` | not started | - |
 | Editor | Tabs, open/save/close with dirty prompts, external-change conflict check | not started | - |
 | Editor | Correct-buffer guarantee on switch (`neolink_selection` ordering), snapshot cache rules | not started | - |
-| Editor | Smooth vertical scroll, pixel-smooth horizontal scroll, axis lock | not started | - |
+| Editor | Smooth vertical scroll, pixel-smooth horizontal scroll, axis lock | not started | axis lock logic exists in `neolink-core` with tests |
 | Editor | LSP/Tree-sitter limits (2 MiB, 128 MiB), Run file, REPLs, folding menu | not started | - |
 | Editor | Native text fallback without `nvim`; PDF viewer tabs | not started | - |
 | Remote | SSH terminal tabs, saved connections, validated creation | not started | - |
@@ -184,26 +202,136 @@ Legend: done / partial / not started. "Verified" names the system it was actuall
 | Git | Status/diff review, stage/unstage, commit, branches, read-only stash preview | not started | - |
 | Agents | ACP v1 stdio conversations: streaming, tool previews, permissions, cancel, modes, MCP config | not started | - |
 | Agents | Agent terminals (Claude Code / custom CLI) in panel or tab | not started | - |
-| Shell UI | Menus, shortcuts, panel visibility persistence, recent projects, Performance Monitor | not started | - |
-| Packaging | macOS `.app` (resources, signing), Windows artifact, CI on both | not started | - |
+| Shell UI | Menus, panel visibility persistence, recent projects, Performance Monitor | not started | winit's default macOS menu only |
+| Packaging | macOS `.app` (resources, signing), Windows artifact, CI on both | partial | workflow written (`.github/workflows/rust.yml`), never run: the branch is not pushed |
 
-## 5. Measurements
+## 5. Measurements (milestone 1)
 
-None yet. Layout for when they exist: same machine and display mode as the Swift numbers, frontmost, unlocked,
-`caffeinate -d -u`, `NEOLINK_BENCHMARK_BUSY=1`, three alternating pairs against `.build/release/NeoLink`. Synthetic
-input is not a physical trackpad and will be labelled as such.
+M2 Max, built-in 120 Hz panel, on battery, both apps frontmost and unlocked under `caffeinate -d -u`. Swift app:
+`.build/release/NeoLink` at `32dde85` (binary `dac58eda63b7`, the installed build). Rust app: binary `1b81776288ba`
+for the paired runs, `ffb565b77c0c` for the windowed runs (differs only in the pacer's three-late-frames rule).
+Rust grid 245 x 72 at 12 pt Menlo in full screen; the Swift app's grid differs slightly (its chrome differs).
+Raw reports: `docs/milestone-1/*.json.gz`. Tools: `scripts/compare-reports.py`, `scripts/show-report.py`.
+
+**All input is synthetic.** Both apps create events on a timer with their sampling time and deliver them on the main
+thread; neither measurement includes the operating system's event delivery, a physical trackpad or a keyboard. Three
+alternating pairs per condition; values are runs 1 / 2 / 3. Scroll metrics are those of
+`InteractionBenchmark.swift`, computed with the same formulas.
+
+### The display has two states, and they move both apps together
+
+Frames reach this display in one of two ways. Either a commit is on the glass at the next refresh it is in time for
+("direct"), or two refreshes later ("composited"). Windowed is always composited. Full screen is usually direct, but
+not always: in one set of three pairs (kept out of the tables below; raw reports in `docs/milestone-1/composited-set/`, taken with an earlier Rust binary) both
+apps ran the whole time about 17 ms slower (Swift typing 28-30 ms, Rust 23-25 ms), and single Rust scenarios
+inside otherwise direct runs came out composited twice. The Rust report states the path per scenario
+(`displayPath`). Earlier Swift figures in `docs/RENDERING.md` (typing 27-32 ms, scroll lag 26-36 ms) match the
+composited state; its 12-19 ms figures match the direct one. What selects the state was not found.
+
+### Full screen, direct state, main thread not busy
+
+| | Swift app | Rust app |
+| --- | --- | --- |
+| Typing (75 keys at 25/s), key to display p50 (ms) | 14.8 / 15.2 / 13.7 | **5.6 / 7.0 / 7.1** |
+| Typing p95 (ms) | 20.6 / 23.4 / 23.8 | **8.1 / 8.7 / 8.8** |
+| Typing, slowest key (ms) | **20.6 / 27.6 / 31.3** | 43.1 / 27.0 / 43.8 |
+| A key every 1.6 s, p50 (ms) | 16.3 / 17.6 / 18.0 | **8.0 / 8.3 / 9.2** |
+| `terminal-scroll` (120 Hz reports) lag (ms) | 15 / 10 / 10 | 8 / 12 (composited) / 9 |
+| `terminal-scroll` first motion (ms) | 16.2 / 16.4 / 11.2 | **7.6 / 4.3 / 4.7** |
+| `terminal-scroll` uneven frames of about 300; jerk p95 (px) | 25, 7, 9; 1.99, 0.02, 1.01 | **2, 4, 3; 0.02, 0, 0** |
+| `terminal-swell` (60 Hz, speed varying) lag (ms) | 20 / 19 / - | 17 / 17 / 16 |
+| `terminal-swell` uneven frames of about 360 | 37 / 28 / - | **5 / 4 / 3** |
+| `terminal-flick` lag; first motion (ms) | 12, 12, 12; 11.4, 11.0, 9.1 | 21 (composited), 8, 9; 14.3, 6.0, 6.7 |
+| `terminal-flick` uneven frames of about 125; jerk p95 (px) | **17, 20, 19**; 7.8, 7.3, 9.2 | 40, 41, 41; 24.7, 2.9, 2.9 |
+| `terminal-flick` refreshes missed while moving | **1 / 2 / 1** | 5 / 4 / 4 |
+| `terminal-crawl` lag (ms); frames presented without motion | 58, 57, -; 4, 5, - | **44, 43, 42; 0, 0, 0** |
+| `terminal-crawl` burst frames; step-gap spread (input itself: 0.70) | **0, 0; 0.71, 0.70** | 1, 1, 1; 0.76, 0.77, 0.78 |
+| Idle CPU (% of a core) | 1.2 / 5.1 / 4.8 | **0.1 / 0.1 / 0.1** |
+| CPU while scrolling (`terminal-scroll`, % of a core) | **5.8 / 6.6 / 6.8** | 17.6 / 15.7 / 16.3 (benchmark timers excluded) |
+
+One Swift run produced no crawl or swell result. Rust-only scenarios, same runs: `terminal-steady60` lag 23 / 15 / 17
+ms with 44 / 4 / 4 uneven frames of 360; `ui-tabs` (24 switches between two shells) switch to display p50
+5.3-8.0 ms, worst 14.6 ms.
+
+### Full screen, direct state, main thread busy (`NEOLINK_BENCHMARK_BUSY=1`, scroll scenarios only)
+
+| | Swift app | Rust app |
+| --- | --- | --- |
+| Typing p50 (ms) | 13.0 / 14.7 / 15.0 | **6.5 / 7.0 / 6.2** |
+| A key every 1.6 s, p50 (ms) | 13.4 / 18.7 / 19.1 | **6.8 / 6.6 / 7.4** |
+| `terminal-scroll` lag; first motion (ms) | 11, 19, 11; 12.9, 10.8, 15.1 | 14, 12, 10; **6.3, 6.3, 8.8** |
+| `terminal-scroll` uneven frames; refreshes missed | **7, 16, 13; 0, 1, 0** | 4, 13, 31; 1, 5, 7 |
+| `terminal-swell` lag (ms); uneven frames | 20, 20, 20; 36, 37, 56 | 21, 21, 22; **6, 5, 4** |
+| `terminal-flick` lag (ms); uneven frames | 12, 12, 12; **26, 27, 16** | 9, 7, 8; 41, 38, 39 |
+| `terminal-crawl` lag (ms) | 58 / 58 / 58 | **43 / 43 / 44** |
+| Idle CPU | 5.0 / 5.0 / 5.2 | **0.1 / 0.1 / 0.1** |
+| CPU while scrolling (`terminal-scroll`) | **24.6 / 24.8 / 25.7** | 30.9 / 31.9 / 29.4 (timers excluded) |
+
+### Windowed (always composited), main thread not busy, two runs each
+
+| | Swift app | Rust app |
+| --- | --- | --- |
+| Typing p50; p95 (ms) | 28.3, 29.6; 36.5, 33.0 | **21.9, 22.8; 26.0, 26.1** |
+| `terminal-scroll` lag; first motion (ms) | 27, 27; 27.6, 28.8 | 26, 26; 18.7, 25.4 |
+| `terminal-scroll` uneven frames; refreshes missed | 48, 11; **0, 0** | 15, 12; 5, 3 |
+| `terminal-swell` lag (ms); uneven frames; refreshes missed | 37, 37; 43, 38; **1, 1** | 35, 34; 24, 17; 10, 6 |
+| `terminal-flick` lag (ms); uneven frames | 29, 29; **18, 33** | 24, 25; 39, 48 |
+| CPU while scrolling (`terminal-scroll`) | **8.0 / 8.3** | 13.1 / 12.3 (timers excluded) |
+
+### Reading it honestly
+
+- **Typing is where the rewrite clearly wins**: about half the Swift app's latency in the direct state (6-7 ms
+  against 13-15 ms at the median, 8-9 against 16-24 at p95) and 6-7 ms less windowed. The target of about one
+  refresh at the median is met in full screen and cannot be met in a window (the compositor alone takes two).
+- **The slowest key is worse in the Rust app** (27-50 ms against 21-31 ms): it is the first key after more than 3 s
+  without input, when the panel has slowed down. Within 3 s of the last input it is 8 ms.
+- **Idle is 0.1% of a core against about 5%.**
+- **Scroll lag is not clearly better.** With the display in the same state the two apps are within a few
+  milliseconds of each other (8-14 ms against 10-19 ms in full screen, 26 against 27 windowed): the Swift app's
+  predictor cancels most of its resampling delay on steady synthetic input, and the Rust app's lag swings by a whole
+  refresh with the phase between events and refreshes. First visible motion is 4-9 ms against 9-16 ms. Slow
+  scrolling trails less (43 ms against 58 ms). What the user reported as input delay may be the composited state
+  rather than the resampler; that was not established.
+- **Evenness is mixed.** Steady and varying-speed scrolling is more even (2-6 uneven frames against 7-56). Flicks
+  are less even by the frame count (about 40 against 16-27 of 125) though their worst steps are smaller: momentum
+  reports are whole points and the Rust app draws them as they come, where the Swift app's resampler averages them.
+  With the main thread held busy, 120 Hz scrolling missed more refreshes than the Swift app in two of three runs
+  (an event delivered late lands in the next frame). In a window the Rust app misses a few more refreshes (3-10
+  against 0-1 in 300).
+- **CPU while scrolling is about 2.5 times the Swift app's** (16-18% of a core against 6-7% in full screen): about
+  6% on the render thread (wgpu's encoding and submit, 0.5 ms a frame), about 7% in the kernel, most of the rest in
+  system threads. The retained rows halved the render thread's share; the second command buffer per frame and
+  wgpu's per-frame overhead remain. This is the main regression against the Swift app.
+- Not measured: a physical trackpad or keyboard, energy, memory, the busy option's realism for an app whose main
+  thread does no layout, other displays, 60 Hz, and anything on Windows.
 
 ## 6. Windows
 
-No Windows machine is available. Verification will be whatever a GitHub Actions `windows-latest` job runs (build and
-tests) once pushing the branch is approved, plus a local `cargo check --target x86_64-pc-windows-msvc`. Until a job
-has run, Windows support is "designed for, not compiled".
+No Windows machine is available. What exists: `cargo check -p neolink --target x86_64-pc-windows-msvc` passes on this
+Mac (types only: nothing was linked or run), and `.github/workflows/rust.yml` builds and runs the unit tests on
+`windows-latest` and uploads the executable. **That workflow has never run**, because the branch is not pushed (the
+repository is public; pushing waits for a go-ahead). On Windows the presenter is the plain wgpu surface (no display
+timestamps), the PTY is `alacritty_terminal`'s ConPTY backend, and fonts fall back to Cascadia/Consolas. None of it
+has executed.
 
-## 7. Log
+## 7. Open items after milestone 1
 
-- 2026-11-16 (later): toolchain installed (Rust 1.100). Core crate: 33 tests pass. Stack spike run and decided
-  (section 2). Pacer reworked around what the spike measured (latch, depth, learned margin).
+- CPU while scrolling (section 5): try presenting on a raw Metal command buffer shared with rendering, or cut
+  wgpu's per-frame cost; measure kernel time with one command buffer.
+- Find what puts a full-screen window in the composited state, and whether the app can avoid it.
+- The first key after a long pause (panel slowed down): 27-50 ms. The keep-warm window is a power trade.
+- Flick evenness against whole-point momentum reports; refreshes missed in a window.
+- Combining marks, selection and copy, cursor blink, IME, text size persistence, live-resize smoothness.
+- A person has not used this build: every interaction above was synthetic.
+
+## 8. Log
+
+- 2026-11-16 (night): milestone 1. Terminal on `alacritty_terminal`, tabs, key encoding, pixel scrollback, harness
+  with the Swift benchmark's profiles and analysis, off-screen capture, retained rows, keep-warm frames, pacer
+  reworked three times against measurements (latch/depth/margin, start after the previous latch, queue draining).
+  Paired runs against the Swift app in three conditions. Windows type-check and CI workflow (not run).
+- 2026-11-16 (later): toolchain installed (Rust 1.100). Stack spike run and decided (section 2).
 - 2026-11-16: `cargo`, `rustc`, `rustup` not installed; install requested. Read the specification documents and the
   Swift benchmark; checked crate versions, licences and GPUI's current structure and presentation path; created the
   `rust-rewrite` branch as a separate worktree (the main checkout's branch is untouched); wrote this plan and the
-  compiler-independent logic in `crates/neolink-core` (not yet compiled).
+  compiler-independent logic in `crates/neolink-core`.

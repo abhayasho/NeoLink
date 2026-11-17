@@ -45,7 +45,7 @@ impl Presenter {
                 desired_maximum_frame_latency: 1,
                 alpha_mode: wgpu::CompositeAlphaMode::Opaque,
                 view_formats: vec![],
-                ..Default::default()
+                color_space: Default::default(),
             },
         );
     }
@@ -65,6 +65,9 @@ impl Presenter {
         let view = texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
         Some(Frame { view, width, height, texture })
     }
+
+    /// Nothing to do on this path: the surface is presented after the submit.
+    pub fn schedule(&mut self, _encoder: &mut wgpu::CommandEncoder, _frame: &Frame, _id: u64) {}
 
     pub fn present(&mut self, frame: Frame, id: u64) {
         let submitted = clock::now();

@@ -22,6 +22,8 @@ pub struct Presenter {
     presented: Arc<Mutex<Vec<Presented>>>,
     /// Frames submitted whose display time has not been reported yet.
     in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    /// Whether the frame being drawn was scheduled on wgpu's own command buffer.
+    scheduled: bool,
 }
 
 // The layer is only touched from the render thread after creation; CAMetalLayer's drawable calls are
@@ -51,8 +53,13 @@ impl Presenter {
         layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
         layer.setFramebufferOnly(true);
         layer.setOpaque(true);
-        // Two drawables: one on the display, one being drawn or waiting. Nothing can queue further back.
-        layer.setMaximumDrawableCount(2);
+        // Three drawables: one on the display, one committed for the next refresh, one to draw into.
+        // With two, `nextDrawable()` blocks until the next refresh whenever a frame is waiting, and the
+        // frame then shows whatever input arrived during the wait: two events in one frame and none in
+        // the next (measured: 108 of 300 frames of a steady scroll). The pacer, not the drawable count,
+        // keeps frames from queueing.
+        let drawables = std::env::var("NEOLINK_DRAWABLES").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(3).clamp(2, 3);
+        layer.setMaximumDrawableCount(drawables);
         layer.setDisplaySyncEnabled(true);
         layer.setAllowsNextDrawableTimeout(true);
         layer.setPresentsWithTransaction(false);
@@ -75,6 +82,7 @@ impl Presenter {
             size: (0, 0),
             presented: Arc::new(Mutex::new(Vec::new())),
             in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            scheduled: false,
         };
         let mut presenter = presenter;
         presenter.resize(size.width.max(1), size.height.max(1));
@@ -134,10 +142,17 @@ impl Presenter {
         Some(Frame { view, width, height, _texture: texture, drawable })
     }
 
-    /// Presents `frame` once the commands already submitted to the queue have been scheduled.
-    pub fn present(&mut self, frame: Frame, id: u64) {
-        let Frame { view, _texture, drawable, .. } = frame;
-        drop(view);
+    /// Registers the frame's display report. Call before the frame's commands are submitted.
+    ///
+    /// The drawable cannot be scheduled on wgpu's own command buffer: wgpu 30 refuses to mix its
+    /// encoding API with the raw one on one encoder. So each frame costs a second, empty command
+    /// buffer (see `present`); the kernel time of that commit is measurable (PLAN.md, section 5).
+    pub fn schedule(&mut self, _encoder: &mut wgpu::CommandEncoder, frame: &Frame, id: u64) {
+        self.add_handler(frame, id);
+        self.scheduled = false;
+    }
+
+    fn add_handler(&mut self, frame: &Frame, id: u64) {
         let submitted = clock::now();
         let sink = self.presented.clone();
         let in_flight = self.in_flight.clone();
@@ -147,17 +162,23 @@ impl Presenter {
             in_flight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             sink.lock().push(Presented { frame: id, submitted, displayed, exact: true });
         });
-        unsafe { drawable.addPresentedHandler(RcBlock::as_ptr(&handler)) };
-        // A command buffer of our own on wgpu's queue: buffers on one queue run in order, so the
-        // drawable is presented after the frame's rendering.
-        let queue = unsafe { self.queue.as_hal::<wgpu::hal::api::Metal>() }.expect("a Metal queue");
-        if let Some(buffer) = queue.as_raw().commandBuffer() {
-            let shown: &ProtocolObject<dyn MTLDrawable> = ProtocolObject::from_ref(&*drawable);
-            buffer.presentDrawable(shown);
-            buffer.commit();
+        unsafe { frame.drawable.addPresentedHandler(RcBlock::as_ptr(&handler)) };
+    }
+
+    /// Call after the frame's commands were submitted.
+    pub fn present(&mut self, frame: Frame, _id: u64) {
+        if !self.scheduled {
+            // A command buffer of our own on wgpu's queue: buffers on one queue run in order, so the
+            // drawable is presented after the frame's rendering.
+            let queue = unsafe { self.queue.as_hal::<wgpu::hal::api::Metal>() }.expect("a Metal queue");
+            if let Some(buffer) = queue.as_raw().commandBuffer() {
+                let shown: &ProtocolObject<dyn MTLDrawable> = ProtocolObject::from_ref(&*frame.drawable);
+                buffer.presentDrawable(shown);
+                buffer.commit();
+            }
         }
-        drop(queue);
-        drop(_texture);
+        self.scheduled = false;
+        drop(frame);
     }
 
     /// Display reports that arrived since the last call.

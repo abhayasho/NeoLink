@@ -1,0 +1,48 @@
+name: Rust app checks
+on:
+  push:
+    branches: [rust-rewrite]
+    paths: ['rust/**', '.github/workflows/rust.yml']
+  pull_request:
+    paths: ['rust/**', '.github/workflows/rust.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  # What this establishes on Windows: the workspace compiles and links with the MSVC toolchain and the unit
+  # tests pass. It does not open a window, so it says nothing about rendering, input or latency there.
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+      - name: Build
+        run: cargo build --workspace --release --locked
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Upload the Windows build
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: neolink-windows-x64-unverified
+          path: rust/target/release/neolink.exe
+          if-no-files-found: error

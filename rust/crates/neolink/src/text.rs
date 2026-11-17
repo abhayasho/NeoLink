@@ -135,7 +135,32 @@ pub struct CellGlyph {
     pub y: i16,
 }
 
+/// A glyph of a laid-out line: its sprite and pen position relative to the line's origin and baseline.
+#[derive(Clone, Copy, Debug)]
+pub struct LineGlyph {
+    pub sprite: Sprite,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// One line of interface text, shaped once and cached.
+#[derive(Clone, Debug, Default)]
+pub struct ShapedLine {
+    pub glyphs: Vec<LineGlyph>,
+    pub width: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct LineKey {
+    text: String,
+    size_bits: u32,
+    bold: bool,
+    monospace: bool,
+}
+
 pub struct TextSystem {
+    lines: HashMap<LineKey, std::sync::Arc<ShapedLine>>,
+    ui_family: String,
     fonts: FontSystem,
     swash: SwashCache,
     pub atlas: Atlas,
@@ -167,13 +192,68 @@ fn monospace_family(fonts: &FontSystem) -> String {
         .unwrap_or_else(|| "monospace".to_string())
 }
 
+fn interface_family(fonts: &FontSystem) -> String {
+    let preferred: &[&str] = if cfg!(target_os = "macos") {
+        &[".AppleSystemUIFont", "SF Pro Text", "SF Pro", "System Font", "Helvetica Neue"]
+    } else if cfg!(target_os = "windows") {
+        &["Segoe UI Variable Text", "Segoe UI", "Tahoma"]
+    } else {
+        &["Inter", "Cantarell", "DejaVu Sans"]
+    };
+    for name in preferred {
+        if fonts.db().faces().any(|face| face.families.iter().any(|family| family.0 == *name)) {
+            return (*name).to_string();
+        }
+    }
+    "sans-serif".to_string()
+}
+
 impl TextSystem {
+    /// One line of text in the interface font (or the monospace font), `font_pixels` tall, laid out from
+    /// x = 0 with glyph positions in whole pixels vertically and quarter pixels horizontally.
+    pub fn line(&mut self, queue: &wgpu::Queue, text: &str, font_pixels: f32, bold: bool, monospace: bool) -> std::sync::Arc<ShapedLine> {
+        let key = LineKey { text: text.to_string(), size_bits: font_pixels.to_bits(), bold, monospace };
+        if let Some(line) = self.lines.get(&key) {
+            return line.clone();
+        }
+        if self.lines.len() > 4096 {
+            self.lines.clear();
+        }
+        let family = if monospace { self.family.clone() } else { self.ui_family.clone() };
+        let mut attrs = Attrs::new().family(Family::Name(&family));
+        if bold {
+            attrs = attrs.weight(Weight::SEMIBOLD);
+        }
+        let mut buffer = Buffer::new_empty(Metrics::new(font_pixels, (font_pixels * 1.3).ceil()));
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.fonts, false);
+        let mut shaped = ShapedLine::default();
+        let mut physical = Vec::new();
+        if let Some(run) = buffer.layout_runs().next() {
+            shaped.width = run.line_w;
+            physical.extend(run.glyphs.iter().map(|glyph| glyph.physical((0.0, 0.0), 1.0)));
+        }
+        for glyph in physical {
+            let mut cache_key = glyph.cache_key;
+            cache_key.y_bin = cosmic_text::SubpixelBin::Zero;
+            if let Some(sprite) = self.sprite(queue, cache_key) {
+                shaped.glyphs.push(LineGlyph { sprite, x: glyph.x as f32, y: glyph.y as f32 });
+            }
+        }
+        let shaped = std::sync::Arc::new(shaped);
+        self.lines.insert(key, shaped.clone());
+        shaped
+    }
+
     /// `font_points` at `scale` device pixels per point.
     pub fn new(device: &wgpu::Device, font_points: f32, scale: f32) -> TextSystem {
         let mut fonts = FontSystem::new();
         let family = std::env::var("NEOLINK_FONT").unwrap_or_else(|_| monospace_family(&fonts));
         let scratch = Buffer::new_empty(Metrics::new(16.0, 20.0));
+        let ui_family = interface_family(&fonts);
         let mut system = TextSystem {
+            lines: HashMap::new(),
+            ui_family,
             swash: SwashCache::new(),
             atlas: Atlas::new(device),
             sprites: HashMap::new(),
@@ -212,6 +292,7 @@ impl TextSystem {
         }
         self.cell = CellMetrics { width: width.round().max(1.0), height, baseline: baseline.round(), font_pixels };
         self.cells.clear();
+        self.lines.clear();
     }
 
     fn sprite(&mut self, queue: &wgpu::Queue, key: CacheKey) -> Option<Sprite> {

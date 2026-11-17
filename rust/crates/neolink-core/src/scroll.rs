@@ -142,6 +142,41 @@ impl ScrollSmoother {
         step
     }
 
+    /// What [`advance`](Self::advance) would return for a frame displayed at `frame_time`, without
+    /// changing anything: used to find the next frame in which the content will actually move.
+    pub fn peek(&self, frame_time: f64, period: f64) -> f64 {
+        let mut step = 0.0;
+        for (amount, duration) in &self.pending {
+            // Not yet anchored: its first frame would be this one.
+            step += if *duration <= period { *amount } else { amount * (period / duration).min(1.0) };
+        }
+        for spread in &self.spreads {
+            let fraction = (frame_time - spread.start + period) / spread.duration;
+            let target = if fraction >= 1.0 - 1e-6 { spread.amount } else { spread.amount * fraction.max(0.0) };
+            step += target - spread.released;
+        }
+        step
+    }
+
+    /// The display time of the first frame after `frame_time` in which `position` (as it stands after
+    /// that frame) will have moved to a different whole pixel, or the frame that finishes what is
+    /// outstanding. `None` when nothing is outstanding.
+    pub fn next_visible_change(&self, frame_time: f64, period: f64, position: f64) -> Option<f64> {
+        if !self.is_active() {
+            return None;
+        }
+        let shown = position.round();
+        let horizon = (MAX_SPREAD / period).ceil() as usize + 2;
+        for frame in 1..=horizon {
+            let time = frame_time + frame as f64 * period;
+            let moved = self.peek(time, period);
+            if (position + moved).round() != shown || (self.outstanding() - moved).abs() < 1e-9 {
+                return Some(time);
+            }
+        }
+        Some(frame_time + horizon as f64 * period)
+    }
+
     /// Whether more frames are needed to finish what has been received.
     pub fn is_active(&self) -> bool {
         !self.pending.is_empty() || !self.spreads.is_empty()
@@ -347,6 +382,49 @@ mod tests {
         assert!(largest <= 1.0, "largest step {largest}");
         assert!((steps.iter().sum::<f64>() - 40.0).abs() < 1e-9);
         assert!(smoother.delay_report().2 <= 1000.0 * (0.1 - P) + 1e-6);
+    }
+
+    #[test]
+    fn frames_are_needed_only_when_a_pixel_changes() {
+        // One point (two device pixels) every 100 ms: about two frames per event, not twelve.
+        let mut smoother = ScrollSmoother::new(Smoothing::Auto);
+        let mut position = 0.0f64;
+        let mut frames = 0;
+        let mut next_event = 0;
+        let mut wake: Option<f64> = Some(0.001);
+        let mut time = 0.001;
+        while time < 2.2 {
+            let mut due = wake.is_some_and(|at| at <= time + 1e-9);
+            while next_event < 20 && next_event as f64 * 0.1 <= time {
+                smoother.push(next_event as f64 * 0.1, 2.0, P);
+                next_event += 1;
+                due = true;
+            }
+            if due {
+                position += smoother.advance(time, P);
+                frames += 1;
+                wake = smoother.next_visible_change(time, P, position);
+            }
+            time += P;
+        }
+        assert!((position - 40.0).abs() < 1e-9);
+        assert!(!smoother.is_active());
+        // Per event at most: the frame it arrives in, one per pixel, and one that finishes the spread.
+        // Drawing every refresh would be about 250.
+        assert!(frames <= 20 * 4 + 8, "{frames} frames for 40 pixel steps");
+        assert!(frames >= 40);
+    }
+
+    #[test]
+    fn peek_matches_advance() {
+        let mut smoother = ScrollSmoother::new(Smoothing::Auto);
+        smoother.push(0.0, 6.0, P);
+        smoother.push(1.0 / 60.0, 6.0, P);
+        let time = 1.0 / 60.0 + 0.001;
+        let expected = smoother.peek(time, P);
+        assert!((smoother.advance(time, P) - expected).abs() < 1e-12);
+        let expected = smoother.peek(time + P, P);
+        assert!((smoother.advance(time + P, P) - expected).abs() < 1e-12);
     }
 
     #[test]

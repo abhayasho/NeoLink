@@ -1,8 +1,6 @@
 //! Stack spike content: the same 160 x 50 changing text grid as `spikes/gpui`.
 
-use crate::frame::Content;
-use crate::render::Scene;
-use crate::text::TextSystem;
+use crate::frame::{Built, Content, FrameContext, Next, Painter};
 
 pub const ROWS: usize = 50;
 pub const COLUMNS: usize = 160;
@@ -37,7 +35,8 @@ impl SpikeGrid {
 }
 
 impl Content for SpikeGrid {
-    fn build(&mut self, scene: &mut Scene, text: &mut TextSystem, queue: &wgpu::Queue, _size: (u32, u32), _frame_time: f64, _period: f64) -> bool {
+    fn build(&mut self, painter: &mut Painter, _frame: FrameContext) -> Built {
+        let (scene, text, queue) = (&mut *painter.scene, &mut *painter.text, painter.queue);
         if self.motion {
             self.counter += 1;
             let row = (self.counter as usize) % ROWS;
@@ -52,6 +51,10 @@ impl Content for SpikeGrid {
                 }
             }
         }
-        self.motion
+        Built { changed: true, next: if self.motion { Next::Soon } else { Next::Idle } }
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

@@ -28,3 +28,15 @@ pub fn sleep_until(deadline: f64) {
         std::thread::sleep(std::time::Duration::from_secs_f64(remaining));
     }
 }
+
+/// CPU seconds used so far by the calling thread (0 where the system cannot tell).
+pub fn thread_cpu_seconds() -> f64 {
+    #[cfg(unix)]
+    {
+        let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) } == 0 {
+            return time.tv_sec as f64 + time.tv_nsec as f64 / 1e9;
+        }
+    }
+    0.0
+}

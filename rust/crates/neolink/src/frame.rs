@@ -1,26 +1,44 @@
 //! The render thread: sleeps until something changed, then draws one frame per refresh at most.
+//!
+//! Nothing here runs while the window is unchanged: the thread is parked. Anything that changes what is
+//! on screen (input on the main thread, terminal output on a PTY thread) calls [`Shared::invalidate`],
+//! which is lock-free, so it can be called while holding other locks.
 
 use crate::clock;
 use crate::gpu::Gpu;
-use crate::present::{Presented, Presenter, FORMAT};
-use crate::render::{Renderer, Scene};
+use crate::present::{Presenter, FORMAT};
+use crate::render::{Renderer, RowCache, Scene};
 use crate::text::TextSystem;
 use neolink_core::pacer::{Pacer, Plan};
-use parking_lot::{Condvar, Mutex};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// What the main thread and I/O threads share with the render thread.
 pub struct Shared {
     pub state: Mutex<State>,
-    pub wake: Condvar,
+    dirty: AtomicBool,
+    render_thread: OnceLock<std::thread::Thread>,
+    /// Every frame's journey, kept only while a benchmark records.
+    pub log: FrameLog,
+    /// Frames drawn since launch.
+    pub frames: AtomicU64,
+    /// Frames among them that only repeated the previous content to keep the display at full rate.
+    pub warm_frames: AtomicU64,
+    /// Frames that were built and found identical to what is shown, so nothing was presented.
+    pub skipped: AtomicU64,
+    /// When the user last did something (bits of an `f64` on the app's clock).
+    last_input: AtomicU64,
+    /// CPU seconds used by the render thread and by the main thread, as last published (`f64` bits).
+    render_cpu: AtomicU64,
+    main_cpu: AtomicU64,
 }
 
 pub struct State {
     /// Drawable size in device pixels.
     pub size: (u32, u32),
     pub scale: f64,
-    pub dirty: bool,
     pub quit: bool,
     pub visible: bool,
     /// Refresh interval of the window's display, in seconds.
@@ -28,40 +46,177 @@ pub struct State {
     pub content: Box<dyn Content>,
 }
 
-/// What a frame is drawn from. `snapshot` runs under the state lock and must be quick.
+/// What a frame is drawn from. `build` runs under the state lock on the render thread.
 pub trait Content: Send {
-    /// Fills `scene` for a frame that will be on the display at `frame_time`. Returns `true` if
-    /// another frame is needed after this one (an animation is running).
-    fn build(&mut self, scene: &mut Scene, text: &mut TextSystem, queue: &wgpu::Queue, size: (u32, u32), frame_time: f64, period: f64) -> bool;
+    /// Fills the scene for a frame that will be on the display at `frame.display`; says whether it
+    /// differs from the last frame built, and when the content will next change by itself.
+    fn build(&mut self, painter: &mut Painter, frame: FrameContext) -> Built;
+
+    /// What the frame just built shows, for the benchmark.
+    fn marks(&self) -> FrameMarks {
+        FrameMarks::default()
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// What content draws with.
+pub struct Painter<'a> {
+    pub scene: &'a mut Scene,
+    pub text: &'a mut TextSystem,
+    pub queue: &'a wgpu::Queue,
+    /// Rows of text retained on the GPU between frames.
+    pub rows: &'a mut RowCache,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Built {
+    /// `false`: every pixel is what the previous frame drew; nothing needs presenting.
+    pub changed: bool,
+    pub next: Next,
+}
+
+/// When content changes without anyone invalidating it (an animation, scroll distance still to show).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Next {
+    /// Not until something invalidates it.
+    Idle,
+    /// In the very next refresh.
+    Soon,
+    /// In the frame displayed at this time; nothing visible changes before it.
+    At(f64),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FrameContext {
+    pub size: (u32, u32),
+    pub scale: f32,
+    /// When this frame is expected on the display. Sample motion at this time.
+    pub display: f64,
+    pub period: f64,
+}
+
+/// What a frame showed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameMarks {
+    /// Scroll position of the active pane, in lines above its resting position.
+    pub scroll_lines: f64,
+    /// Scroll input received by the active pane so far, in lines.
+    pub input_lines: f64,
+    /// How many batches of output the active pane had parsed when the frame was built.
+    pub output: u64,
+    /// Selection generation (tab switches) the frame shows.
+    pub selection: u64,
+    pub instances: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FrameRecord {
+    pub id: u64,
+    /// When the decision to draw was made.
+    pub planned: f64,
+    /// The refresh this frame was committed for, and when it was expected on the display.
+    pub latch: f64,
+    pub expected: f64,
+    pub committed: f64,
+    /// When it reached the display (0 until reported, or if it never did).
+    pub displayed: f64,
+    pub reported: bool,
+    pub marks: FrameMarks,
+    /// Milliseconds spent building the scene, taking the drawable, encoding and submitting, presenting.
+    pub stages: [f32; 4],
+}
+
+#[derive(Default)]
+pub struct FrameLog {
+    recording: AtomicBool,
+    records: Mutex<Vec<FrameRecord>>,
+}
+
+impl FrameLog {
+    pub fn start(&self) {
+        self.records.lock().clear();
+        self.recording.store(true, Ordering::Release);
+    }
+
+    pub fn stop(&self) -> Vec<FrameRecord> {
+        self.recording.store(false, Ordering::Release);
+        std::mem::take(&mut *self.records.lock())
+    }
+
+    /// The frames recorded so far, leaving the log running.
+    pub fn snapshot(&self) -> Vec<FrameRecord> {
+        self.records.lock().clone()
+    }
+
+    fn is_recording(&self) -> bool {
+        self.recording.load(Ordering::Acquire)
+    }
 }
 
 impl Shared {
     pub fn new(content: Box<dyn Content>, size: (u32, u32), scale: f64, period: f64) -> Arc<Shared> {
         Arc::new(Shared {
-            state: Mutex::new(State { size, scale, dirty: true, quit: false, visible: true, period, content }),
-            wake: Condvar::new(),
+            state: Mutex::new(State { size, scale, quit: false, visible: true, period, content }),
+            dirty: AtomicBool::new(true),
+            render_thread: OnceLock::new(),
+            log: FrameLog::default(),
+            frames: AtomicU64::new(0),
+            warm_frames: AtomicU64::new(0),
+            skipped: AtomicU64::new(0),
+            last_input: AtomicU64::new(0f64.to_bits()),
+            render_cpu: AtomicU64::new(0f64.to_bits()),
+            main_cpu: AtomicU64::new(0f64.to_bits()),
         })
     }
 
-    /// Something visible changed: draw a frame.
+    /// The user did something (a key, a scroll, the pointer): for a few seconds from now the display is
+    /// kept at its full refresh rate, so the answer to the next input is not held up by a slowed panel.
+    pub fn note_input(&self) {
+        let now = clock::now();
+        let previous = f64::from_bits(self.last_input.swap(now.to_bits(), Ordering::AcqRel));
+        // The render thread sleeps without a deadline once the window of an earlier input has passed.
+        if now - previous > 0.2 {
+            self.nudge();
+        }
+    }
+
+    /// Something visible changed: draw a frame. Lock-free; callable from any thread.
     pub fn invalidate(&self) {
-        self.state.lock().dirty = true;
-        self.wake.notify_one();
+        self.dirty.store(true, Ordering::Release);
+        if let Some(thread) = self.render_thread.get() {
+            thread.unpark();
+        }
+    }
+
+    pub fn render_cpu(&self) -> f64 {
+        f64::from_bits(self.render_cpu.load(Ordering::Relaxed))
+    }
+
+    pub fn main_cpu(&self) -> f64 {
+        f64::from_bits(self.main_cpu.load(Ordering::Relaxed))
+    }
+
+    /// The main thread publishes its CPU time after handling an event (for the benchmark).
+    pub fn publish_main_cpu(&self) {
+        self.main_cpu.store(clock::thread_cpu_seconds().to_bits(), Ordering::Relaxed);
+    }
+
+    /// Wakes the render thread without asking for a frame (to notice `quit` or visibility).
+    pub fn nudge(&self) {
+        if let Some(thread) = self.render_thread.get() {
+            thread.unpark();
+        }
     }
 }
 
-/// Receives every frame's submission and display report (the benchmark and the spike log use this).
-pub type PresentedSink = Box<dyn FnMut(&Presented, f64) + Send>;
-
-pub struct FrameStats {
-    pub frames: u64,
-    pub waits: u64,
-}
-
-pub fn spawn(shared: Arc<Shared>, gpu: Gpu, presenter: Presenter, font_points: f32, sink: PresentedSink) -> std::thread::JoinHandle<()> {
+pub fn spawn(shared: Arc<Shared>, gpu: Gpu, presenter: Presenter, text: TextSystem) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("render".into())
-        .spawn(move || run(shared, gpu, presenter, font_points, sink))
+        .spawn(move || {
+            let _ = shared.render_thread.set(std::thread::current());
+            run(shared, gpu, presenter, text)
+        })
         .expect("render thread")
 }
 
@@ -85,106 +240,196 @@ fn with_pool<R>(body: impl FnOnce() -> R) -> R {
     body()
 }
 
-fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, font_points: f32, mut sink: PresentedSink) {
+fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSystem) {
     raise_priority();
-    let (scale, period) = {
-        let state = shared.state.lock();
-        (state.scale as f32, state.period)
-    };
-    let mut text = TextSystem::new(&gpu.device, font_points, scale);
+    let period = shared.state.lock().period;
     let mut renderer = Renderer::new(&gpu.device, &text, FORMAT);
     let mut scene = Scene::default();
     let margin = std::env::var("NEOLINK_MARGIN_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0) / 1000.0;
     let mut pacer = Pacer::new(period, margin);
-    // Target times of frames in flight, by frame id.
-    let mut targets: Vec<(u64, f64)> = Vec::new();
+    // Latches of frames whose display time has not been reported yet, by frame id.
+    let mut latches: Vec<(u64, f64)> = Vec::new();
     let mut frame_id = 0u64;
     let mut last_size = (0u32, 0u32);
     let exact = presenter.has_exact_timestamps();
     let debug = std::env::var_os("NEOLINK_DEBUG_FRAMES").is_some();
-    if debug { eprintln!("DEBUG render thread up, cell {:?}, family {}", text.cell, text.family()); }
+    let background = crate::theme::background_clear();
+    let env_number = |name: &str, default: f64| std::env::var(name).ok().and_then(|value| value.parse::<f64>().ok()).unwrap_or(default);
+    let warm_interval = env_number("NEOLINK_WARM_MS", 250.0) / 1000.0;
+    let warm_seconds = env_number("NEOLINK_WARM_SECONDS", 3.0);
+    let mut last_frame_at = 0.0f64;
+    // Display time of a frame the content asked for.
+    let mut scheduled: Option<f64> = None;
+    // `NEOLINK_CAPTURE=file.png`: write the first frame built after `NEOLINK_CAPTURE_AFTER` seconds
+    // (default 4) as an image, and quit.
+    let capture = std::env::var_os("NEOLINK_CAPTURE").map(|path| (std::path::PathBuf::from(path), env_number("NEOLINK_CAPTURE_AFTER", 4.0)));
+    let started_at = clock::now();
+    let mut force_present = true;
+    let mut presented_size = (0u32, 0u32);
 
     loop {
-        // Wait until there is something to draw and a refresh to draw it for.
-        let (latch, target, planned_at, size) = {
-            let mut state = shared.state.lock();
-            loop {
-                for report in presenter.take_presented() {
-                    let target = targets.iter().position(|t| t.0 == report.frame).map(|i| targets.swap_remove(i).1).unwrap_or(0.0);
-                    if exact {
-                        pacer.presented(report.submitted, target, report.displayed);
-                    }
-                    sink(&report, target);
-                }
-                if state.quit {
-                    return;
-                }
-                pacer.set_period(state.period);
-                if !(state.dirty && state.visible) {
-                    // Idle: nothing runs until someone invalidates. Wake occasionally only while
-                    // display reports are outstanding, to deliver them.
-                    if presenter.in_flight() > 0 {
-                        shared.wake.wait_for(&mut state, Duration::from_millis(50));
-                    } else if !targets.is_empty() {
-                        // Every report has been delivered to the presenter; collect the last ones.
-                        let reports = presenter.take_presented();
-                        if reports.is_empty() {
-                            targets.clear();
-                        } else {
-                            for report in reports {
-                                let target = targets.iter().position(|t| t.0 == report.frame).map(|i| targets.swap_remove(i).1).unwrap_or(0.0);
-                                if exact {
-                                    pacer.presented(report.submitted, target, report.displayed);
-                                }
-                                sink(&report, target);
-                            }
-                        }
-                    } else {
-                        shared.wake.wait(&mut state);
-                    }
-                    continue;
-                }
-                let now = clock::now();
-                match pacer.plan(now) {
-                    Plan::Draw { latch, display } => {
-                        state.dirty = false;
-                        if state.size != last_size {
-                            // A resize (or entering full screen) changes what the system does with a frame.
-                            last_size = state.size;
-                            pacer.reset();
-                        }
-                        break (latch, display, now, state.size);
-                    }
-                    Plan::Wait { until } => {
-                        let deadline = Instant::now() + Duration::from_secs_f64((until - now).max(0.0));
-                        shared.wake.wait_until(&mut state, deadline);
-                    }
+        if shared.log.is_recording() {
+            shared.render_cpu.store(clock::thread_cpu_seconds().to_bits(), Ordering::Relaxed);
+        }
+        for report in presenter.take_presented() {
+            let latch = latches.iter().position(|entry| entry.0 == report.frame).map(|i| latches.swap_remove(i).1).unwrap_or(0.0);
+            if exact {
+                pacer.presented(report.submitted, latch, report.displayed);
+            }
+            if shared.log.is_recording() {
+                if let Some(record) = shared.log.records.lock().iter_mut().rev().find(|record| record.id == report.frame) {
+                    record.displayed = report.displayed;
+                    record.reported = true;
                 }
             }
+            if debug {
+                eprintln!("PRESENTED {:.6} {:.6} {:.6}", report.submitted, report.displayed, latch);
+            }
+        }
+        let (visible, size, scale) = {
+            let state = shared.state.lock();
+            if state.quit {
+                return;
+            }
+            pacer.set_period(state.period);
+            (state.visible, state.size, state.scale as f32)
         };
-        let again = with_pool(|| {
-            if debug { eprintln!("DEBUG acquiring {size:?} latch {latch:.4} display {target:.4} depth {} lead {:.2} ms", pacer.depth(), pacer.lead() * 1000.0); }
-            let Some(frame) = presenter.acquire(size.0, size.1) else {
-                if debug { eprintln!("DEBUG no drawable"); }
-                return false;
+        if let Some(at) = scheduled {
+            // A frame the content asked for: start it just after the latch before its own, so it is
+            // displayed when the content said it changes.
+            let start = at - (pacer.depth() as f64 + 1.0) * pacer.period() + 0.0005;
+            if clock::now() >= start {
+                scheduled = None;
+                shared.dirty.store(true, Ordering::Release);
+            }
+        }
+        let mut warming = false;
+        if !(shared.dirty.load(Ordering::Acquire) && visible) {
+            // Idle. A display that is given no frames lowers its refresh rate within a second, and the
+            // next frame then waits for a slow refresh (measured in full screen: 6 ms after a 0.2-0.4 s
+            // pause, 13 ms after 1 s, about 50 ms after several). While the user is active, repeat the
+            // last frame a few times a second; after `warm_seconds` without input nothing runs at all.
+            let now = clock::now();
+            let since_input = now - f64::from_bits(shared.last_input.load(Ordering::Acquire));
+            let warm = visible && warm_interval > 0.0 && since_input < warm_seconds;
+            if warm && now - last_frame_at >= warm_interval {
+                warming = true;
+            } else {
+                if let Some(at) = scheduled {
+                    let start = at - (pacer.depth() as f64 + 1.0) * pacer.period() + 0.0005;
+                    std::thread::park_timeout(Duration::from_secs_f64((start - now).clamp(0.0002, 0.25)));
+                } else if warm {
+                    std::thread::park_timeout(Duration::from_secs_f64((last_frame_at + warm_interval - now).clamp(0.001, warm_interval)));
+                } else if presenter.in_flight() > 0 {
+                    // Display reports are outstanding (only the benchmark and the pacer want them).
+                    std::thread::park_timeout(Duration::from_millis(50));
+                } else {
+                    latches.clear();
+                    std::thread::park();
+                }
+                continue;
+            }
+        }
+        let now = clock::now();
+        let (latch, display) = match pacer.plan(now) {
+            Plan::Draw { latch, display } => (latch, display),
+            Plan::Wait { until } => {
+                std::thread::park_timeout(Duration::from_secs_f64((until - now).max(0.0)));
+                continue;
+            }
+        };
+        if size != last_size {
+            // A resize (or entering full screen) changes what the system does with a frame.
+            last_size = size;
+            pacer.reset();
+        }
+        if !warming {
+            shared.dirty.store(false, Ordering::Release);
+        }
+        // Build first: most invalidations change nothing that is on screen (output in a covered pane,
+        // scroll distance smaller than a pixel), and those frames are not presented at all.
+        let mut marks = None;
+        let mut stages = [0f32; 4];
+        let build_started = clock::now();
+        let built = {
+            let mut state = shared.state.lock();
+            scene.clear();
+            renderer.begin_frame();
+            let period = state.period;
+            let context = FrameContext { size, scale, display, period };
+            let mut painter = Painter { scene: &mut scene, text: &mut text, queue: &gpu.queue, rows: &mut renderer.rows };
+            let built = state.content.build(&mut painter, context);
+            if shared.log.is_recording() {
+                let mut shown = state.content.marks();
+                shown.instances = scene.drawn;
+                marks = Some(shown);
+            }
+            built
+        };
+        let again = built.next;
+        stages[0] = ((clock::now() - build_started) * 1000.0) as f32;
+        if let Some((path, after)) = &capture {
+            if clock::now() - started_at >= *after {
+                match crate::capture::write_png(&gpu, &mut renderer, &scene, size, background, path) {
+                    Ok(()) => eprintln!("captured {}x{} to {}", size.0, size.1, path.display()),
+                    Err(error) => eprintln!("capture failed: {error}"),
+                }
+                std::process::exit(0);
+            }
+        }
+        if built.changed || warming || force_present || size != presented_size {
+            let committed = with_pool(|| {
+                let started = clock::now();
+                let frame = presenter.acquire(size.0, size.1)?;
+                let acquired = clock::now();
+                let mut encoder = renderer.draw(&gpu.device, &gpu.queue, &frame.view, (frame.width, frame.height), background, &scene);
+                frame_id += 1;
+                presenter.schedule(&mut encoder, &frame, frame_id);
+                gpu.queue.submit([encoder.finish()]);
+                let submitted = clock::now();
+                latches.push((frame_id, latch));
+                presenter.present(frame, frame_id);
+                let done = clock::now();
+                stages[1] = ((acquired - started) * 1000.0) as f32;
+                stages[2] = ((submitted - acquired) * 1000.0) as f32;
+                stages[3] = ((done - submitted) * 1000.0) as f32;
+                Some(done)
+            });
+            let Some(committed) = committed else {
+                // No drawable (the display is asleep or the window is hidden): try again later.
+                force_present = true;
+                shared.dirty.store(true, Ordering::Release);
+                std::thread::park_timeout(Duration::from_millis(100));
+                continue;
             };
-            if debug { eprintln!("DEBUG acquired {}x{}", frame.width, frame.height); }
-            let again = {
-                let mut state = shared.state.lock();
-                scene.clear();
-                let period = state.period;
-                state.content.build(&mut scene, &mut text, &gpu.queue, (frame.width, frame.height), target, period)
-            };
-            let commands = renderer.draw(&gpu.device, &gpu.queue, &frame.view, (frame.width, frame.height), [0.094, 0.094, 0.094], &scene);
-            gpu.queue.submit([commands]);
-            frame_id += 1;
-            targets.push((frame_id, latch));
-            presenter.present(frame, frame_id);
-            again
-        });
-        pacer.submitted(planned_at, clock::now(), latch);
-        if again {
-            shared.state.lock().dirty = true;
+            force_present = false;
+            presented_size = size;
+            pacer.submitted(now, committed, latch);
+            last_frame_at = committed;
+            shared.frames.fetch_add(1, Ordering::Relaxed);
+            if warming {
+                shared.warm_frames.fetch_add(1, Ordering::Relaxed);
+            }
+            if let Some(marks) = marks {
+                shared.log.records.lock().push(FrameRecord {
+                    id: frame_id,
+                    planned: now,
+                    latch,
+                    expected: display,
+                    committed,
+                    displayed: 0.0,
+                    reported: false,
+                    marks,
+                    stages,
+                });
+            }
+        } else {
+            shared.skipped.fetch_add(1, Ordering::Relaxed);
+        }
+        match again {
+            Next::Idle => {}
+            Next::Soon => shared.dirty.store(true, Ordering::Release),
+            Next::At(at) => scheduled = Some(scheduled.map_or(at, |earlier: f64| earlier.min(at))),
         }
     }
 }

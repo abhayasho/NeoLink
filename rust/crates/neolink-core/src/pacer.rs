@@ -10,7 +10,7 @@
 //! - A frame is drawn only because something changed; the pacer is never asked otherwise.
 //! - At most one frame is committed per latch, so nothing can queue behind the display.
 //! - If the coming latch has no frame yet, drawing starts at once: a key press or the first scroll event
-//!   does not wait for a tick. If it has one, drawing starts when that latch's slot closes.
+//!   does not wait for a tick. If it has one, drawing starts once that latch has passed.
 //! - A slot closes `lead` before its latch (the time a frame needs from the decision to draw until its
 //!   commit, plus a margin). Input that arrives around the close must not flip between the two sides from
 //!   event to event, or one refresh gets no frame and the next gets two events: the decision is sticky
@@ -20,8 +20,8 @@
 //!   commit must happen to be latched for it (about 0.3 ms windowed, 2.7 ms in full screen on the machine
 //!   this was written on). A frame that was committed in time by the current margin and still came a
 //!   refresh late raises it to just above that frame's slack; frames that made it with less lower it.
-//! - A frame shown late behind another late frame stood in a queue: two late frames in a row give up one
-//!   slot so the queue empties.
+//! - A frame shown late behind another late frame stood in a queue: three late frames in a row give up
+//!   one slot so the queue empties.
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Plan {
@@ -54,7 +54,11 @@ pub struct Pacer {
     last_latch: Option<f64>,
     was_late: bool,
     late_streak: u32,
-    same_late_depth: (u32, u32),
+    /// Slots given up since the last frame that was shown on time.
+    drains_in_a_row: u32,
+    /// Commit time of the newest frame when a slot was last given up.
+    drained_until: f64,
+    last_committed: f64,
     initial_margin: f64,
     /// Slacks (latch minus commit) of recent frames that were shown on time.
     good: [f64; SLACK_SAMPLES],
@@ -92,7 +96,9 @@ impl Pacer {
             last_latch: None,
             was_late: false,
             late_streak: 0,
-            same_late_depth: (0, 0),
+            drains_in_a_row: 0,
+            drained_until: 0.0,
+            last_committed: 0.0,
             drained: 0,
             late_frames: 0,
             frames: 0,
@@ -103,10 +109,16 @@ impl Pacer {
         self.period
     }
 
-    /// Time a frame needs between the decision to draw and its commit: the slowest of the recent ones.
+    /// Time a frame needs between the decision to draw and its commit: the second slowest of the recent
+    /// ones (one slow frame does not close every slot earlier; each millisecond here is a millisecond
+    /// of average latency).
     pub fn cost(&self) -> f64 {
         let known = self.cost_count.min(COST_SAMPLES);
-        self.costs[..known].iter().copied().fold(0.0, f64::max).min(self.period * 0.5)
+        let mut recent = [0.0f64; COST_SAMPLES];
+        recent[..known].copy_from_slice(&self.costs[..known]);
+        recent[..known].sort_by(|a, b| b.partial_cmp(a).unwrap());
+        let cost = if known >= 4 { recent[1] } else { recent[0] };
+        cost.min(self.period * 0.5)
     }
 
     /// How long before a latch drawing must start.
@@ -161,8 +173,11 @@ impl Pacer {
         let latch = self.reachable(now);
         let latch = match self.last_latch {
             Some(last) if latch < last + 0.5 * self.period => {
-                // The moment from which the latch after `last` is the reachable one, whatever the band says.
-                let until = last - self.lead() + self.band + 1e-6;
+                // The moment from which the latch after `last` is the reachable one, whatever the band
+                // says, but not before `last` itself has passed: a frame committed earlier than that
+                // would only wait in line behind the one already committed, showing input a whole
+                // refresh older than it could (measured: commit to display 11.6 ms instead of 6.2).
+                let until = (last - self.lead() + self.band + 1e-6).max(last + 0.0002);
                 if until > now {
                     return Plan::Wait { until };
                 }
@@ -177,6 +192,7 @@ impl Pacer {
     pub fn submitted(&mut self, planned: f64, committed: f64, latch: f64) {
         self.was_late = latch > self.next_refresh(planned) + 0.5 * self.period;
         self.last_latch = Some(latch);
+        self.last_committed = committed;
         let cost = (committed - planned).max(0.0);
         self.costs[self.cost_count % COST_SAMPLES] = cost;
         self.cost_count += 1;
@@ -202,11 +218,9 @@ impl Pacer {
         let slack = latch - committed;
         if observed > expected {
             self.late_frames += 1;
-            self.late_streak += 1;
-            self.same_late_depth = if self.same_late_depth.0 == observed { (observed, self.same_late_depth.1 + 1) } else { (observed, 1) };
             let queued = self.previous_late && committed < self.previous_displayed;
             self.previous_displayed = displayed;
-            if !queued && slack > 0.0 && observed == expected + 1 {
+            if !queued && slack > 0.0 && slack < 0.5 * self.period && observed == expected + 1 {
                 // Committed before its refresh and still shown at the next one: the system needed
                 // more than `slack`. (A late frame behind a late frame only stood in the queue.)
                 self.missed.push((slack, self.frames));
@@ -215,30 +229,39 @@ impl Pacer {
                 }
             }
             self.previous_late = true;
-            if self.same_late_depth.1 >= 8 {
-                // Not a queue: the system's pipeline got deeper (the window left full screen, say).
-                self.depths = [observed; DEPTH_SAMPLES];
-                self.depth_count = DEPTH_SAMPLES;
-                self.late_streak = 0;
-                self.same_late_depth = (0, 0);
-                self.missed.clear();
-                self.previous_late = false;
-            } else if self.late_streak >= 2 {
-                // A queue is standing: give up one slot so it empties.
+            if committed > self.drained_until {
+                // Frames that were already committed when a slot was given up say nothing new.
+                self.late_streak += 1;
+            }
+            if self.late_streak >= 3 {
+                // A queue is standing: give up one slot so it empties. (One or two late frames are
+                // the compositor's own hiccups: a window's frames are shown a refresh late about one
+                // time in thirty whatever their slack, and skipping slots for those costs frames.)
                 self.late_streak = 0;
                 self.drained += 1;
+                self.drains_in_a_row += 1;
+                self.drained_until = self.last_committed;
                 if let Some(last) = self.last_latch {
                     self.last_latch = Some(last + self.period);
+                }
+                if self.drains_in_a_row >= 3 {
+                    // Giving up slots did not help: it is not a queue, the system's pipeline got
+                    // deeper (something is composited over a full-screen window, say).
+                    self.depths = [observed; DEPTH_SAMPLES];
+                    self.depth_count = DEPTH_SAMPLES;
+                    self.drains_in_a_row = 0;
+                    self.missed.clear();
+                    self.previous_late = false;
                 }
             }
             self.update_margin();
             // A late frame says nothing about the depth.
             return;
         }
+        self.drains_in_a_row = 0;
         self.previous_late = false;
         self.previous_displayed = displayed;
         self.late_streak = 0;
-        self.same_late_depth = (0, 0);
         self.depths[self.depth_count % DEPTH_SAMPLES] = observed;
         self.depth_count += 1;
         if observed == expected && slack > 0.0 {
@@ -269,7 +292,7 @@ impl Pacer {
     pub fn reset(&mut self) {
         self.last_latch = None;
         self.late_streak = 0;
-        self.same_late_depth = (0, 0);
+        self.drains_in_a_row = 0;
         self.was_late = false;
         self.depth_count = 0;
         self.good = [f64::INFINITY; SLACK_SAMPLES];
@@ -320,7 +343,7 @@ mod tests {
         let mut pacer = pacer();
         let first = draw(&mut pacer, 10.0 * P + 0.001);
         let Plan::Wait { until } = pacer.plan(10.0 * P + 0.002) else { panic!("should wait") };
-        assert!(until > 10.0 * P + 0.002 && until < first);
+        assert!(until > first && until < first + 0.001, "the next frame starts just after the latch it follows");
         let second = draw(&mut pacer, until);
         assert!((second - first - P).abs() < 1e-9);
     }
@@ -402,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn frames_shown_late_twice_give_up_a_slot() {
+    fn three_frames_shown_late_give_up_a_slot() {
         let mut pacer = pacer();
         // Learn a depth of one.
         let learned = draw(&mut pacer, 5.0 * P + 0.001);
@@ -411,11 +434,14 @@ mod tests {
         pacer.presented(10.0 * P + 0.001, first, first + 2.0 * P);
         let second = draw(&mut pacer, 11.0 * P + 0.001);
         pacer.presented(11.0 * P + 0.001, second, second + 2.0 * P);
+        assert_eq!(pacer.counters().0, 0, "two late frames are not yet a queue");
+        let second = draw(&mut pacer, 12.0 * P + 0.001);
+        pacer.presented(12.0 * P + 0.001, second, second + 2.0 * P);
         assert_eq!(pacer.counters().0, 1);
-        assert_eq!(pacer.counters().1, 2);
+        assert_eq!(pacer.counters().1, 3);
         assert_eq!(pacer.depth(), 1, "late frames do not change the depth");
         // The slot after `second` is given up so the queue can empty.
-        let third = match pacer.plan(12.0 * P + 0.001) {
+        let third = match pacer.plan(13.0 * P + 0.001) {
             Plan::Draw { latch, .. } => latch,
             Plan::Wait { until } => draw(&mut pacer, until),
         };
@@ -459,44 +485,66 @@ mod tests {
         assert!((pacer.lead() - 0.0005).abs() < 1e-6, "lead {}", pacer.lead());
     }
 
-    #[test]
-    fn a_lasting_change_of_depth_is_adopted_instead_of_fought() {
-        let mut pacer = pacer();
-        let mut now = 10.0 * P + 0.001;
-        // Full screen: one refresh.
-        for _ in 0..10 {
-            let latch = match pacer.plan(now) {
-                Plan::Draw { latch, .. } => latch,
-                Plan::Wait { until } => {
-                    now = until;
-                    continue;
+    /// Draws a frame per refresh for `frames` refreshes; `shown` says when a frame committed for `latch`
+    /// reaches the display. Returns the refreshes that got no frame.
+    fn run_motion(pacer: &mut Pacer, start: f64, frames: usize, mut shown: impl FnMut(f64) -> f64) -> usize {
+        let mut now = start;
+        let mut latches = Vec::new();
+        // Reports arrive when the frame is displayed, like the real thing.
+        let mut pending: Vec<(f64, f64, f64)> = Vec::new();
+        while latches.len() < frames {
+            pending.retain(|(committed, latch, displayed)| {
+                if *displayed <= now {
+                    pacer.presented(*committed, *latch, *displayed);
+                    false
+                } else {
+                    true
                 }
-            };
-            pacer.submitted(now, now, latch);
-            pacer.presented(now, latch, latch + P);
-            now = latch + 0.001;
-        }
-        assert_eq!(pacer.depth(), 1);
-        // Windowed: two refreshes, every frame.
-        let mut drawn = 0;
-        while drawn < 12 {
+            });
             match pacer.plan(now) {
                 Plan::Draw { latch, .. } => {
                     pacer.submitted(now, now, latch);
-                    pacer.presented(now, latch, latch + 2.0 * P);
-                    now = latch + 0.001;
-                    drawn += 1;
+                    pending.push((now, latch, shown(latch)));
+                    latches.push(latch);
+                    now += 0.0003;
                 }
-                Plan::Wait { until } => now = until,
+                Plan::Wait { until } => now = until.max(now + 1e-5),
             }
         }
+        latches.windows(2).map(|pair| ((pair[1] - pair[0]) / P).round() as usize - 1).sum()
+    }
+
+    #[test]
+    fn a_standing_queue_is_drained_not_adopted() {
+        let mut pacer = pacer();
+        // Direct scan-out: shown at the latch.
+        run_motion(&mut pacer, 10.0 * P + 0.001, 30, |latch| latch);
+        assert_eq!(pacer.depth(), 0);
+        // A hiccup leaves one frame queued: every frame is shown a refresh late until a slot is skipped.
+        let mut backlog = 1.0;
+        let mut previous_latch = 0.0;
+        let skipped = run_motion(&mut pacer, 50.0 * P + 0.001, 60, |latch| {
+            if previous_latch > 0.0 && latch - previous_latch > 1.5 * P {
+                backlog = 0.0; // a refresh without a commit let the queue empty
+            }
+            previous_latch = latch;
+            latch + backlog * P
+        });
+        assert_eq!(pacer.depth(), 0, "the queue must not be taken for the system's depth");
+        assert!((1..=2).contains(&skipped), "{skipped} slots given up");
+    }
+
+    #[test]
+    fn a_lasting_change_of_depth_is_adopted_after_draining_does_not_help() {
+        let mut pacer = pacer();
+        run_motion(&mut pacer, 10.0 * P + 0.001, 30, |latch| latch);
+        assert_eq!(pacer.depth(), 0);
+        // Something is composited over the window: two refreshes, whatever is skipped.
+        let skipped = run_motion(&mut pacer, 50.0 * P + 0.001, 80, |latch| latch + 2.0 * P);
         assert_eq!(pacer.depth(), 2);
+        assert!(skipped <= 4, "{skipped} slots given up before the new depth was accepted");
         let late_before = pacer.counters().1;
-        let latch = match pacer.plan(now) {
-            Plan::Draw { latch, .. } => latch,
-            Plan::Wait { until } => draw(&mut pacer, until),
-        };
-        pacer.presented(now, latch, latch + 2.0 * P);
+        run_motion(&mut pacer, 200.0 * P + 0.001, 20, |latch| latch + 2.0 * P);
         assert_eq!(pacer.counters().1, late_before, "the new depth is no longer late");
     }
 

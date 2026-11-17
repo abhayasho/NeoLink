@@ -15,8 +15,14 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|error| format!("no GPU adapter: {error}"))?;
+        // Immediates carry each batch's translation, so scrolling uploads nothing but those 16 bytes.
+        if !adapter.features().contains(wgpu::Features::IMMEDIATES) {
+            return Err("the GPU driver does not support immediate data (push constants)".into());
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("neolink"),
+            required_features: wgpu::Features::IMMEDIATES,
+            required_limits: wgpu::Limits { max_immediate_size: 16, ..wgpu::Limits::default() },
             ..Default::default()
         }))
         .map_err(|error| format!("no GPU device: {error}"))?;
