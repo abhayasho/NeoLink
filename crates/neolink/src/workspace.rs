@@ -433,7 +433,9 @@ impl Workspace {
         self.pane = Rect::new(terminal.x, terminal.y, terminal.width, grid.1 as f32 * self.cell.height);
         self.toolbar = Rect::new(center_x, below, self.center.width, px(30.0));
         self.editor_footer = Rect::new(center_x, self.center.bottom() - px(22.0), self.center.width, px(22.0));
-        let editor = Rect::new(center_x, self.toolbar.bottom(), self.center.width, (self.editor_footer.y - self.toolbar.bottom()).max(1.0));
+        // A small margin keeps Neovim's fold and sign columns off the sidebar's edge.
+        let inset = px(6.0).round();
+        let editor = Rect::new(center_x + inset, self.toolbar.bottom(), (self.center.width - inset).max(1.0), (self.editor_footer.y - self.toolbar.bottom()).max(1.0));
         let editor_grid = (((editor.width / self.cell.width).floor() as usize).max(20), ((editor.height / self.cell.height).floor() as usize).max(4));
         self.editor_pane = Rect::new(editor.x, editor.y, editor.width, editor_grid.1 as f32 * self.cell.height);
         let changed = grid != self.grid || editor_grid != self.editor_grid;
@@ -3244,6 +3246,11 @@ impl Content for Workspace {
                 Next::At(other) => Next::At(other.min(at)),
                 Next::Soon => Next::Soon,
             };
+        }
+        // A modal sheet dims what it covers, so it reads as in front of the workspace.
+        if self.creation.is_some() || self.closing.is_some() || self.recent_sheet.is_some() || self.launcher.is_some() || self.git.is_some() || self.connections.sheet_is_open() {
+            painter.scene.set_clip(None);
+            painter.scene.fill(0.0, 0.0, self.window.0, self.window.1, [0, 0, 0, 90]);
         }
         self.draw_creation(painter);
         self.draw_closing(painter);

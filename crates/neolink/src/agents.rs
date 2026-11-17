@@ -768,8 +768,12 @@ impl Launcher {
         if !drawing {
             return;
         }
-        let width = ui.text(label, x, y + ui.px(8.0), 13.0, 400, false, theme::ACCENT);
-        self.buttons.push((Rect::new(x, y, width, ui.px(16.0)), what));
+        // Underlined, with the arrow that says it opens in the browser: the accent is a gray here,
+        // so color alone does not set a link apart from text.
+        let width = ui.text(&format!("{label} \u{2197}"), x, y + ui.px(8.0), 13.0, 400, false, theme::TEXT_PRIMARY);
+        let line = ui.px(1.0).max(1.0).round();
+        ui.painter.scene.fill(x, (y + ui.px(17.0)).round(), width, line, theme::white(0.35));
+        self.buttons.push((Rect::new(x, y, width, ui.px(18.0)), what));
     }
 }
 
