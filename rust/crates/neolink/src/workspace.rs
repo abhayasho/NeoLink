@@ -43,18 +43,25 @@ impl Tab {
     }
 }
 
-/// The sheet that asks for a new item's name (`LocalFileBrowserView`'s creation sheet).
+/// The sheet that asks for a new item's name, or a new name for an existing one
+/// (`LocalFileBrowserView`'s creation and rename sheets).
 struct Creation {
     directory: std::path::PathBuf,
     is_directory: bool,
+    /// The item being renamed, if this is the rename sheet.
+    rename: Option<std::path::PathBuf>,
     name: String,
     cancel: Rect,
     create: Rect,
 }
 
-/// `LocalFileOperations.validName`.
-fn valid_name(name: &str) -> bool {
-    !name.trim().is_empty() && !name.contains('/') && !name.contains('\0') && name != "." && name != ".." && (cfg!(not(windows)) || !name.contains('\\'))
+use neolink_core::files::valid_name;
+
+/// The "Save changes?" alert shown before a document with unsaved changes closes.
+struct Closing {
+    path: String,
+    /// Close the window once this document is dealt with.
+    buttons: Vec<(Rect, &'static str)>,
 }
 
 pub struct Workspace {
@@ -106,6 +113,12 @@ pub struct Workspace {
     menu: Option<Menu>,
     /// The "New File" / "New Folder" sheet, while it is open.
     creation: Option<Creation>,
+    closing: Option<Closing>,
+    /// A file or folder copied in the explorer ("Copy", then "Paste Here").
+    copied: Option<std::path::PathBuf>,
+    /// The explorer's width in points, and whether its edge is being dragged.
+    explorer_points: f32,
+    dragging_divider: bool,
     /// Quick Open or Find in Files, while it is open.
     search: Option<crate::search::SearchSheet>,
     /// Source Control, while it is open; and how many repository snapshots the explorer has seen.
@@ -164,6 +177,10 @@ impl Workspace {
             hover_close: None,
             menu: None,
             creation: None,
+            closing: None,
+            copied: None,
+            explorer_points: crate::explorer::WIDTH_POINTS,
+            dragging_divider: false,
             search: None,
             git: None,
             git_seen: 0,
@@ -197,7 +214,7 @@ impl Workspace {
         self.footer = Rect::new(0.0, height - px(22.0), width, px(22.0));
         let top = self.header.bottom() + line;
         let bottom = self.footer.y - line;
-        let explorer_width = if self.explorer.visible { px(crate::explorer::WIDTH_POINTS).min(width * 0.5) } else { 0.0 };
+        let explorer_width = if self.explorer.visible { px(self.explorer_points).min(width * 0.5) } else { 0.0 };
         self.sidebar = Rect::new(0.0, top, explorer_width, (bottom - top).max(1.0));
         let center_x = if explorer_width > 0.0 { explorer_width + line } else { 0.0 };
         self.center = Rect::new(center_x, top, (width - center_x).max(1.0), (bottom - top).max(1.0));
@@ -315,21 +332,24 @@ impl Workspace {
         }
     }
 
-    /// Closes a tab. A document with unsaved changes is kept the first time, with a message saying
-    /// how to save or discard; asking again discards.
+    /// Closes a tab; a document with unsaved changes asks first.
     pub fn close_tab(&mut self, index: usize) {
         if index >= self.tabs.len() {
             return;
         }
         if let Some(path) = self.tabs[index].document().map(str::to_string) {
-            let unsaved = self.editor.as_ref().is_some_and(|editor| editor.is_modified(&path));
-            if unsaved && self.close_warned.as_deref() != Some(path.as_str()) {
-                let name = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or(&path).to_string();
-                let (save, close) = if cfg!(target_os = "macos") { ("Command-S", "Command-W") } else { ("Ctrl-Shift-S", "Ctrl-Shift-W") };
-                self.notice = Some(format!("{name} has unsaved changes. {save} saves; {close} again closes without saving."));
-                self.close_warned = Some(path);
+            if self.editor.as_ref().is_some_and(|editor| editor.is_modified(&path)) {
+                self.select(index);
+                self.closing = Some(Closing { path, buttons: Vec::new() });
                 return;
             }
+        }
+        self.force_close(index);
+    }
+
+    fn force_close(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
         }
         self.close_warned = None;
         let shown_id = self.tabs.get(self.shown).map(|tab| tab.id);
@@ -342,6 +362,14 @@ impl Workspace {
         }
         self.shown = shown_id.and_then(|id| self.tabs.iter().position(|tab| tab.id == id)).unwrap_or(self.active);
         self.reselect();
+    }
+
+    /// Selects the tab after (`step` 1) or before (-1) the active one, wrapping round.
+    pub fn step_tab(&mut self, step: isize) {
+        let count = self.tabs.len() as isize;
+        if count > 1 {
+            self.select((self.active as isize + step).rem_euclid(count) as usize);
+        }
     }
 
     pub fn select(&mut self, index: usize) {
@@ -476,6 +504,9 @@ impl Workspace {
                 _ => {}
             }
         }
+        if let (Some(part), Some(closing)) = (name.strip_prefix("closing:"), &self.closing) {
+            return closing.buttons.iter().find(|(_, what)| *what == part).map(|(rect, _)| middle(*rect));
+        }
         if let Some(part) = name.strip_prefix("git:") {
             return self.git.as_ref()?.control_rect(part).map(middle);
         }
@@ -494,6 +525,14 @@ impl Workspace {
         if self.menu.is_some() {
             if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.menu = None;
+            }
+            return true;
+        }
+        if self.closing.is_some() {
+            match key {
+                Key::Named(NamedKey::Escape) => self.answer_closing("cancel"),
+                Key::Named(NamedKey::Enter) => self.answer_closing("save"),
+                _ => {}
             }
             return true;
         }
@@ -525,7 +564,17 @@ impl Workspace {
             }
             return true;
         }
-        self.explorer.filter_key(key, text)
+        if self.explorer.filter_key(key, text) {
+            return true;
+        }
+        match self.explorer.key(key) {
+            Some(crate::explorer::Clicked::File(file)) => {
+                self.open_document(&file);
+                true
+            }
+            Some(_) => true,
+            None => false,
+        }
     }
 
     /// Opens Source Control for the project.
@@ -603,17 +652,21 @@ impl Workspace {
     /// Creates what the sheet names; a new file is opened, as in the Swift app.
     fn create_item(&mut self) {
         let Some(creation) = self.creation.take_if(|creation| valid_name(&creation.name)) else { return };
-        let path = creation.directory.join(&creation.name);
-        let result = if creation.is_directory { std::fs::create_dir(&path) } else { std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map(|_| ()) };
-        match result {
-            Ok(()) => {
+        if let Some(source) = &creation.rename {
+            match neolink_core::files::rename(source, &creation.name) {
+                Ok(_) => self.explorer.refresh(),
+                Err(error) => self.notice = Some(error),
+            }
+            return;
+        }
+        match neolink_core::files::create(&creation.directory, &creation.name, creation.is_directory) {
+            Ok(path) => {
                 self.explorer.refresh();
                 if !creation.is_directory {
                     self.open_document(&path);
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => self.notice = Some("An item with that name already exists. Choose another name.".into()),
-            Err(error) => self.notice = Some(format!("Could not create {}: {error}", creation.name)),
+            Err(error) => self.notice = Some(error),
         }
     }
 
@@ -621,7 +674,8 @@ impl Workspace {
         let Some(mut creation) = self.creation.take() else { return };
         let mut ui = Ui { painter, scale: self.scale };
         ui.fill(Rect::new(0.0, 0.0, self.window.0, self.window.1), [0, 0, 0, 90]);
-        let (width, height, pad) = (ui.px(360.0), ui.px(168.0), ui.px(24.0));
+        let renaming = creation.rename.is_some();
+        let (width, height, pad) = if renaming { (ui.px(340.0), ui.px(140.0), ui.px(24.0)) } else { (ui.px(360.0), ui.px(168.0), ui.px(24.0)) };
         let sheet = Rect::new(((self.window.0 - width) * 0.5).round(), ui.px(34.0), width, height);
         let line = ui.px(1.0).max(1.0);
         ui.shadow(sheet, 10.0);
@@ -629,19 +683,24 @@ impl Workspace {
         ui.outline(sheet, 10.0, theme::white(0.14));
         let left = sheet.x + pad;
         let mut y = sheet.y + pad + ui.px(9.0);
-        let icon = ui.icon(if creation.is_directory { "folder.badge.plus" } else { "doc.badge.plus" }, 13.0, IconWeight::Semibold, left + ui.px(9.0), y, theme::TEXT_PRIMARY).max(ui.px(18.0));
-        ui.text(if creation.is_directory { "New Folder" } else { "New File" }, left + icon + ui.px(6.0), y, 13.0, 600, false, theme::TEXT_PRIMARY);
-        y += ui.px(28.0);
-        let directory = creation.directory.display().to_string();
-        let shown = ui.fit_middle(&directory, width - 2.0 * pad, 10.0, 400, false);
-        ui.text(&shown, left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
-        y += ui.px(16.0);
+        if renaming {
+            ui.text("Rename item", left, y, 13.0, 600, false, theme::TEXT_PRIMARY);
+            y += ui.px(26.0);
+        } else {
+            let icon = ui.icon(if creation.is_directory { "folder.badge.plus" } else { "doc.badge.plus" }, 13.0, IconWeight::Semibold, left + ui.px(9.0), y, theme::TEXT_PRIMARY).max(ui.px(18.0));
+            ui.text(if creation.is_directory { "New Folder" } else { "New File" }, left + icon + ui.px(6.0), y, 13.0, 600, false, theme::TEXT_PRIMARY);
+            y += ui.px(28.0);
+            let directory = creation.directory.display().to_string();
+            let shown = ui.fit_middle(&directory, width - 2.0 * pad, 10.0, 400, false);
+            ui.text(&shown, left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
+            y += ui.px(16.0);
+        }
         let field = Rect::new(left, y, width - 2.0 * pad, ui.px(22.0));
         ui.rounded(field, 5.0, theme::rgb(0x1A1A1A));
         ui.outline(field, 5.0, theme::rgb(0x2F6FDB));
         let middle = field.y + field.height * 0.5;
         if creation.name.is_empty() {
-            ui.text(if creation.is_directory { "Folder name" } else { "File name, e.g. main.py" }, field.x + ui.px(6.0), middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
+            ui.text(if renaming { "Name" } else if creation.is_directory { "Folder name" } else { "File name, e.g. main.py" }, field.x + ui.px(6.0), middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
             ui.painter.scene.fill(field.x + ui.px(5.0), middle - ui.px(7.0), line.max(2.0), ui.px(14.0), theme::ACCENT);
         } else {
             let end = ui.text(&creation.name, field.x + ui.px(6.0), middle, 12.0, 400, false, theme::TEXT_PRIMARY);
@@ -649,10 +708,11 @@ impl Workspace {
         }
         let button_y = sheet.bottom() - pad - ui.px(22.0);
         let valid = valid_name(&creation.name);
-        let create_width = ui.measure("Create", 12.0, 500, false) + ui.px(24.0);
+        let confirm = if renaming { "Rename" } else { "Create" };
+        let create_width = ui.measure(confirm, 12.0, 500, false) + ui.px(24.0);
         creation.create = Rect::new(sheet.right() - pad - create_width, button_y, create_width, ui.px(22.0));
         ui.rounded(creation.create, 5.0, if valid { theme::rgb(0x2F6FDB) } else { theme::rgb(0x333333) });
-        ui.text("Create", creation.create.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, if valid { theme::rgb(0xFFFFFF) } else { theme::TEXT_SECONDARY });
+        ui.text(confirm, creation.create.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, if valid { theme::rgb(0xFFFFFF) } else { theme::TEXT_SECONDARY });
         let cancel_width = ui.measure("Cancel", 12.0, 500, false) + ui.px(24.0);
         creation.cancel = Rect::new(creation.create.x - ui.px(8.0) - cancel_width, button_y, cancel_width, ui.px(22.0));
         ui.rounded(creation.cancel, 5.0, theme::rgb(0x3A3A3A));
@@ -661,7 +721,184 @@ impl Workspace {
     }
 
     fn begin_create(&mut self, is_directory: bool) {
-        self.creation = Some(Creation { directory: self.explorer.root().to_path_buf(), is_directory, name: String::new(), cancel: Rect::default(), create: Rect::default() });
+        let directory = self.explorer.root().to_path_buf();
+        self.begin_create_in(directory, is_directory);
+    }
+
+    fn begin_create_in(&mut self, directory: std::path::PathBuf, is_directory: bool) {
+        self.creation = Some(Creation { directory, is_directory, rename: None, name: String::new(), cancel: Rect::default(), create: Rect::default() });
+    }
+
+    /// Opens a local shell tab in `directory`.
+    fn open_terminal_in(&mut self, directory: std::path::PathBuf) {
+        let Some(shared) = self.shared.upgrade() else { return };
+        let id = self.next_id;
+        self.next_id += 1;
+        match Terminal::spawn(&shared, self.grid.0, self.grid.1, self.cell, Some(directory), id) {
+            Ok(terminal) => {
+                self.tabs.push(Tab { id, pane: Pane::Terminal(terminal) });
+                self.select(self.tabs.len() - 1);
+            }
+            Err(error) => self.notice = Some(format!("Could not start a shell: {error}")),
+        }
+    }
+
+    /// One choice from an explorer row's context menu (`LocalFileBrowserView.contextMenu`).
+    fn file_action(&mut self, what: &str, path: std::path::PathBuf, is_directory: bool) {
+        let folder = if is_directory { path.clone() } else { path.parent().map(std::path::Path::to_path_buf).unwrap_or_default() };
+        let copy_text = |text: String| {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(text);
+            }
+        };
+        let launch = |program: &str, arguments: &[&std::ffi::OsStr]| {
+            let _ = std::process::Command::new(program).args(arguments).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+        };
+        match what {
+            "open" if is_directory => self.explorer.toggle(&path),
+            "open" => self.open_document(&path),
+            "new-file" => self.begin_create_in(folder, false),
+            "new-folder" => self.begin_create_in(folder, true),
+            "default-app" => {
+                if cfg!(target_os = "macos") {
+                    launch("open", &[path.as_os_str()]);
+                } else if cfg!(windows) {
+                    launch("cmd", &[std::ffi::OsStr::new("/C"), std::ffi::OsStr::new("start"), std::ffi::OsStr::new(""), path.as_os_str()]);
+                } else {
+                    launch("xdg-open", &[path.as_os_str()]);
+                }
+            }
+            "show" => {
+                if cfg!(target_os = "macos") {
+                    launch("open", &[std::ffi::OsStr::new("-R"), path.as_os_str()]);
+                } else if cfg!(windows) {
+                    let mut argument = std::ffi::OsString::from("/select,");
+                    argument.push(path.as_os_str());
+                    launch("explorer", &[argument.as_os_str()]);
+                } else {
+                    launch("xdg-open", &[folder.as_os_str()]);
+                }
+            }
+            "terminal" => self.open_terminal_in(folder),
+            "reveal" => {
+                if let Some(active) = self.active_document() {
+                    self.explorer.reveal(std::path::Path::new(&active));
+                }
+            }
+            "copy-path" => copy_text(path.display().to_string()),
+            "copy-relative" => copy_text(path.strip_prefix(self.explorer.root()).unwrap_or(&path).display().to_string().replace('\\', "/")),
+            "copy" => self.copied = Some(path),
+            "paste" => {
+                if let Some(source) = self.copied.clone() {
+                    match neolink_core::files::copy_into(&source, &folder) {
+                        Ok(_) => self.explorer.refresh(),
+                        Err(error) => self.notice = Some(error),
+                    }
+                }
+            }
+            "rename" => {
+                let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                self.creation = Some(Creation { directory: folder, is_directory, rename: Some(path), name, cancel: Rect::default(), create: Rect::default() });
+            }
+            "trash" => match trash::delete(&path) {
+                Ok(()) => self.explorer.refresh(),
+                Err(error) => self.notice = Some(format!("Could not move to the Trash: {error}")),
+            },
+            _ => {}
+        }
+    }
+
+    /// A secondary click at `(x, y)`. Returns `true` if it opened a menu.
+    pub fn right_click(&mut self, x: f32, y: f32) -> bool {
+        if self.menu.is_some() || self.creation.is_some() || self.closing.is_some() || self.search.is_some() || self.git.is_some() {
+            return false;
+        }
+        let Some((path, is_directory)) = self.explorer.row_under(x, y) else { return false };
+        self.explorer.selected = Some(path.clone());
+        self.explorer.focused = true;
+        let entry = |label: &str, what: &'static str| Item::entry(label, Action::File(what, path.clone(), is_directory));
+        let mut items = vec![entry(if is_directory { "Browse This Folder" } else { "Open in Tab" }, "open")];
+        if is_directory {
+            items.push(entry("New File Here\u{2026}", "new-file"));
+            items.push(entry("New Folder Here\u{2026}", "new-folder"));
+        } else {
+            items.push(entry("Open in Default App", "default-app"));
+        }
+        items.push(entry(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in File Manager" }, "show"));
+        items.push(entry("Open in Integrated Terminal", "terminal"));
+        items.push(if self.active_document().is_some() { entry("Reveal Active File", "reveal") } else { Item::note("Reveal Active File") });
+        items.push(Item::Separator);
+        items.push(entry("Copy Path", "copy-path"));
+        items.push(entry("Copy Relative Path", "copy-relative"));
+        items.push(Item::Separator);
+        items.push(entry("Copy", "copy"));
+        if self.copied.is_some() {
+            items.push(entry("Paste Here", "paste"));
+        }
+        items.push(entry("Rename\u{2026}", "rename"));
+        items.push(Item::Separator);
+        items.push(entry(if cfg!(target_os = "macos") { "Move to Trash" } else { "Move to Recycle Bin" }, "trash"));
+        let line = self.scale.max(1.0);
+        self.menu = Some(Menu::new(Rect::new(x, y - line, line, line), items));
+        true
+    }
+
+    /// Which pointer the window should show at `(x, y)`: `true` for the column-resize arrows.
+    pub fn wants_resize_cursor(&self, x: f32, y: f32) -> bool {
+        self.dragging_divider || self.over_divider(x, y)
+    }
+
+    fn over_divider(&self, x: f32, y: f32) -> bool {
+        let reach = 3.0 * self.scale;
+        self.explorer.visible && self.menu.is_none() && self.creation.is_none() && self.search.is_none() && self.git.is_none() && self.closing.is_none() && (x - self.sidebar.right()).abs() <= reach && y >= self.sidebar.y && y < self.sidebar.bottom()
+    }
+
+    /// Asks before closing a document with unsaved changes (`TabsController.confirmClose`).
+    fn draw_closing(&mut self, painter: &mut Painter) {
+        let Some(mut closing) = self.closing.take() else { return };
+        let mut ui = Ui { painter, scale: self.scale };
+        ui.fill(Rect::new(0.0, 0.0, self.window.0, self.window.1), [0, 0, 0, 90]);
+        let (width, height, pad) = (ui.px(260.0), ui.px(202.0), ui.px(16.0));
+        let alert = Rect::new(((self.window.0 - width) * 0.5).round(), ((self.window.1 - height) * 0.4).round(), width, height);
+        ui.shadow(alert, 12.0);
+        ui.rounded(alert, 12.0, theme::rgb(0x262626));
+        ui.outline(alert, 12.0, theme::white(0.14));
+        let name = std::path::Path::new(&closing.path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let title = format!("Save changes to \u{201c}{name}\u{201d}?");
+        let title = ui.fit_middle(&title, width - 2.0 * pad, 13.0, 700, false);
+        let title_width = ui.measure(&title, 13.0, 700, false);
+        ui.text(&title, alert.x + (width - title_width) * 0.5, alert.y + pad + ui.px(10.0), 13.0, 700, false, theme::TEXT_PRIMARY);
+        for (index, text) in ["Your changes will be lost if you close", "without saving."].into_iter().enumerate() {
+            let text_width = ui.measure(text, 11.0, 400, false);
+            ui.text(text, alert.x + (width - text_width) * 0.5, alert.y + pad + ui.px(36.0 + index as f32 * 15.0), 11.0, 400, false, theme::TEXT_PRIMARY);
+        }
+        closing.buttons.clear();
+        let mut y = alert.y + pad + ui.px(72.0);
+        for (label, what, prominent) in [("Save", "save", true), ("Cancel", "cancel", false), ("Don\u{2019}t Save", "discard", false)] {
+            let button = Rect::new(alert.x + pad, y, width - 2.0 * pad, ui.px(28.0));
+            ui.rounded(button, 6.0, if prominent { theme::rgb(0x2F6FDB) } else { theme::rgb(0x3A3A3A) });
+            let label_width = ui.measure(label, 13.0, 500, false);
+            ui.text(label, button.x + (button.width - label_width) * 0.5, button.y + button.height * 0.5, 13.0, 500, false, if prominent { theme::rgb(0xFFFFFF) } else { theme::TEXT_PRIMARY });
+            closing.buttons.push((button, what));
+            y += ui.px(28.0 + 8.0);
+        }
+        self.closing = Some(closing);
+    }
+
+    /// Answers the "Save changes?" alert.
+    fn answer_closing(&mut self, what: &str) {
+        let Some(closing) = self.closing.take() else { return };
+        let Some(index) = self.tabs.iter().position(|tab| tab.document() == Some(closing.path.as_str())) else { return };
+        match what {
+            "save" => {
+                if let Some(editor) = &self.editor {
+                    editor.command("save", &closing.path);
+                }
+                self.force_close(index);
+            }
+            "discard" => self.force_close(index),
+            _ => {}
+        }
     }
 
     fn perform(&mut self, action: Action) {
@@ -678,6 +915,7 @@ impl Workspace {
             Action::ToggleReveal => self.explorer.reveal_active = !self.explorer.reveal_active,
             Action::NewFile => self.begin_create(false),
             Action::NewFolder => self.begin_create(true),
+            Action::File(what, path, is_directory) => self.file_action(what, path, is_directory),
             Action::GitCreateBranch | Action::GitSwitch(_) | Action::GitStash(_) => {
                 let unsaved = self.any_unsaved();
                 if let Some(git) = &mut self.git {
@@ -727,6 +965,12 @@ impl Workspace {
             }
             return true;
         }
+        if let Some(closing) = &self.closing {
+            if let Some((_, what)) = closing.buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
+                self.answer_closing(what);
+            }
+            return true;
+        }
         if self.git.is_some() {
             let unsaved = self.any_unsaved();
             let outcome = self.git.as_mut().map(|git| git.click(x, y, unsaved));
@@ -748,8 +992,13 @@ impl Workspace {
             }
             return true;
         }
+        if self.over_divider(x, y) {
+            self.dragging_divider = true;
+            return true;
+        }
         if !self.explorer.contains(x, y) {
             self.explorer.filter_focused = false;
+            self.explorer.focused = false;
         }
         if self.shown == self.active && self.active_is_document() {
             if let Some((rect, what)) = self.toolbar_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
@@ -849,6 +1098,9 @@ impl Workspace {
     }
 
     pub fn release(&mut self, x: f32, y: f32) {
+        if std::mem::take(&mut self.dragging_divider) {
+            return;
+        }
         if self.editor_pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
             let (row, column) = self.pointer_cell();
             if let Some(editor) = &self.editor {
@@ -860,6 +1112,13 @@ impl Workspace {
     /// The pointer moved to `(x, y)`. Returns `true` if a hover highlight changed.
     pub fn pointer(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
+        if self.dragging_divider {
+            // `ContentView`: the file browser is 200 to 400 points wide.
+            let points = (x / self.scale).clamp(200.0, 400.0).round();
+            let changed = points != self.explorer_points;
+            self.explorer_points = points;
+            return changed;
+        }
         if let Some(search) = &mut self.search {
             return search.pointer(x, y);
         }
@@ -1263,6 +1522,7 @@ impl Content for Workspace {
             };
         }
         self.draw_creation(painter);
+        self.draw_closing(painter);
         if let Some(mut git) = self.git.take() {
             // The explorer's decorations follow what the review changes.
             if git.mutations() != self.git_seen {
@@ -1296,6 +1556,13 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
+        signature.add(self.explorer_points.to_bits() as u64);
+        if let Some(closing) = &self.closing {
+            signature.add(0x434C4F53).text(&closing.path);
+        }
+        if let Some(creation) = &self.creation {
+            signature.add(creation.rename.is_some() as u64 + 7);
+        }
         if let Some(git) = &self.git {
             signature.add(0x474954).add(git.signature());
         }

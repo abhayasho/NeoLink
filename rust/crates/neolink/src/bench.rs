@@ -562,6 +562,11 @@ impl Runner {
                 // captures and for checking that they do something.
                 sleep(1.5);
                 for step in std::env::var("NEOLINK_CONTROLS").unwrap_or_default().split(',').filter(|step| !step.is_empty()) {
+                    if let Some(keys) = step.strip_prefix("keys:") {
+                        (self.post)(Injected::Keys(keys.to_string()));
+                        sleep(0.5);
+                        continue;
+                    }
                     match step.split_once('=') {
                         Some((control, text)) => {
                             (self.post)(Injected::Control(control.to_string()));

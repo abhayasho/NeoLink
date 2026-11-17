@@ -17,6 +17,8 @@ pub enum Action {
     ToggleReveal,
     NewFile,
     NewFolder,
+    /// An explorer row's context-menu choice: what, the row's path, whether it is a folder.
+    File(&'static str, std::path::PathBuf, bool),
     GitCreateBranch,
     GitSwitch(String),
     GitStash(Option<String>),

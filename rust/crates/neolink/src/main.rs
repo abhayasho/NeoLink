@@ -48,6 +48,7 @@ struct App {
     shared: Option<Arc<Shared>>,
     modifiers: ModifiersState,
     pointer: (f32, f32),
+    resize_cursor: bool,
     bench: Arc<BenchState>,
     spike: Option<String>,
     spike_seconds: f64,
@@ -193,6 +194,39 @@ impl App {
                 self.invalidate();
             }
             "q" => event_loop.exit(),
+            "]" | "}" if modifiers.shift_key() => {
+                self.with_workspace(|workspace, _| workspace.step_tab(1));
+                self.invalidate();
+            }
+            "[" | "{" if modifiers.shift_key() => {
+                self.with_workspace(|workspace, _| workspace.step_tab(-1));
+                self.invalidate();
+            }
+            "e" if modifiers.shift_key() => {
+                self.with_workspace(|workspace, _| workspace.toggle_explorer());
+                self.invalidate();
+            }
+            "f" if modifiers.control_key() => {
+                if let Some(window) = &self.window {
+                    window.set_fullscreen(if window.fullscreen().is_some() { None } else { Some(winit::window::Fullscreen::Borderless(None)) });
+                }
+            }
+            "o" => {
+                // Open File... / Open Project... (the system's panel; it runs on this, the main, thread).
+                if modifiers.shift_key() {
+                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        self.with_workspace(|workspace, _| workspace.set_project(neolink_core::paths::canonical(&folder)));
+                    }
+                } else if let Some(file) = rfd::FileDialog::new().pick_file() {
+                    self.open_document(&file);
+                }
+                self.invalidate();
+            }
+            "m" => {
+                if let Some(window) = &self.window {
+                    window.set_minimized(true);
+                }
+            }
             "p" => {
                 self.with_workspace(|workspace, _| workspace.open_search(false));
                 self.invalidate();
@@ -422,7 +456,16 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 Injected::Control(name) => {
                     self.with_workspace(|workspace, _| {
-                        if let Some((x, y)) = workspace.control_point(&name) {
+                        if name == "close-active" {
+                            let index = workspace.active_index();
+                            workspace.close_tab(index);
+                            return;
+                        }
+                        // "right:<control>" is a secondary click.
+                        if let Some((x, y)) = name.strip_prefix("right:").and_then(|name| workspace.control_point(name)) {
+                            workspace.pointer(x, y);
+                            workspace.right_click(x, y);
+                        } else if let Some((x, y)) = workspace.control_point(&name) {
                             workspace.pointer(x, y);
                             workspace.click(x, y);
                         } else {
@@ -562,6 +605,13 @@ impl ApplicationHandler<UserEvent> for App {
                 if self.with_workspace(|workspace, _| workspace.pointer(pointer.0, pointer.1)) == Some(true) {
                     shared.invalidate();
                 }
+                let resize = self.with_workspace(|workspace, _| workspace.wants_resize_cursor(pointer.0, pointer.1)) == Some(true);
+                if resize != self.resize_cursor {
+                    self.resize_cursor = resize;
+                    if let Some(window) = &self.window {
+                        window.set_cursor(if resize { winit::window::CursorIcon::ColResize } else { winit::window::CursorIcon::Default });
+                    }
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 if self.with_workspace(|workspace, _| workspace.pointer(-1.0, -1.0)) == Some(true) {
@@ -571,6 +621,12 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
                 let pointer = self.pointer;
                 if self.with_workspace(|workspace, _| workspace.click(pointer.0, pointer.1)) == Some(true) {
+                    shared.invalidate();
+                }
+            }
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
+                let pointer = self.pointer;
+                if self.with_workspace(|workspace, _| workspace.right_click(pointer.0, pointer.1)) == Some(true) {
                     shared.invalidate();
                 }
             }
@@ -612,6 +668,7 @@ fn main() {
         shared: None,
         modifiers: ModifiersState::empty(),
         pointer: (-1.0, -1.0),
+        resize_cursor: false,
         bench: Arc::new(BenchState::default()),
         spike,
         spike_seconds,

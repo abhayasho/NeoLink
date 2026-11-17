@@ -108,6 +108,9 @@ pub struct Explorer {
     /// Explorer options (the Swift app's defaults).
     pub hide_ignored: bool,
     pub reveal_active: bool,
+    /// The row the keyboard acts on, and whether the tree has the keyboard.
+    pub selected: Option<PathBuf>,
+    pub focused: bool,
     git: Decorations,
     git_loaded: Arc<Mutex<Option<Decorations>>>,
     git_running: Arc<std::sync::atomic::AtomicBool>,
@@ -188,6 +191,8 @@ impl Explorer {
             filter_focused: false,
             hide_ignored: false,
             reveal_active: true,
+            selected: None,
+            focused: false,
             git: Decorations::default(),
             git_loaded: Arc::new(Mutex::new(None)),
             git_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -309,6 +314,11 @@ impl Explorer {
     }
 
     pub fn control_rect(&self, name: &str) -> Option<Rect> {
+        if let Some(index) = name.strip_prefix("explorer-row:") {
+            let index: usize = index.parse().ok()?;
+            let y = self.rect.y + self.header_height + index as f32 * self.row_height - self.drawn_scroll as f32;
+            return (index < self.rows.len()).then(|| Rect::new(self.rect.x, y, self.rect.width, self.row_height));
+        }
         match name {
             "explorer-options" => Some(self.options_rect),
             "explorer-new" => Some(self.plus_rect),
@@ -427,7 +437,12 @@ impl Explorer {
             self.refresh();
             return Clicked::Nothing;
         }
-        let Some(row) = self.row_at(x, y).and_then(|index| self.rows.get(index)).cloned() else { return Clicked::Nothing };
+        let Some(row) = self.row_at(x, y).and_then(|index| self.rows.get(index)).cloned() else {
+            self.focused = false;
+            return Clicked::Nothing;
+        };
+        self.selected = Some(row.path.clone());
+        self.focused = true;
         match row.kind {
             RowKind::File => Clicked::File(row.path),
             RowKind::Folder { .. } => {
@@ -436,6 +451,76 @@ impl Explorer {
                 Clicked::Nothing
             }
         }
+    }
+
+    /// The row under `(x, y)`: its path and whether it is a folder.
+    pub fn row_under(&self, x: f32, y: f32) -> Option<(PathBuf, bool)> {
+        let row = self.rows.get(self.row_at(x, y)?)?;
+        Some((row.path.clone(), matches!(row.kind, RowKind::Folder { .. })))
+    }
+
+    /// A key while the tree has the keyboard (`ExplorerTableView.keyDown`): arrows move and open or
+    /// close, Return activates. `None` if the key is not the tree's.
+    pub fn key(&mut self, key: &winit::keyboard::Key) -> Option<Clicked> {
+        use winit::keyboard::{Key, NamedKey};
+        if !self.focused || !self.visible || self.rows.is_empty() {
+            return None;
+        }
+        let current = self.selected.as_ref().and_then(|path| self.rows.iter().position(|row| &row.path == path));
+        let mut result = Clicked::Nothing;
+        let mut target = current;
+        match key {
+            Key::Named(NamedKey::ArrowDown) => target = Some(current.map_or(0, |index| (index + 1).min(self.rows.len() - 1))),
+            Key::Named(NamedKey::ArrowUp) => target = Some(current.map_or(0, |index| index.saturating_sub(1))),
+            Key::Named(NamedKey::Enter) => {
+                let row = self.rows.get(current?)?.clone();
+                match row.kind {
+                    RowKind::File => result = Clicked::File(row.path),
+                    RowKind::Folder { .. } => {
+                        self.tree.toggle(&row.path);
+                        self.stale = true;
+                    }
+                }
+            }
+            Key::Named(NamedKey::ArrowRight) | Key::Named(NamedKey::ArrowLeft) => {
+                let row = self.rows.get(current?)?.clone();
+                let right = matches!(key, Key::Named(NamedKey::ArrowRight));
+                match row.kind {
+                    RowKind::Folder { expanded, .. } if expanded != right => {
+                        self.tree.toggle(&row.path);
+                        self.stale = true;
+                    }
+                    RowKind::Folder { .. } if right => target = Some((current? + 1).min(self.rows.len() - 1)),
+                    _ if !right => {
+                        // To the enclosing folder's row.
+                        target = (0..current?).rev().find(|index| self.rows[*index].depth < row.depth).or(current);
+                    }
+                    _ => {}
+                }
+            }
+            Key::Named(NamedKey::Escape) => self.focused = false,
+            _ => return None,
+        }
+        if let Some(index) = target {
+            self.selected = Some(self.rows[index].path.clone());
+            // Keep the row in view.
+            let (top, height) = (index as f64 * self.row_height as f64, self.row_height as f64);
+            let visible = (self.rect.height - self.header_height - FOOTER_POINTS * self.row_height / ROW_POINTS) as f64;
+            if top < self.scroll {
+                self.scroll = top;
+            } else if top + height > self.scroll + visible {
+                self.scroll = top + height - visible;
+            }
+            self.smoother.cancel();
+        }
+        self.revision += 1;
+        Some(result)
+    }
+
+    /// Opens or closes a folder.
+    pub fn toggle(&mut self, path: &Path) {
+        self.tree.toggle(path);
+        self.stale = true;
     }
 
     /// Returns `true` if the hover highlight changed.
@@ -456,7 +541,7 @@ impl Explorer {
 
     /// What decides the sidebar's pixels, apart from the active file.
     pub fn signature(&self) -> u64 {
-        self.revision ^ (self.filter.len() as u64).rotate_left(50) ^ ((self.filter_focused as u64) << 58) ^ (self.drawn_scroll.to_bits().rotate_left(17)) ^ (self.hover.map_or(u64::MAX, |index| index as u64) << 40) ^ self.visible as u64
+        self.revision ^ (self.filter.len() as u64).rotate_left(50) ^ ((self.filter_focused as u64) << 58) ^ (self.drawn_scroll.to_bits().rotate_left(17)) ^ (self.hover.map_or(u64::MAX, |index| index as u64) << 40) ^ self.visible as u64 ^ ((self.focused as u64) << 59)
     }
 
     /// Draws the pane as the Swift app's `FileBrowserPane` and explorer cells do (sizes in points there).
@@ -538,7 +623,7 @@ impl Explorer {
             let y = list.y + index as f32 * self.row_height - scroll as f32;
             let row_middle = y + self.row_height * 0.5;
             let is_active = active.is_some_and(|path| Path::new(path) == row.path);
-            if is_active {
+            if is_active || (self.focused && self.selected.as_deref() == Some(row.path.as_path())) {
                 ui.painter.scene.fill(rect.x, y, rect.width, self.row_height, theme::SELECTION);
             } else if self.hover == Some(index) {
                 ui.painter.scene.fill(rect.x, y, rect.width, self.row_height, theme::HOVER);
