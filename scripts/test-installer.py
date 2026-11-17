@@ -9,9 +9,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSET = 'NeoLink-macos-arm64.zip'
-archive = ROOT / '.build/release-assets' / ASSET
+archive = ROOT / 'target/release-assets' / ASSET
 if not archive.is_file():
-    raise SystemExit('Run ./scripts/package-release.sh first.')
+    raise SystemExit('Run scripts/build-app.sh and scripts/package-release.sh first.')
 with tempfile.TemporaryDirectory(prefix='neolink-installer-test-') as temporary:
     work = Path(temporary)
     commands = work / 'bin'
@@ -58,7 +58,7 @@ exec /bin/mv "$@"''')
     binary = destination / 'NeoLink.app/Contents/MacOS/NeoLink'
     run()
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-    assert digest == hashlib.sha256((ROOT / 'NeoLink.app/Contents/MacOS/NeoLink').read_bytes()).hexdigest()
+    assert digest == hashlib.sha256((ROOT / 'target/NeoLink.app/Contents/MacOS/NeoLink').read_bytes()).hexdigest()
     run()
     backups = list(destination.glob('NeoLink Backup.*/NeoLink.app'))
     assert len(backups) == 1 and (backups[0] / 'Contents/MacOS/NeoLink').is_file()

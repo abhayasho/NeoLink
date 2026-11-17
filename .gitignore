@@ -1,13 +1,5 @@
 .DS_Store
-/.build
-/Packages
-/NeoLink.app
+/target
+__pycache__/
 /Resources/AppIcon.iconset
-xcuserdata/
-DerivedData/
-.swiftpm/configuration/registries.json
-.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
-
-/Vendor/SwiftTerm/.build/
-/scripts/__pycache__/

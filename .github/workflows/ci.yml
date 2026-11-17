@@ -1,0 +1,80 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'assets/**']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'assets/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  # On Windows this establishes that the app compiles and links with MSVC, the tests pass (the editor
+  # client's against a real Neovim) and the download is packaged. It opens no window, so it says
+  # nothing about rendering, input or latency there.
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+      # The editor tests drive a real Neovim; they skip themselves where `nvim` is missing.
+      - name: Neovim (macOS)
+        if: runner.os == 'macOS'
+        run: brew install neovim
+      - name: Neovim (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install neovim -y --no-progress
+          $nvim = Get-ChildItem -Path 'C:\tools\neovim','C:\Program Files\Neovim' -Recurse -Filter nvim.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($nvim) { $nvim.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append; & $nvim.FullName --version | Select-Object -First 1 }
+      - name: Build
+        run: cargo build --workspace --release --locked
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Editor runtime (neolink.lua against Neovim)
+        if: runner.os == 'macOS'
+        run: |
+          python3 scripts/test-editor.py
+          python3 scripts/test-editor-messages.py
+      - name: Windows archive layout tests
+        run: python scripts/test-package-windows.py
+      - name: Package for Windows
+        if: runner.os == 'Windows'
+        run: python scripts/package-windows.py
+      - name: Package for macOS and test the installer
+        if: runner.os == 'macOS'
+        run: |
+          scripts/build-app.sh
+          scripts/package-release.sh
+          python3 scripts/test-installer.py
+      - name: Upload the macOS download
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: NeoLink-macos-arm64
+          path: target/release-assets/
+          if-no-files-found: error
+      - name: Upload the Windows download
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: NeoLink-windows-x64
+          path: target/NeoLink-windows-x64.zip
+          if-no-files-found: error

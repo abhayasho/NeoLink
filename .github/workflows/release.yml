@@ -1,0 +1,77 @@
+name: Release
+# Pushing a tag like v2.0.0 builds, tests and packages both downloads and attaches them to a draft
+# release of that name (created with docs/releases/<tag>.md as its notes if it does not exist yet).
+# Publishing the draft (and marking it latest) stays a person's decision.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            asset: target/release-assets/*
+          - os: windows-latest
+            asset: target/NeoLink-windows-x64.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Neovim (macOS)
+        if: runner.os == 'macOS'
+        run: brew install neovim
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Package for macOS
+        if: runner.os == 'macOS'
+        run: |
+          scripts/build-app.sh
+          scripts/package-release.sh
+          python3 scripts/test-installer.py
+      - name: Package for Windows
+        if: runner.os == 'Windows'
+        run: |
+          cargo build --release -p neolink --locked
+          python scripts/package-windows.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ runner.os }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+  publish-draft:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Attach the downloads to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -la assets
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            notes="docs/releases/$TAG.md"
+            [ -f "$notes" ] || notes=/dev/null
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "NeoLink ${TAG#v}" --notes-file "$notes"
+          fi
+          gh release upload "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --clobber
