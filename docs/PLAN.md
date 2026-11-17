@@ -1,9 +1,9 @@
-# NeoLink in Rust: plan, decisions, parity, measurements
+# NeoLink 2.0 (Rust): plan, decisions, measurements
 
-Living document for the Rust rebuild (branch `rust-rewrite`, directory `rust/`). The Swift app in `Sources/` stays the
-working product until this reaches parity; nothing here replaces or modifies it.
-
-Status (2026-11-17): **Rust migration preview: terminal, editor, explorer, SSH/SFTP, ACP/Git/search, bottom/side terminal dock, macOS PDFs, saved credentials, file watching, and fallback text editing are implemented. Full feature parity and Windows on-device verification remain incomplete.** See [the current feature/status guide](README.md); older milestone tables below are historical snapshots, not the current feature list.
+History of the Rust rebuild, which became NeoLink 2.0 (the Swift app it replaced is at tag `swift-final`;
+paths below that start with `rust/` or `Sources/` refer to the layout before 2.0). Current features are in the
+[README](../README.md) and current gaps in [STATUS.md](STATUS.md); the milestone tables and measurements below are
+a record of how it got there, not a current feature list.
 
 Latest continuation: explorer refresh anchors preserve fractional offsets; horizontal editor composition is implemented behind `NEOLINK_HSCROLL=1`, with ordered redraw acknowledgements, Unicode pixel equality and real-Neovim tests. It is **not enabled by default** but can be turned on from the View menu: matched release runs later passed (steady 1–4 vs 137–141 uneven frames; crawl 0 vs 7 jumps), a flick keeps one catch-up step at its start, and a physical-trackpad check is still open. Windows packaging now includes required runtime resources. [Checks, retained failed runs, and remaining work](docs/HORIZONTAL_SCROLL.md).
 
