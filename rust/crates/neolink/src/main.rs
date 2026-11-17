@@ -15,6 +15,7 @@ mod input;
 mod menu;
 #[cfg(target_os = "macos")]
 mod menubar;
+mod pdf;
 mod present;
 mod remote;
 mod render;
@@ -47,6 +48,8 @@ enum UserEvent {
     Injected(Injected),
     /// A menu bar item was chosen.
     Command(String),
+    /// The workspace wants the native views (PDFs) placed or commanded.
+    Layout,
     SpikeChange,
     Quit,
 }
@@ -58,6 +61,7 @@ struct App {
     modifiers: ModifiersState,
     pointer: (f32, f32),
     resize_cursor: u8,
+    pdf_host: pdf::PdfHost,
     /// The settings as last written, and when they were last compared.
     saved: settings::Settings,
     settings_checked: f64,
@@ -166,6 +170,24 @@ impl App {
             if let Err(error) = workspace.new_tab(shared) {
                 eprintln!("cannot start a shell: {error}");
             }
+        });
+        self.invalidate();
+    }
+
+    /// Applies the workspace's wishes for the native PDF views (main thread only).
+    fn place_native_views(&mut self) {
+        let Some(window) = self.window.clone() else { return };
+        let Some((request, commands)) = self.with_workspace(|workspace, _| workspace.take_pdf_work()) else { return };
+        let problem = self.pdf_host.apply(&window, &request);
+        for command in commands {
+            self.pdf_host.command(command);
+        }
+        let label = self.pdf_host.page_label().unwrap_or_default();
+        self.with_workspace(|workspace, _| {
+            if let Some(problem) = problem {
+                workspace.notify(problem);
+            }
+            workspace.pdf_label = label;
         });
         self.invalidate();
     }
@@ -481,6 +503,10 @@ impl App {
             workspace.renderer_information = renderer_information;
             self.saved = saved.clone();
             let proxy = self.proxy.clone();
+            let layout_proxy = self.proxy.clone();
+            workspace.set_on_layout(Box::new(move || {
+                let _ = layout_proxy.send_event(UserEvent::Layout);
+            }));
             workspace.set_on_empty(Box::new(move || {
                 let _ = proxy.send_event(UserEvent::Quit);
             }));
@@ -692,6 +718,7 @@ impl ApplicationHandler<UserEvent> for App {
                 Injected::Finished => event_loop.exit(),
             },
             UserEvent::Command(command) => self.menu_command(&command, event_loop),
+            UserEvent::Layout => self.place_native_views(),
             UserEvent::SpikeChange => {
                 if let Some(shared) = &self.shared {
                     let mut state = shared.state.lock();
@@ -857,6 +884,17 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(shared) = &self.shared {
             shared.publish_main_cpu();
         }
+        // Scrolling inside a PDF view changes its page without telling the workspace.
+        if let Some(label) = self.pdf_host.page_label() {
+            let changed = self.with_workspace(|workspace, _| {
+                let changed = workspace.pdf_label != label;
+                workspace.pdf_label = label;
+                changed
+            });
+            if changed == Some(true) {
+                self.invalidate();
+            }
+        }
         // At most once a second, and only after something happened (this runs after events).
         if clock::now() - self.settings_checked > 1.0 {
             self.settings_checked = clock::now();
@@ -890,6 +928,7 @@ fn main() {
         modifiers: ModifiersState::empty(),
         pointer: (-1.0, -1.0),
         resize_cursor: 0,
+        pdf_host: pdf::PdfHost::new(),
         saved: settings::Settings::default(),
         settings_checked: 0.0,
         bench: Arc::new(BenchState::default()),

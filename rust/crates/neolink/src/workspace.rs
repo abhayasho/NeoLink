@@ -149,6 +149,13 @@ pub struct Workspace {
     /// What the held mouse button was pressed in (1 the shown terminal, 2 the docked one, 3 the
     /// editor), and the last press for counting double and triple clicks.
     pressed_in: u8,
+    /// Where the shown PDF's native view goes, toolbar commands for it, its page counter, and the
+    /// callback that tells the main thread (which owns the views) to look.
+    pdf_request: crate::pdf::PdfRequest,
+    pdf_commands: Vec<crate::pdf::PdfCommand>,
+    pub pdf_label: String,
+    on_layout: Option<Box<dyn Fn() + Send>>,
+    pdf_buttons: Vec<(Rect, crate::pdf::PdfCommand)>,
     /// What draws the window, for View > Renderer Information.
     pub renderer_information: String,
     /// The terminal's find bar while it is open: the text, and whether it was found.
@@ -249,6 +256,11 @@ impl Workspace {
             pressed_in: 0,
             find: None,
             renderer_information: String::new(),
+            pdf_request: Default::default(),
+            pdf_commands: Vec::new(),
+            pdf_label: String::new(),
+            on_layout: None,
+            pdf_buttons: Vec::new(),
             shown_directory: String::new(),
             shown_servers: String::new(),
             last_press: (0.0, 0.0, 0.0, 0),
@@ -270,6 +282,49 @@ impl Workspace {
         };
         workspace.layout(size);
         workspace
+    }
+
+    pub fn set_on_layout(&mut self, callback: Box<dyn Fn() + Send>) {
+        self.on_layout = Some(callback);
+    }
+
+    /// For the main thread: where the PDF view goes, and the commands waiting for it.
+    pub fn take_pdf_work(&mut self) -> (crate::pdf::PdfRequest, Vec<crate::pdf::PdfCommand>) {
+        (self.pdf_request.clone(), std::mem::take(&mut self.pdf_commands))
+    }
+
+    /// The PDF tab's bars (`DocumentTabView`): the path and page controls above, the page below.
+    fn draw_pdf_chrome(&mut self, painter: &mut Painter, path: &str) {
+        let mut ui = Ui { painter, scale: self.scale };
+        let line = ui.px(1.0).max(1.0);
+        let bar = self.toolbar;
+        ui.fill(bar, theme::EDITOR_BACKGROUND);
+        ui.painter.scene.fill(bar.x, bar.bottom() - line, bar.width, line, theme::SEPARATOR);
+        let middle = bar.y + bar.height * 0.5;
+        self.pdf_buttons.clear();
+        let mut right = bar.right() - ui.px(14.0);
+        use crate::pdf::PdfCommand;
+        let fit = ui.text_right("Fit", right, middle, 11.0, 400, false, theme::TEXT_PRIMARY);
+        self.pdf_buttons.push((Rect::new(right - fit - ui.px(5.0), bar.y, fit + ui.px(10.0), bar.height), PdfCommand::Fit));
+        right -= fit + ui.px(10.0);
+        for (symbol, command) in [("plus.magnifyingglass", PdfCommand::ZoomIn), ("minus.magnifyingglass", PdfCommand::ZoomOut), ("chevron.down", PdfCommand::NextPage), ("chevron.up", PdfCommand::PreviousPage)] {
+            let width = ui.icon(symbol, 11.0, IconWeight::Regular, right - ui.px(8.0), middle, theme::TEXT_PRIMARY).max(ui.px(16.0));
+            self.pdf_buttons.push((Rect::new(right - width - ui.px(5.0), bar.y, width + ui.px(10.0), bar.height), command));
+            right -= width + ui.px(10.0);
+        }
+        let home = home_directory().unwrap_or_default();
+        let shown = match std::path::Path::new(path).strip_prefix(&home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => path.to_string(),
+        };
+        let fitted = ui.fit_middle(&shown, (right - bar.x - ui.px(24.0)).max(1.0), 11.0, 400, true);
+        ui.text(&fitted, bar.x + ui.px(14.0), middle, 11.0, 400, true, theme::TEXT_SECONDARY);
+        let footer = self.editor_footer;
+        ui.fill(footer, theme::EDITOR_BACKGROUND);
+        ui.painter.scene.fill(footer.x, footer.y, footer.width, line, theme::SEPARATOR);
+        let label = if self.pdf_label.is_empty() { "PDF".to_string() } else { self.pdf_label.clone() };
+        ui.text(&label, footer.x + ui.px(14.0), footer.y + footer.height * 0.5, 10.0, 500, false, theme::TEXT_SECONDARY);
+        self.toolbar_buttons.clear();
     }
 
     pub fn set_on_empty(&mut self, callback: Box<dyn Fn() + Send>) {
@@ -408,12 +463,12 @@ impl Workspace {
     /// Opens `path` in the editor, in its existing tab if it has one.
     pub fn open_document(&mut self, path: &std::path::Path) {
         let path = neolink_core::paths::canonical(path);
-        // PDFs have no tab of their own in this build (the Swift app shows them with PDFKit): the
-        // system's viewer opens them, rather than the editor showing their bytes.
-        if path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("pdf")) {
+        // On macOS a PDF gets a tab with Apple's PDF view (`pdf.rs`); elsewhere there is no embedded
+        // viewer yet, so the system's viewer opens it rather than the editor showing its bytes.
+        if cfg!(not(target_os = "macos")) && path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("pdf")) {
             let (program, arguments): (&str, Vec<&std::ffi::OsStr>) = if cfg!(target_os = "macos") { ("open", vec![path.as_os_str()]) } else if cfg!(windows) { ("cmd", vec![std::ffi::OsStr::new("/C"), std::ffi::OsStr::new("start"), std::ffi::OsStr::new(""), path.as_os_str()]) } else { ("xdg-open", vec![path.as_os_str()]) };
             let _ = std::process::Command::new(program).args(arguments).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
-            self.notice = Some("PDF tabs are not in this build yet; the file was opened in the default viewer.".into());
+            self.notice = Some("PDF tabs are macOS-only in this build; the file was opened in the default viewer.".into());
             return;
         }
         let Some(path) = path.to_str().map(str::to_string) else { return };
@@ -502,7 +557,7 @@ impl Workspace {
             if self.explorer.reveal_active {
                 self.explorer.reveal(std::path::Path::new(&path));
             }
-            if self.ensure_editor() {
+            if !crate::pdf::is_pdf(&path) && self.ensure_editor() {
                 if let Some(editor) = &mut self.editor {
                     editor.select(&path);
                 }
@@ -537,7 +592,7 @@ impl Workspace {
 
     /// Key presses are the editor's (Neovim notation) rather than a terminal's.
     pub fn keys_go_to_editor(&self) -> bool {
-        self.active_is_document() && !(self.agent.focused && self.agent.visible) && !(self.dock.focused && self.dock.visible)
+        self.active_is_document() && !self.active_document().is_some_and(|path| crate::pdf::is_pdf(&path)) && !(self.agent.focused && self.agent.visible) && !(self.dock.focused && self.dock.visible)
     }
 
     /// Shows the docked terminal under (`below`) or beside the code with the keyboard in it; if it
@@ -920,7 +975,7 @@ impl Workspace {
     }
 
     pub fn save_active(&mut self) {
-        if let (Some(path), Some(editor)) = (self.active_document(), &self.editor) {
+        if let (Some(path), Some(editor)) = (self.active_document().filter(|path| !crate::pdf::is_pdf(path)), &self.editor) {
             editor.command("save", &path);
             self.refresh_explorer_soon = true;
         }
@@ -1182,6 +1237,11 @@ impl Workspace {
     }
 
     /// Says that a part of the Swift app is not in this build yet.
+    /// Shows a one-line message over the workspace.
+    pub fn notify(&mut self, message: String) {
+        self.notice = Some(message);
+    }
+
     pub fn unavailable(&mut self, what: &str) {
         self.notice = Some(format!("{what} is not available in this build yet."));
     }
@@ -1874,6 +1934,15 @@ impl Workspace {
         if !self.explorer.contains(x, y) {
             self.explorer.filter_focused = false;
             self.explorer.focused = false;
+        }
+        if self.shown == self.active && self.active_document().is_some_and(|path| crate::pdf::is_pdf(&path)) {
+            if let Some((_, command)) = self.pdf_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
+                self.pdf_commands.push(command);
+                if let Some(callback) = &self.on_layout {
+                    callback();
+                }
+                return true;
+            }
         }
         if self.shown == self.active && self.active_is_document() {
             if let Some((rect, what)) = self.toolbar_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
@@ -2602,7 +2671,7 @@ impl Content for Workspace {
         }
         // Which pane to show: the active one, unless it is a document Neovim has not confirmed yet.
         let ready = match self.tabs.get(self.active).map(|tab| &tab.pane) {
-            Some(Pane::Document { path, .. }) => self.editor.as_ref().is_some_and(|editor| editor.can_show(path)),
+            Some(Pane::Document { path, .. }) => crate::pdf::is_pdf(path) || self.editor.as_ref().is_some_and(|editor| editor.can_show(path)),
             _ => true,
         };
         if ready {
@@ -2671,6 +2740,11 @@ impl Content for Workspace {
                 chrome = Some(None);
                 next
             }
+            Some(Pane::Document { path, .. }) if crate::pdf::is_pdf(path) => {
+                // The PDF itself is a native view over this pane; only its bars are drawn here.
+                chrome = Some(Some(path.clone()));
+                Next::Idle
+            }
             Some(Pane::Document { path, .. }) => {
                 let mut next = Next::Idle;
                 if let Some(editor) = &mut self.editor {
@@ -2684,6 +2758,7 @@ impl Content for Workspace {
         };
         match chrome {
             Some(None) => self.draw_status_bar(painter, true),
+            Some(Some(path)) if crate::pdf::is_pdf(&path) => self.draw_pdf_chrome(painter, &path),
             Some(Some(path)) => self.draw_editor_chrome(painter, &path),
             None => {}
         }
@@ -2784,6 +2859,25 @@ impl Content for Workspace {
                 Next::Soon => Next::Soon,
             };
         }
+        // Where the shown PDF's native view goes: over the document pane, unless something drawn by the
+        // app (a menu, a sheet) covers the window, which a native view would hide.
+        let covered = self.menu.is_some() || self.creation.is_some() || self.search.is_some() || self.git.is_some() || self.closing.is_some() || self.launcher.is_some() || self.recent_sheet.is_some() || self.connections.sheet_is_open();
+        let shown_pdf = self.tabs.get(self.shown).and_then(Tab::document).filter(|path| crate::pdf::is_pdf(path)).map(str::to_string);
+        let request = crate::pdf::PdfRequest {
+            shown: shown_pdf.filter(|_| !covered).map(|path| {
+                let scale = self.scale as f64;
+                let top = self.toolbar.bottom() as f64;
+                let area = [self.center.x as f64 / scale, top / scale, self.center.width as f64 / scale, (self.editor_footer.y as f64 - top) / scale];
+                (path, area)
+            }),
+            open: self.tabs.iter().filter_map(Tab::document).filter(|path| crate::pdf::is_pdf(path)).map(str::to_string).collect(),
+        };
+        if request != self.pdf_request {
+            self.pdf_request = request;
+            if let Some(callback) = &self.on_layout {
+                callback();
+            }
+        }
         let (scroll_lines, input_lines) = self.scroll_lines();
         self.marks = FrameMarks { scroll_lines, input_lines, output, selection: self.shown_selection, instances: 0 };
         // Everything that decides a pixel of this frame. Equal to the last one: nothing to present.
@@ -2798,7 +2892,7 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
-        signature.add(self.strip_scroll.to_bits() as u64).add(self.connections.signature());
+        signature.add(self.strip_scroll.to_bits() as u64).add(self.connections.signature()).text(&self.pdf_label);
         if let Some((query, found)) = &self.find {
             signature.add(0x46494E44 + *found as u64).text(query);
         }

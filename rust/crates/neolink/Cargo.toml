@@ -36,5 +36,6 @@ objc2-app-kit = "0.3"
 objc2-quartz-core = "0.3"
 objc2-metal = "0.3"
 objc2-core-foundation = "0.3"
+objc2-pdf-kit = "0.3"
 block2 = "0.6"
 muda = { version = "0.17", default-features = false }
