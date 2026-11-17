@@ -17,7 +17,8 @@ pub struct Instance {
     pub uv: [f32; 2],
     /// RGBA, not premultiplied, in display (encoded) values.
     pub color: [u8; 4],
-    /// 0 = solid, 1 = mask glyph, 2 = colour glyph.
+    /// 0 = solid, 1 = mask glyph, 2 = colour glyph, 3 = rounded rectangle (`uv` = corner radius and
+    /// outline width; width 0 fills it).
     pub kind: u32,
 }
 
@@ -195,6 +196,16 @@ impl Scene {
         self.push(Instance::fill(x, y, width, height, color));
     }
 
+    /// A filled rectangle with rounded corners (`radius` in pixels).
+    pub fn rounded(&mut self, rect: Rect, radius: f32, color: [u8; 4]) {
+        self.push(Instance { position: [rect.x, rect.y], size: [rect.width, rect.height], uv: [radius, 0.0], color, kind: 3 });
+    }
+
+    /// The outline of a rounded rectangle, `width` pixels thick, inside `rect`.
+    pub fn outline(&mut self, rect: Rect, radius: f32, width: f32, color: [u8; 4]) {
+        self.push(Instance { position: [rect.x, rect.y], size: [rect.width, rect.height], uv: [radius, width], color, kind: 3 });
+    }
+
     pub fn fill_rect(&mut self, rect: Rect, color: [u8; 4]) {
         self.fill(rect.x, rect.y, rect.width, rect.height, color);
     }
@@ -264,6 +275,8 @@ struct Out {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) kind: u32,
+    @location(3) local: vec2<f32>,
+    @location(4) @interpolate(flat) shape: vec4<f32>,
 };
 
 @vertex
@@ -276,6 +289,8 @@ fn vertex(@builtin(vertex_index) index: u32, @location(0) position: vec2<f32>, @
     out.uv = uv + corner * size;
     out.color = color;
     out.kind = kind;
+    out.local = corner * size;
+    out.shape = vec4<f32>(size, uv);
     return out;
 }
 
@@ -288,6 +303,19 @@ fn fragment(in: Out) -> @location(0) vec4<f32> {
     }
     if (in.kind == 2u) {
         return textureLoad(colors, texel, 0) * in.color.a;
+    }
+    if (in.kind == 3u) {
+        // Signed distance to a rounded box, one pixel of antialiasing.
+        let half = in.shape.xy * 0.5;
+        let radius = min(in.shape.z, min(half.x, half.y));
+        let q = abs(in.local - half) - half + vec2<f32>(radius);
+        let distance = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+        var coverage = clamp(0.5 - distance, 0.0, 1.0);
+        if (in.shape.w > 0.0) {
+            coverage = coverage * clamp(0.5 + distance + in.shape.w, 0.0, 1.0);
+        }
+        let alpha = in.color.a * coverage;
+        return vec4<f32>(in.color.rgb * alpha, alpha);
     }
     return vec4<f32>(in.color.rgb * in.color.a, in.color.a);
 }

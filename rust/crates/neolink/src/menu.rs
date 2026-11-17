@@ -97,8 +97,10 @@ impl Menu {
         }
         self.frame = Rect::new(x, y, width, height);
         let line = ui.px(1.0).max(1.0);
-        ui.fill(Rect::new(x - line, y - line, width + 2.0 * line, height + 2.0 * line), theme::white(0.14));
-        ui.fill(self.frame, theme::rgb(0x262626));
+        ui.shadow(self.frame, 7.0);
+        ui.rounded(self.frame, 7.0, theme::rgb(0x262626));
+        ui.outline(self.frame, 7.0, theme::white(0.14));
+        let _ = line;
         self.rects.clear();
         let mut top = y + pad;
         for (index, item) in self.items.iter().enumerate() {
@@ -112,7 +114,7 @@ impl Menu {
                     let rect = Rect::new(x, top, width, row);
                     self.rects.push(rect);
                     if self.hover == Some(index) {
-                        ui.fill(Rect::new(x + ui.px(4.0), top, width - ui.px(8.0), row), theme::rgb(0x3A3A3A));
+                        ui.rounded(Rect::new(x + ui.px(5.0), top, width - ui.px(10.0), row), 4.0, theme::rgb(0x2F6FDB));
                     }
                     let middle = top + row * 0.5;
                     if *checked {

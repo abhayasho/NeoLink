@@ -512,8 +512,8 @@ impl Explorer {
         ui.text(&fitted, name_x, bar_middle, 12.0, 600, false, theme::TEXT_SECONDARY);
         // Filter field (not editable yet: PLAN.md).
         let field = Rect::new(rect.x + inset, bar_top + ui.px(24.0 + 6.0), rect.width - 2.0 * inset, ui.px(27.0));
-        ui.fill(field, theme::white(0.09));
-        ui.fill(Rect::new(field.x + line, field.y + line, field.width - 2.0 * line, field.height - 2.0 * line), theme::rgb(0x161616));
+        ui.rounded(field, 4.0, theme::rgb(0x161616));
+        ui.outline(field, 4.0, theme::white(0.09));
         let field_middle = field.y + field.height * 0.5;
         let glass = ui.icon("magnifyingglass", 11.0, IconWeight::Regular, field.x + ui.px(9.0 + 6.0), field_middle, theme::TEXT_SECONDARY);
         self.filter_rect = field;

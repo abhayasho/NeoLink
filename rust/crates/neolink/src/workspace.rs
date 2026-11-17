@@ -524,8 +524,9 @@ impl Workspace {
         let (width, height, pad) = (ui.px(360.0), ui.px(168.0), ui.px(24.0));
         let sheet = Rect::new(((self.window.0 - width) * 0.5).round(), ui.px(34.0), width, height);
         let line = ui.px(1.0).max(1.0);
-        ui.fill(Rect::new(sheet.x - line, sheet.y - line, width + 2.0 * line, height + 2.0 * line), theme::white(0.14));
-        ui.fill(sheet, theme::rgb(0x262626));
+        ui.shadow(sheet, 10.0);
+        ui.rounded(sheet, 10.0, theme::rgb(0x262626));
+        ui.outline(sheet, 10.0, theme::white(0.14));
         let left = sheet.x + pad;
         let mut y = sheet.y + pad + ui.px(9.0);
         let icon = ui.icon(if creation.is_directory { "folder.badge.plus" } else { "doc.badge.plus" }, 13.0, IconWeight::Semibold, left + ui.px(9.0), y, theme::TEXT_PRIMARY).max(ui.px(18.0));
@@ -536,8 +537,8 @@ impl Workspace {
         ui.text(&shown, left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
         y += ui.px(16.0);
         let field = Rect::new(left, y, width - 2.0 * pad, ui.px(22.0));
-        ui.fill(Rect::new(field.x - line, field.y - line, field.width + 2.0 * line, field.height + 2.0 * line), theme::white(0.18));
-        ui.fill(field, theme::rgb(0x1A1A1A));
+        ui.rounded(field, 5.0, theme::rgb(0x1A1A1A));
+        ui.outline(field, 5.0, theme::rgb(0x2F6FDB));
         let middle = field.y + field.height * 0.5;
         if creation.name.is_empty() {
             ui.text(if creation.is_directory { "Folder name" } else { "File name, e.g. main.py" }, field.x + ui.px(6.0), middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
@@ -550,11 +551,11 @@ impl Workspace {
         let valid = valid_name(&creation.name);
         let create_width = ui.measure("Create", 12.0, 500, false) + ui.px(24.0);
         creation.create = Rect::new(sheet.right() - pad - create_width, button_y, create_width, ui.px(22.0));
-        ui.fill(creation.create, if valid { theme::rgb(0x2F6FDB) } else { theme::rgb(0x333333) });
+        ui.rounded(creation.create, 5.0, if valid { theme::rgb(0x2F6FDB) } else { theme::rgb(0x333333) });
         ui.text("Create", creation.create.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, if valid { theme::rgb(0xFFFFFF) } else { theme::TEXT_SECONDARY });
         let cancel_width = ui.measure("Cancel", 12.0, 500, false) + ui.px(24.0);
         creation.cancel = Rect::new(creation.create.x - ui.px(8.0) - cancel_width, button_y, cancel_width, ui.px(22.0));
-        ui.fill(creation.cancel, theme::rgb(0x3A3A3A));
+        ui.rounded(creation.cancel, 5.0, theme::rgb(0x3A3A3A));
         ui.text("Cancel", creation.cancel.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, theme::TEXT_PRIMARY);
         self.creation = Some(creation);
     }

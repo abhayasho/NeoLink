@@ -281,6 +281,14 @@ impl TextSystem {
     /// `font_points` at `scale` device pixels per point.
     pub fn new(device: &wgpu::Device, font_points: f32, scale: f32) -> TextSystem {
         let mut fonts = FontSystem::new();
+        // The Swift app draws code with `monospacedSystemFont` (SF Mono). macOS does not list that font
+        // for other programs, but ships its files with Terminal.
+        #[cfg(target_os = "macos")]
+        for directory in ["/System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts", "/Applications/Utilities/Terminal.app/Contents/Resources/Fonts"] {
+            for style in ["Regular", "RegularItalic", "Bold", "BoldItalic", "Medium", "Semibold"] {
+                let _ = fonts.db_mut().load_font_file(format!("{directory}/SF-Mono-{style}.otf"));
+            }
+        }
         let family = std::env::var("NEOLINK_FONT").unwrap_or_else(|_| monospace_family(&fonts));
         let scratch = Buffer::new_empty(Metrics::new(16.0, 20.0));
         let ui_family = interface_family(&fonts);

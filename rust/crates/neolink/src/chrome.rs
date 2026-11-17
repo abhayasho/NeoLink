@@ -21,6 +21,27 @@ impl Ui<'_, '_> {
         self.painter.scene.fill_rect(rect, color);
     }
 
+    /// A filled rounded rectangle; `radius` in points.
+    pub fn rounded(&mut self, rect: Rect, radius: f32, color: Rgba) {
+        let radius = radius * self.scale;
+        self.painter.scene.rounded(rect, radius, color);
+    }
+
+    /// A one-point outline of a rounded rectangle; `radius` in points.
+    pub fn outline(&mut self, rect: Rect, radius: f32, color: Rgba) {
+        let (radius, width) = (radius * self.scale, self.px(1.0).max(1.0));
+        self.painter.scene.outline(rect, radius, width, color);
+    }
+
+    /// A soft shadow under a floating panel.
+    pub fn shadow(&mut self, rect: Rect, radius: f32) {
+        let radius = radius * self.scale;
+        for (grow, alpha) in [(10.0, 10u8), (6.0, 16), (3.0, 24), (1.0, 34)] {
+            let grow = grow * self.scale;
+            self.painter.scene.rounded(Rect::new(rect.x - grow, rect.y - grow * 0.5, rect.width + 2.0 * grow, rect.height + 2.0 * grow), radius + grow, [0, 0, 0, alpha]);
+        }
+    }
+
     /// A one-point line along the bottom of `rect`.
     pub fn line_below(&mut self, rect: Rect, color: Rgba) {
         let thickness = self.px(1.0).max(1.0);
