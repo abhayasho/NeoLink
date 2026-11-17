@@ -1,5 +1,7 @@
 //! The session against the repository's offline ACP peer (`scripts/fixtures/acp-agent.py`), as the Swift
-//! app's ACP tests do. Skipped where `python3` is missing.
+//! app's ACP tests do. Skipped where `python3` is missing, and on Windows: the peer checks for POSIX
+//! paths.
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
