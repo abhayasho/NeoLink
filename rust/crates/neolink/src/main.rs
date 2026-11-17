@@ -387,7 +387,8 @@ impl App {
                 self.with_workspace(|workspace, _| workspace.editor_action(action));
             }
             "f" => {
-                self.with_workspace(|workspace, _| workspace.editor_action("find"));
+                self.with_workspace(|workspace, _| workspace.find());
+                self.invalidate();
             }
             "c" => {
                 self.with_workspace(|workspace, _| workspace.copy());

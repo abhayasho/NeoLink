@@ -362,6 +362,48 @@ impl Terminal {
         }
     }
 
+    /// Finds `query` (plain text, any case) above the current match, or above the newest line when
+    /// `restart` is set; wraps round. The match becomes the selection and is scrolled into view.
+    /// Returns `false` if the text is nowhere.
+    pub fn find(&mut self, query: &str, restart: bool, cell: CellMetrics) -> bool {
+        use alacritty_terminal::index::Direction;
+        use alacritty_terminal::term::search::RegexSearch;
+        if query.is_empty() {
+            self.clear_selection();
+            return true;
+        }
+        // The query is literal text: every character that means something in a pattern is escaped.
+        let mut pattern = String::from("(?i)");
+        for character in query.chars() {
+            if "\\.+*?()|[]{}^$#&-~".contains(character) {
+                pattern.push('\\');
+            }
+            pattern.push(character);
+        }
+        let Ok(mut search) = RegexSearch::new(&pattern) else { return false };
+        let mut term = self.term.lock();
+        let bottom = Point::new(term.bottommost_line(), term.last_column());
+        let current = term.selection.as_ref().and_then(|selection| selection.to_range(&term)).map(|range| range.start);
+        let origin = match (restart, current) {
+            (false, Some(start)) if start.column.0 > 0 => Point::new(start.line, Column(start.column.0 - 1)),
+            (false, Some(start)) if start.line > term.topmost_line() => Point::new(start.line - 1, term.last_column()),
+            _ => bottom,
+        };
+        let Some(found) = term.search_next(&mut search, origin, Direction::Left, Side::Left, None) else { return false };
+        let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
+        selection.update(*found.end(), Side::Right);
+        term.selection = Some(selection);
+        // Bring the match's line to the middle of the pane if it is in the scrollback.
+        let line = found.start().line.0;
+        let lines = term.screen_lines() as i32;
+        let history = term.grid().history_size() as i32;
+        drop(term);
+        self.smoother.cancel();
+        self.scroll = if line < 0 { ((-line + lines / 2).min(history).max(0)) as f64 * cell.height as f64 } else { 0.0 };
+        self.look += 1;
+        true
+    }
+
     /// Selects everything, scrollback included.
     pub fn select_all(&mut self) {
         let mut term = self.term.lock();

@@ -149,6 +149,8 @@ pub struct Workspace {
     /// What the held mouse button was pressed in (1 the shown terminal, 2 the docked one, 3 the
     /// editor), and the last press for counting double and triple clicks.
     pressed_in: u8,
+    /// The terminal's find bar while it is open: the text, and whether it was found.
+    find: Option<(String, bool)>,
     /// The shown terminal's working directory as the status bar spells it.
     shown_directory: String,
     /// The language servers of the shown document.
@@ -243,6 +245,7 @@ impl Workspace {
             tip_shown: false,
             tip_changed: false,
             pressed_in: 0,
+            find: None,
             shown_directory: String::new(),
             shown_servers: String::new(),
             last_press: (0.0, 0.0, 0.0, 0),
@@ -1080,6 +1083,23 @@ impl Workspace {
             }
             return true;
         }
+        if let (Some((query, _)), true) = (&mut self.find, self.menu.is_none()) {
+            match key {
+                Key::Named(NamedKey::Escape) => self.find = None,
+                Key::Named(NamedKey::Enter) => self.find_in_terminal(false),
+                Key::Named(NamedKey::Backspace) => {
+                    query.pop();
+                    self.find_in_terminal(true);
+                }
+                _ => {
+                    if let Some(text) = text.filter(|text| !text.chars().any(char::is_control)) {
+                        query.push_str(text);
+                        self.find_in_terminal(true);
+                    }
+                }
+            }
+            return true;
+        }
         if self.launcher.is_some() {
             let outcome = self.launcher.as_mut().and_then(|launcher| launcher.key(key, text));
             self.agent_outcome(outcome);
@@ -1707,6 +1727,7 @@ impl Workspace {
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
         self.tip = None;
+        self.find = None;
         // Presses close together in time and place count up: word, then line.
         let now = crate::clock::now();
         let near = (x - self.last_press.1).abs() < 4.0 * self.scale && (y - self.last_press.2).abs() < 4.0 * self.scale;
@@ -1968,6 +1989,50 @@ impl Workspace {
         } else {
             self.open_document(path);
         }
+    }
+
+    /// Command-F: Neovim's search in the editor, the find bar in a terminal.
+    pub fn find(&mut self) {
+        if self.keys_go_to_editor() {
+            self.editor_action("find");
+        } else if self.keyboard_terminal().is_some() {
+            self.find = Some((String::new(), true));
+        }
+    }
+
+    fn find_in_terminal(&mut self, restart: bool) {
+        let Some((query, _)) = self.find.clone() else { return };
+        let cell = self.cell;
+        let found = self.keyboard_terminal().map(|terminal| terminal.find(&query, restart, cell)).unwrap_or(false);
+        if let Some(find) = &mut self.find {
+            find.1 = found;
+        }
+    }
+
+    fn draw_find(&mut self, painter: &mut Painter) {
+        let Some((query, found)) = self.find.clone() else { return };
+        let pane = if self.dock.focused && self.dock.visible { self.dock_rect } else if self.agent.focused && self.agent.visible { self.agent_rect } else { self.pane };
+        let mut ui = Ui { painter, scale: self.scale };
+        let width = ui.px(260.0).min(pane.width - ui.px(16.0));
+        let bar = Rect::new(pane.right() - width - ui.px(12.0), pane.y + ui.px(6.0), width, ui.px(28.0));
+        ui.shadow(bar, 6.0);
+        ui.rounded(bar, 6.0, theme::rgb(0x262626));
+        ui.outline(bar, 6.0, if found { theme::rgb(0x2F6FDB) } else { theme::rgb(0xCC9595) });
+        let middle = bar.y + bar.height * 0.5;
+        let glass = ui.icon("magnifyingglass", 11.0, IconWeight::Regular, bar.x + ui.px(9.0 + 6.0), middle, theme::TEXT_SECONDARY).max(ui.px(12.0));
+        let text_x = bar.x + ui.px(9.0) + glass + ui.px(7.0);
+        let line = ui.px(1.0).max(1.0);
+        let hint = if found { "\u{21a9} previous \u{b7} esc" } else { "No matches" };
+        let hint_width = ui.text_right(hint, bar.right() - ui.px(9.0), middle, 10.0, 400, false, if found { theme::TEXT_SECONDARY } else { theme::rgb(0xCC9595) });
+        ui.painter.scene.set_clip(Some(Rect::new(text_x, bar.y, (bar.right() - ui.px(15.0) - hint_width - text_x).max(1.0), bar.height)));
+        let end = if query.is_empty() {
+            ui.text("Find in terminal", text_x, middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
+            0.0
+        } else {
+            ui.text(&query, text_x, middle, 12.0, 400, false, theme::TEXT_PRIMARY) + line
+        };
+        ui.painter.scene.fill(text_x + end, middle - ui.px(7.0), line.max(2.0), ui.px(14.0), theme::ACCENT);
+        ui.painter.scene.set_clip(None);
     }
 
     /// Copies the selection of the terminal that has the keyboard. Returns `false` if the keyboard is
@@ -2611,6 +2676,7 @@ impl Content for Workspace {
                 (Next::Idle, Next::Idle) => Next::Idle,
             };
         }
+        self.draw_find(painter);
         self.draw_creation(painter);
         self.draw_closing(painter);
         self.draw_recent(painter);
@@ -2663,6 +2729,9 @@ impl Content for Workspace {
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
         signature.add(self.strip_scroll.to_bits() as u64).add(self.connections.signature());
+        if let Some((query, found)) = &self.find {
+            signature.add(0x46494E44 + *found as u64).text(query);
+        }
         if let Some(browser) = self.remote_shown.as_ref().and_then(|address| self.remotes.get(address)) {
             signature.add(0x53465450).add(browser.signature());
         }
