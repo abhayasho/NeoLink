@@ -350,7 +350,7 @@ impl GridModel {
             return;
         }
         let full = left == 0 && right == columns;
-        let mut copy = |rows: &mut Vec<Row>, destination: i64, source: i64| {
+        let copy = |rows: &mut Vec<Row>, destination: i64, source: i64| {
             if full {
                 rows[destination as usize] = rows[source as usize].clone();
             } else {
