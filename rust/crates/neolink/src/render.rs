@@ -196,6 +196,32 @@ impl Scene {
         self.push(Instance::fill(x, y, width, height, color));
     }
 
+    /// Where the frame-only instances end now; see `capture`.
+    pub fn mark(&self) -> usize {
+        self.instances.len()
+    }
+
+    /// What was drawn since `mark`, with its clipping, to draw again unchanged in a later frame
+    /// (`replay`). Retained rows drawn in between are not included.
+    pub fn capture(&self, mark: usize) -> Vec<(Option<Rect>, Vec<Instance>)> {
+        self.batches
+            .iter()
+            .filter(|batch| !batch.retained && batch.start as usize >= mark)
+            .map(|batch| (batch.clip, self.instances[batch.start as usize..(batch.start + batch.count) as usize].to_vec()))
+            .collect()
+    }
+
+    pub fn replay(&mut self, saved: &[(Option<Rect>, Vec<Instance>)]) {
+        let clip = self.clip;
+        for (saved_clip, instances) in saved {
+            self.clip = *saved_clip;
+            for instance in instances {
+                self.push(*instance);
+            }
+        }
+        self.clip = clip;
+    }
+
     /// A filled rectangle with rounded corners (`radius` in pixels).
     pub fn rounded(&mut self, rect: Rect, radius: f32, color: [u8; 4]) {
         self.push(Instance { position: [rect.x, rect.y], size: [rect.width, rect.height], uv: [radius, 0.0], color, kind: 3 });

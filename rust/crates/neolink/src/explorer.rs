@@ -111,6 +111,8 @@ pub struct Explorer {
     /// The row the keyboard acts on, and whether the tree has the keyboard.
     pub selected: Option<PathBuf>,
     pub focused: bool,
+    /// The pane as last drawn, and what it was drawn from: an unchanged pane is replayed.
+    drawn: Option<(u64, Vec<(Option<Rect>, Vec<crate::render::Instance>)>)>,
     git: Decorations,
     git_loaded: Arc<Mutex<Option<Decorations>>>,
     git_running: Arc<std::sync::atomic::AtomicBool>,
@@ -176,7 +178,7 @@ impl Explorer {
             drawn_scroll: 0.0,
             smoother: ScrollSmoother::new(Smoothing::Auto),
             hover: None,
-            visible: true,
+            visible: std::env::var("NEOLINK_EXPLORER").as_deref() != Ok("0"),
             rect: Rect::default(),
             row_height: 48.0,
             header_height: 60.0,
@@ -193,6 +195,7 @@ impl Explorer {
             reveal_active: true,
             selected: None,
             focused: false,
+            drawn: None,
             git: Decorations::default(),
             git_loaded: Arc::new(Mutex::new(None)),
             git_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -562,6 +565,21 @@ impl Explorer {
         let scroll = self.scroll.round();
         self.drawn_scroll = scroll;
 
+        // Nothing that decides the pane's pixels changed: draw the same instances again.
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (self.signature(), rect.x.to_bits(), rect.y.to_bits(), rect.width.to_bits(), rect.height.to_bits(), scale.to_bits(), active, &self.selected, self.rows.len()).hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some((drawn_key, saved)) = &self.drawn {
+            if *drawn_key == key {
+                painter.scene.replay(saved);
+                return self.next_frame(display, period);
+            }
+        }
+        let mark = painter.scene.mark();
+
         let mut ui = Ui { painter, scale };
         ui.fill(rect, theme::SIDEBAR_BACKGROUND);
         let line = ui.px(1.0).max(1.0);
@@ -671,6 +689,16 @@ impl Explorer {
         ui.text_right(&summary, rect.right() - inset, footer_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         // The split view's divider.
         ui.painter.scene.fill(rect.right(), rect.y, line, rect.height, theme::SEPARATOR);
+        self.drawn = Some((key, painter.scene.capture(mark)));
+        self.next_frame(display, period)
+    }
+
+    /// The sprites the drawn pane refers to are gone (the text size changed).
+    pub fn forget_drawing(&mut self) {
+        self.drawn = None;
+    }
+
+    fn next_frame(&self, display: f64, period: f64) -> Next {
         match self.smoother.next_visible_change(display, period, self.scroll) {
             None => Next::Idle,
             Some(at) if at <= display + 1.5 * period => Next::Soon,

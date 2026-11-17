@@ -10,6 +10,8 @@ mod gpu;
 mod icons;
 mod input;
 mod menu;
+#[cfg(target_os = "macos")]
+mod menubar;
 mod present;
 mod render;
 mod search;
@@ -38,6 +40,8 @@ const DEFAULT_FONT_POINTS: f32 = 13.0;
 #[derive(Debug, Clone)]
 enum UserEvent {
     Injected(Injected),
+    /// A menu bar item was chosen.
+    Command(String),
     SpikeChange,
     Quit,
 }
@@ -50,6 +54,8 @@ struct App {
     pointer: (f32, f32),
     resize_cursor: bool,
     bench: Arc<BenchState>,
+    #[cfg(target_os = "macos")]
+    menu_bar: Option<muda::Menu>,
     spike: Option<String>,
     spike_seconds: f64,
 }
@@ -156,6 +162,34 @@ impl App {
         self.invalidate();
     }
 
+    /// A menu bar choice (see `menubar`).
+    fn menu_command(&mut self, command: &str, event_loop: &ActiveEventLoop) {
+        if let Some(shared) = &self.shared {
+            shared.note_input();
+        }
+        if let Some(rest) = command.strip_prefix("key:") {
+            let Some((flags, character)) = rest.split_once(':') else { return };
+            let mut modifiers = ModifiersState::empty();
+            for flag in flags.chars() {
+                modifiers |= match flag {
+                    'c' => ModifiersState::SUPER,
+                    's' => ModifiersState::SHIFT,
+                    'x' => ModifiersState::CONTROL,
+                    _ => ModifiersState::empty(),
+                };
+            }
+            // The same code as the key itself, with the item's modifiers.
+            let held = std::mem::replace(&mut self.modifiers, modifiers);
+            self.shortcut(&Key::Character(character.into()), event_loop);
+            self.modifiers = held;
+        } else if let Some(action) = command.strip_prefix("editor:") {
+            self.with_workspace(|workspace, _| workspace.editor_action(action));
+        } else if let Some(program) = command.strip_prefix("repl:") {
+            self.with_workspace(|workspace, _| workspace.open_repl(program));
+        }
+        self.invalidate();
+    }
+
     /// Application shortcuts (Command on macOS, Control+Shift elsewhere). Returns `true` if handled.
     fn shortcut(&self, key: &Key, event_loop: &ActiveEventLoop) -> bool {
         let modifiers = self.modifiers;
@@ -180,8 +214,28 @@ impl App {
             return false;
         }
         let Key::Character(characters) = key else { return false };
+        // The Swift app's Shift and Control variants of a Command shortcut. Elsewhere the command chord
+        // is Control+Shift, so Alt marks the Shift variant and there is no Control variant.
+        let (shifted, controlled) = if cfg!(target_os = "macos") { (modifiers.shift_key(), modifiers.control_key()) } else { (modifiers.alt_key(), false) };
         match characters.to_lowercase().as_str() {
             "t" => self.new_tab(),
+            "w" if shifted => event_loop.exit(),
+            "n" if shifted => {
+                self.with_workspace(|workspace, _| workspace.unavailable("SSH connections"));
+                self.invalidate();
+            }
+            "a" if controlled => {
+                self.with_workspace(|workspace, _| workspace.unavailable("The agent launcher"));
+                self.invalidate();
+            }
+            "s" if controlled => {
+                self.with_workspace(|workspace, _| workspace.unavailable("The connections sidebar"));
+                self.invalidate();
+            }
+            "b" if controlled => {
+                self.with_workspace(|workspace, _| workspace.unavailable("The agent panel"));
+                self.invalidate();
+            }
             "w" => {
                 let empty = self.with_workspace(|workspace, _| {
                     let index = workspace.active_index();
@@ -194,26 +248,26 @@ impl App {
                 self.invalidate();
             }
             "q" => event_loop.exit(),
-            "]" | "}" if modifiers.shift_key() => {
+            "]" | "}" if shifted => {
                 self.with_workspace(|workspace, _| workspace.step_tab(1));
                 self.invalidate();
             }
-            "[" | "{" if modifiers.shift_key() => {
+            "[" | "{" if shifted => {
                 self.with_workspace(|workspace, _| workspace.step_tab(-1));
                 self.invalidate();
             }
-            "e" if modifiers.shift_key() => {
+            "e" if shifted => {
                 self.with_workspace(|workspace, _| workspace.toggle_explorer());
                 self.invalidate();
             }
-            "f" if modifiers.control_key() => {
+            "f" if controlled => {
                 if let Some(window) = &self.window {
                     window.set_fullscreen(if window.fullscreen().is_some() { None } else { Some(winit::window::Fullscreen::Borderless(None)) });
                 }
             }
             "o" => {
                 // Open File... / Open Project... (the system's panel; it runs on this, the main, thread).
-                if modifiers.shift_key() {
+                if shifted {
                     if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                         self.with_workspace(|workspace, _| workspace.set_project(neolink_core::paths::canonical(&folder)));
                     }
@@ -231,11 +285,11 @@ impl App {
                 self.with_workspace(|workspace, _| workspace.open_search(false));
                 self.invalidate();
             }
-            "g" if modifiers.shift_key() => {
+            "g" if shifted => {
                 self.with_workspace(|workspace, _| workspace.open_git());
                 self.invalidate();
             }
-            "f" if modifiers.shift_key() => {
+            "f" if shifted => {
                 self.with_workspace(|workspace, _| workspace.open_search(true));
                 self.invalidate();
             }
@@ -247,7 +301,7 @@ impl App {
                 self.with_workspace(|workspace, _| workspace.save_active());
             }
             "z" => {
-                let action = if modifiers.shift_key() { "redo" } else { "undo" };
+                let action = if shifted { "redo" } else { "undo" };
                 self.with_workspace(|workspace, _| workspace.editor_action(action));
             }
             "f" => {
@@ -271,11 +325,11 @@ impl App {
                 self.with_workspace(|workspace, _| workspace.set_font_points(DEFAULT_FONT_POINTS));
                 self.invalidate();
             }
-            "{" | "[" if modifiers.shift_key() => {
+            "{" | "[" if shifted => {
                 self.with_workspace(|workspace, _| workspace.select_relative(-1));
                 self.invalidate();
             }
-            "}" | "]" if modifiers.shift_key() => {
+            "}" | "]" if shifted => {
                 self.with_workspace(|workspace, _| workspace.select_relative(1));
                 self.invalidate();
             }
@@ -417,6 +471,13 @@ impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
             self.start(event_loop);
+            #[cfg(target_os = "macos")]
+            if self.menu_bar.is_none() && std::env::var("NEOLINK_MENU_BAR").as_deref() != Ok("0") {
+                let proxy = self.proxy.clone();
+                self.menu_bar = menubar::install(move |command| {
+                    let _ = proxy.send_event(UserEvent::Command(command));
+                });
+            }
         }
     }
 
@@ -495,6 +556,7 @@ impl ApplicationHandler<UserEvent> for App {
                 Injected::SelectTab { index, sent } => self.select_tab(index, sent),
                 Injected::Finished => event_loop.exit(),
             },
+            UserEvent::Command(command) => self.menu_command(&command, event_loop),
             UserEvent::SpikeChange => {
                 if let Some(shared) = &self.shared {
                     let mut state = shared.state.lock();
@@ -670,6 +732,8 @@ fn main() {
         pointer: (-1.0, -1.0),
         resize_cursor: false,
         bench: Arc::new(BenchState::default()),
+        #[cfg(target_os = "macos")]
+        menu_bar: None,
         spike,
         spike_seconds,
     };

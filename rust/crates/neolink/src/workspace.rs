@@ -577,6 +577,18 @@ impl Workspace {
         }
     }
 
+    /// Says that a part of the Swift app is not in this build yet.
+    pub fn unavailable(&mut self, what: &str) {
+        self.notice = Some(format!("{what} is not available in this build yet."));
+    }
+
+    /// A new local tab running `program` (the Code menu's "Open REPL").
+    pub fn open_repl(&mut self, program: &str) {
+        let directory = self.explorer.root().to_path_buf();
+        self.open_terminal_in(directory);
+        self.write(format!("{program}\r").into_bytes());
+    }
+
     /// Opens Source Control for the project.
     pub fn open_git(&mut self) {
         self.menu = None;
@@ -1425,6 +1437,7 @@ impl Content for Workspace {
         if self.applied_font != (self.font_points, frame.scale) {
             text.set_font_size(self.font_points, frame.scale);
             painter.rows.clear();
+            self.explorer.forget_drawing();
             self.applied_font = (self.font_points, frame.scale);
         }
         let cell_changed = self.cell != text.cell;
