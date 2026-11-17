@@ -613,6 +613,14 @@ impl NativeEditor {
         }
     }
 
+    /// The lines in view (for screen readers).
+    pub fn visible_text(&self) -> String {
+        let height = self.cell.height.max(1.0) as f64;
+        let first = ((self.scroll / height).floor() as usize).min(self.lines.len().saturating_sub(1));
+        let count = (self.rect.height as f64 / height).ceil() as usize + 1;
+        self.lines[first..(first + count).min(self.lines.len())].join("\n")
+    }
+
     pub fn cursor_label(&self) -> String {
         format!("Ln {}, Col {}", self.cursor.line + 1, display_column(&self.lines[self.cursor.line], self.cursor.column) + 1)
     }

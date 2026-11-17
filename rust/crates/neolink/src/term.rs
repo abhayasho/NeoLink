@@ -426,6 +426,24 @@ impl Terminal {
         }
     }
 
+    /// The text on screen, one line per row without trailing spaces (for screen readers).
+    pub fn screen_text(&self) -> String {
+        use alacritty_terminal::term::cell::Flags;
+        let term = self.term.lock();
+        let grid = term.grid();
+        let mut lines: Vec<String> = (0..grid.screen_lines() as i32)
+            .map(|row| {
+                let cells = &grid[Line(row)];
+                let text: String = (0..grid.columns()).map(|column| &cells[Column(column)]).filter(|cell| !cell.flags.contains(Flags::WIDE_CHAR_SPACER)).map(|cell| cell.c).collect();
+                text.trim_end().to_string()
+            })
+            .collect();
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
     /// The selected text, if any.
     pub fn selected_text(&self) -> Option<String> {
         self.term.lock().selection_to_string().filter(|text| !text.is_empty())

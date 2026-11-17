@@ -16,6 +16,32 @@ use std::sync::{Arc, Weak};
 pub const MIN_FONT_POINTS: f32 = 9.0;
 pub const MAX_FONT_POINTS: f32 = 32.0;
 
+/// One element of the window for assistive technology (see `Workspace::accessibility`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessItem {
+    /// Stable while the element exists (its node id is derived from it).
+    pub key: String,
+    pub parent: Option<String>,
+    pub role: accesskit::Role,
+    pub label: String,
+    pub value: Option<String>,
+    /// Window pixels.
+    pub rect: Rect,
+    pub selected: Option<bool>,
+    pub expanded: Option<bool>,
+    pub level: Option<usize>,
+    pub read_only: bool,
+    pub focused: bool,
+    /// Where a press activates it.
+    pub press: Option<(f32, f32)>,
+}
+
+impl AccessItem {
+    fn new(key: &str, parent: Option<&str>, role: accesskit::Role, label: &str, rect: Rect) -> AccessItem {
+        AccessItem { key: key.to_string(), parent: parent.map(str::to_string), role, label: label.to_string(), value: None, rect, selected: None, expanded: None, level: None, read_only: false, focused: false, press: None }
+    }
+}
+
 enum Pane {
     Terminal(Terminal),
     /// A file in the shared editor.
@@ -1347,6 +1373,136 @@ impl Workspace {
     /// Some document has changes that are not on disk.
     fn any_unsaved(&self) -> bool {
         self.tabs.iter().filter_map(|tab| tab.document()).any(|path| self.doc_modified(path))
+    }
+
+    /// What is on screen for assistive technology (VoiceOver, Narrator): the toolbar and tab buttons
+    /// with the same names as their help tags, the file tree, and the text of the terminal or editor
+    /// shown, in window pixels. Built only while a screen reader is listening.
+    pub fn accessibility(&mut self) -> Vec<AccessItem> {
+        use accesskit::Role;
+        let mut items = Vec::new();
+        let middle = |rect: Rect| (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+        let union = |rects: &mut dyn Iterator<Item = Rect>| {
+            rects.fold(None, |sum: Option<Rect>, rect| {
+                Some(match sum {
+                    None => rect,
+                    Some(sum) => {
+                        let (x, y) = (sum.x.min(rect.x), sum.y.min(rect.y));
+                        Rect::new(x, y, sum.right().max(rect.right()) - x, sum.bottom().max(rect.bottom()) - y)
+                    }
+                })
+            })
+        };
+        // Toolbar buttons, named as their help tags (without the shortcut, which VoiceOver reads badly).
+        let label_of = |this: &Workspace, rect: Rect, fallback: &str| {
+            let (x, y) = middle(rect);
+            this.tip_at(x, y).map(|tip| tip.split(" (").next().unwrap_or(&tip).to_string()).unwrap_or_else(|| fallback.replace('-', " "))
+        };
+        if let Some(rect) = union(&mut self.header_buttons.iter().map(|(rect, _)| *rect)) {
+            items.push(AccessItem::new("toolbar", None, Role::Toolbar, "Toolbar", rect));
+            for (rect, action) in self.header_buttons.clone() {
+                let mut item = AccessItem::new(&format!("header:{action}"), Some("toolbar"), Role::Button, &label_of(self, rect, action), rect);
+                item.press = Some(middle(rect));
+                items.push(item);
+            }
+        }
+        // Tabs.
+        if let Some(rect) = union(&mut self.tab_rects.iter().copied().chain(std::iter::once(self.plus_rect))) {
+            items.push(AccessItem::new("tabs", None, Role::TabList, "Tabs", rect));
+            for (index, rect) in self.tab_rects.clone().into_iter().enumerate() {
+                let Some(tab) = self.tabs.get(index) else { break };
+                let (title, modified) = match &tab.pane {
+                    Pane::Document { path, title } => (title.clone(), self.doc_modified(path)),
+                    Pane::Terminal(terminal) => (terminal.title(), false),
+                };
+                let mut item = AccessItem::new(&format!("tab:{}", tab.id), Some("tabs"), Role::Tab, &if modified { format!("{title}, edited") } else { title.clone() }, rect);
+                item.selected = Some(index == self.active);
+                item.press = Some(middle(rect));
+                items.push(item);
+                if let Some(close) = self.close_rects.get(index).copied() {
+                    let mut item = AccessItem::new(&format!("close:{}", tab.id), Some("tabs"), Role::Button, &format!("Close {title}"), close);
+                    item.press = Some(middle(close));
+                    items.push(item);
+                }
+            }
+            let mut item = AccessItem::new("new-tab", Some("tabs"), Role::Button, "New terminal tab", self.plus_rect);
+            item.press = Some(middle(self.plus_rect));
+            items.push(item);
+        }
+        // The file tree.
+        if self.explorer.visible {
+            items.push(AccessItem::new("explorer", None, Role::Group, "Explorer", self.sidebar));
+            for name in ["explorer-new", "explorer-collapse", "explorer-refresh", "explorer-options", "explorer-filter"] {
+                if let Some(rect) = self.explorer.control_rect(name) {
+                    let role = if name == "explorer-filter" { Role::SearchInput } else { Role::Button };
+                    let mut item = AccessItem::new(name, Some("explorer"), role, &label_of(self, rect, name), rect);
+                    item.press = Some(middle(rect));
+                    items.push(item);
+                }
+            }
+            items.push(AccessItem::new("files", Some("explorer"), Role::Tree, "Files", self.sidebar));
+            let selected = self.explorer.selected.clone();
+            for (rect, row) in self.explorer.visible_rows() {
+                let mut item = AccessItem::new(&format!("row:{}", row.path.display()), Some("files"), Role::TreeItem, &row.label, rect);
+                item.level = Some(row.depth + 1);
+                item.selected = Some(selected.as_ref() == Some(&row.path));
+                if let neolink_core::tree::RowKind::Folder { expanded, .. } = row.kind {
+                    item.expanded = Some(expanded);
+                }
+                item.press = Some(middle(rect));
+                items.push(item);
+            }
+        }
+        // What the active tab shows, and the editor's buttons.
+        let keyboard_in_content = !(self.dock.focused && self.dock.visible) && !(self.agent.focused && self.agent.visible);
+        let (pane, editor_pane) = (self.pane, self.editor_pane);
+        let active = self.active;
+        let content = match self.tabs.get_mut(active).map(|tab| (tab.id, &mut tab.pane)) {
+            Some((id, Pane::Terminal(terminal))) => Some(AccessItem { value: Some(terminal.screen_text()), ..AccessItem::new(&format!("content:{id}"), None, Role::Terminal, &terminal.title(), pane) }),
+            Some((id, Pane::Document { path, title })) if crate::pdf::is_pdf(path) => Some(AccessItem::new(&format!("content:{id}"), None, Role::Document, &format!("{title}, PDF {}", self.pdf_label), editor_pane)),
+            Some((id, Pane::Document { path, title })) => {
+                let (path, title) = (path.clone(), title.clone());
+                let mut item = AccessItem::new(&format!("content:{id}"), None, Role::MultilineTextInput, &title, editor_pane);
+                if let Some(native) = self.native.get(&path) {
+                    item.value = Some(native.visible_text());
+                    item.read_only = native.read_only;
+                } else if let Some(editor) = self.editor.as_ref().filter(|editor| editor.shows(&path)) {
+                    item.value = Some(editor.screen_text());
+                }
+                Some(item)
+            }
+            None => None,
+        };
+        if let Some(mut content) = content {
+            content.focused = keyboard_in_content;
+            content.press = Some(middle(content.rect));
+            let document = content.role != Role::Terminal;
+            items.push(content);
+            if document {
+                for (rect, what) in self.toolbar_buttons.clone() {
+                    let mut item = AccessItem::new(&format!("editor:{what}"), None, Role::Button, &label_of(self, rect, what), rect);
+                    item.press = Some(middle(rect));
+                    items.push(item);
+                }
+            }
+        }
+        if self.dock.visible {
+            let rect = self.dock.rect();
+            let focused = self.dock.focused;
+            let value = self.dock.terminal().map(|terminal| terminal.screen_text());
+            items.push(AccessItem { value, focused, press: Some(middle(rect)), ..AccessItem::new("dock", None, Role::Terminal, "Terminal panel", rect) });
+        }
+        if self.agent.visible {
+            let rect = self.agent.rect();
+            let focused = self.agent.focused;
+            let value = self.agent.terminal().map(|terminal| terminal.screen_text());
+            items.push(AccessItem { value, focused, press: Some(middle(rect)), ..AccessItem::new("agent", None, Role::Pane, "Agent", rect) });
+        }
+        // A notice is read out when it appears.
+        if let Some(notice) = &self.notice {
+            items.push(AccessItem::new("notice", None, Role::Alert, notice, self.header));
+        }
+        items
     }
 
     /// View > Pixel-Smooth Sideways Scrolling.

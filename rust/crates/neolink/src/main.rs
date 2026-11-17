@@ -1,3 +1,4 @@
+mod access;
 mod agents;
 mod bench;
 mod capture;
@@ -54,6 +55,14 @@ enum UserEvent {
     Layout,
     SpikeChange,
     Quit,
+    /// A screen reader asked for the tree, acted on an element, or stopped listening.
+    Access(accesskit_winit::WindowEvent),
+}
+
+impl From<accesskit_winit::Event> for UserEvent {
+    fn from(event: accesskit_winit::Event) -> UserEvent {
+        UserEvent::Access(event.window_event)
+    }
 }
 
 struct App {
@@ -72,6 +81,13 @@ struct App {
     menu_bar: Option<muda::Menu>,
     spike: Option<String>,
     spike_seconds: f64,
+    /// Accessibility: the adapter, whether a screen reader is listening, what was last described
+    /// (to act on its elements), a fingerprint of the last tree sent and when.
+    access: Option<accesskit_winit::Adapter>,
+    access_active: bool,
+    access_items: Vec<workspace::AccessItem>,
+    access_sent: u64,
+    access_at: f64,
 }
 
 fn display_period(window: &Window) -> f64 {
@@ -174,6 +190,31 @@ impl App {
             }
         });
         self.invalidate();
+    }
+
+    /// Sends the screen reader a new tree if what the window shows changed.
+    fn update_access(&mut self) {
+        if !self.access_active || self.access.is_none() {
+            return;
+        }
+        self.access_at = clock::now();
+        let Some(items) = self.with_workspace(|workspace, _| workspace.accessibility()) else { return };
+        let fingerprint = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            format!("{items:?}").hash(&mut hasher);
+            hasher.finish() | 1
+        };
+        if fingerprint == self.access_sent {
+            return;
+        }
+        self.access_sent = fingerprint;
+        let title = self.window.as_ref().map(|window| window.title()).filter(|title| !title.is_empty()).unwrap_or_else(|| "NeoLink".into());
+        let update = access::tree(&items, &title);
+        self.access_items = items;
+        if let Some(access) = &mut self.access {
+            access.update_if_active(|| update);
+        }
     }
 
     /// Applies the workspace's wishes for the native PDF views (main thread only).
@@ -490,7 +531,12 @@ impl App {
             }) => attributes.with_position(winit::dpi::LogicalPosition::new(frame.0, frame.1)),
             _ => attributes,
         };
-        let window = Arc::new(event_loop.create_window(attributes).expect("a window"));
+        // The accessibility adapter must exist before the window is first shown.
+        let window = Arc::new(event_loop.create_window(attributes.with_visible(false)).expect("a window"));
+        if self.spike.is_none() {
+            self.access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, self.proxy.clone()));
+        }
+        window.set_visible(true);
         let gpu = gpu::Gpu::new().expect("a GPU");
         #[cfg(target_os = "macos")]
         let presenter = present::Presenter::new(&gpu, &window).expect("a presenter");
@@ -742,6 +788,34 @@ impl ApplicationHandler<UserEvent> for App {
                     shared.invalidate();
                 }
             }
+            UserEvent::Access(event) => {
+                match event {
+                    accesskit_winit::WindowEvent::InitialTreeRequested => {
+                        self.access_active = true;
+                        self.access_sent = 0;
+                        self.update_access();
+                    }
+                    accesskit_winit::WindowEvent::ActionRequested(request) => {
+                        use accesskit::Action;
+                        if matches!(request.action, Action::Click | Action::Focus | Action::Expand | Action::Collapse) {
+                            if let Some((x, y)) = access::press_point(&self.access_items, request.target_node) {
+                                // As a click there: the same code a pointer press runs.
+                                self.with_workspace(|workspace, _| {
+                                    workspace.pointer(x, y);
+                                    workspace.click(x, y);
+                                    workspace.release(x, y);
+                                });
+                                self.invalidate();
+                            }
+                        }
+                        self.update_access();
+                    }
+                    accesskit_winit::WindowEvent::AccessibilityDeactivated => {
+                        self.access_active = false;
+                        event_loop.set_control_flow(ControlFlow::Wait);
+                    }
+                }
+            }
             UserEvent::Quit => {
                 if self.spike.is_some() {
                     eprintln!("END {:.6}", clock::now());
@@ -752,6 +826,9 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let (Some(access), Some(window)) = (&mut self.access, &self.window) {
+            access.process_event(window, &event);
+        }
         let Some(shared) = self.shared.clone() else { return };
         if matches!(event, WindowEvent::KeyboardInput { .. } | WindowEvent::MouseWheel { .. } | WindowEvent::CursorMoved { .. } | WindowEvent::MouseInput { .. } | WindowEvent::ModifiersChanged(_)) {
             shared.note_input();
@@ -918,6 +995,14 @@ impl ApplicationHandler<UserEvent> for App {
                 self.invalidate();
             }
         }
+        // While a screen reader listens: describe the window again after events, and twice a second
+        // for output that arrives without one (nothing is built otherwise).
+        if self.access_active {
+            if clock::now() - self.access_at > 0.1 {
+                self.update_access();
+            }
+            _event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(500)));
+        }
         // At most once a second, and only after something happened (this runs after events).
         if clock::now() - self.settings_checked > 1.0 {
             self.settings_checked = clock::now();
@@ -959,6 +1044,11 @@ fn main() {
         menu_bar: None,
         spike,
         spike_seconds,
+        access: None,
+        access_active: false,
+        access_items: Vec::new(),
+        access_sent: 0,
+        access_at: 0.0,
     };
     event_loop.run_app(&mut app).expect("the event loop");
 }

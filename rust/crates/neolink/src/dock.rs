@@ -49,6 +49,10 @@ impl Dock {
         Dock { visible: false, focused: false, side: Side::Bottom, height_points: 220.0, width_points: 420.0, terminals: Vec::new(), selected: 0, next_id: 1 << 41, rect: Rect::default(), terminal_rect: Rect::default(), grid: (80, 12), buttons: Vec::new(), tabs: Vec::new() }
     }
 
+    pub fn rect(&self) -> Rect {
+        self.rect
+    }
+
     pub fn contains(&self, x: f32, y: f32) -> bool {
         self.visible && self.rect.contains(x, y)
     }

@@ -509,6 +509,20 @@ impl Explorer {
         result
     }
 
+    /// The rows in view with their frames (for screen readers).
+    pub fn visible_rows(&self) -> Vec<(Rect, &neolink_core::tree::Row)> {
+        if !self.visible || self.row_height <= 0.0 {
+            return Vec::new();
+        }
+        let top = self.rect.y + self.header_height;
+        let bottom = self.rect.bottom() - FOOTER_POINTS * self.row_height / ROW_POINTS;
+        let first = (self.drawn_scroll / self.row_height as f64).floor().max(0.0) as usize;
+        let count = ((bottom - top) / self.row_height).ceil().max(0.0) as usize + 1;
+        (first..(first + count).min(self.rows.len()))
+            .map(|index| (Rect::new(self.rect.x, top + index as f32 * self.row_height - self.drawn_scroll as f32, self.rect.width, self.row_height), &self.rows[index]))
+            .collect()
+    }
+
     pub fn control_rect(&self, name: &str) -> Option<Rect> {
         if let Some(index) = name.strip_prefix("explorer-row:") {
             let index: usize = index.parse().ok()?;

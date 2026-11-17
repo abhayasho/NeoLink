@@ -814,6 +814,10 @@ pub struct AgentPanel {
 }
 
 impl AgentPanel {
+    pub fn rect(&self) -> Rect {
+        self.rect
+    }
+
     pub fn new() -> AgentPanel {
         AgentPanel { visible: false, focused: false, width_points: WIDTH_POINTS, sessions: Vec::new(), selected: 0, next_id: 1 << 40, rect: Rect::default(), terminal_rect: Rect::default(), grid: (40, 20), buttons: Vec::new() }
     }

@@ -72,9 +72,19 @@ Matched release runs show it much smoother for steady and slow sideways motion; 
 one catch-up step at its start. It stays opt-in until checked with a physical trackpad. See
 [horizontal-scrolling verification](docs/HORIZONTAL_SCROLL.md) for the numbers and tests.
 
+## Accessibility
+
+The window describes itself through AccessKit (NSAccessibility on macOS, UI Automation on Windows):
+named toolbar buttons, the tab list with the selected tab, the file tree (level, expanded, selected),
+the shown terminal's or editor's text, the editor's buttons, the docked terminal and notices (as
+alerts). Pressing an element through VoiceOver runs the same code as a click. Nothing is built until a
+screen reader (or another accessibility client) asks. Checked on macOS by reading the tree through the
+AX API and pressing a tab with `AXPress`; not yet checked with VoiceOver speech or on Windows.
+
 ## Remaining migration work
 
-Accessibility and IME support; physical-input acceptance on both operating systems; Windows PDF tabs;
+Accessibility beyond the first tree (text ranges/caret for screen-reader reading by character, live
+announcements of terminal output, Windows Narrator checks) and IME support; physical-input acceptance on both operating systems; Windows PDF tabs;
 the remaining View rendering preferences; remote editing/save-back; complete encoding parity in the
 fallback editor; full workspace/unsaved-session recovery; two-document split editing; bounded/cancellable
 search process management; remote transfer progress/cancellation; packaging/signing/distribution polish.

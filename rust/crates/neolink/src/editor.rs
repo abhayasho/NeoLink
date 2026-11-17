@@ -439,6 +439,23 @@ impl Editor {
         let _ = self.client.input_mouse("left", action, "", row, column);
     }
 
+    /// Neovim's screen as text, one line per row without trailing spaces (for screen readers).
+    pub fn screen_text(&self) -> String {
+        let screen = self.client.screen();
+        let lines: Vec<String> = screen
+            .rows
+            .iter()
+            .map(|row| {
+                let text: String = row.iter().map(|cell| match &cell.text {
+                    Text::Char(character) => character.to_string(),
+                    Text::Cluster(cluster) => cluster.to_string(),
+                }).collect();
+                text.trim_end().to_string()
+            })
+            .collect();
+        lines.join("\n")
+    }
+
     /// Generation of the live screen (changes with every published redraw).
     pub fn generation(&self) -> u64 {
         self.client.with_state(|state| state.screen.generation)
