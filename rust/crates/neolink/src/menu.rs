@@ -17,6 +17,9 @@ pub enum Action {
     ToggleReveal,
     NewFile,
     NewFolder,
+    GitCreateBranch,
+    GitSwitch(String),
+    GitStash(Option<String>),
     Nothing,
 }
 

@@ -159,3 +159,90 @@ mod tests {
         assert_eq!(decorations.status(Path::new("/repo")), None, "the root itself is not decorated");
     }
 }
+
+/// One entry of `git status --porcelain=v1 -z` for the Source Control review (`GitChange`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    pub path: String,
+    pub original: Option<String>,
+    pub index: char,
+    pub worktree: char,
+}
+
+impl Change {
+    pub fn untracked(&self) -> bool {
+        self.index == '?'
+    }
+
+    pub fn staged(&self) -> bool {
+        self.index != ' ' && self.index != '?'
+    }
+
+    pub fn unstaged(&self) -> bool {
+        self.worktree != ' '
+    }
+
+    /// A path Git may be given: relative, inside the repository.
+    pub fn has_safe_paths(&self) -> bool {
+        std::iter::once(&self.path).chain(self.original.iter()).all(|path| !path.is_empty() && !path.starts_with('/') && !path.contains('\0') && !path.split('/').any(|part| part == ".."))
+    }
+}
+
+/// Parses `git status --porcelain=v1 -z --untracked-files=all`.
+pub fn parse_changes(data: &[u8]) -> Vec<Change> {
+    let records: Vec<&[u8]> = data.split(|byte| *byte == 0).collect();
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < records.len() {
+        let bytes = records[index];
+        index += 1;
+        if bytes.len() < 4 || bytes[2] != b' ' {
+            continue;
+        }
+        let (staged, worktree) = (bytes[0] as char, bytes[1] as char);
+        let mut original = None;
+        if [staged, worktree].iter().any(|state| *state == 'R' || *state == 'C') {
+            let Some(source) = records.get(index) else { break };
+            original = Some(String::from_utf8_lossy(source).into_owned());
+            index += 1;
+        }
+        result.push(Change { path: String::from_utf8_lossy(&bytes[3..]).into_owned(), original, index: staged, worktree });
+    }
+    result
+}
+
+/// A local branch name the review will pass to `git switch` (Git checks the rest).
+pub fn plausible_branch_name(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('-') && !name.contains('\0') && !name.contains("@{")
+}
+
+/// A full object id (SHA-1 or SHA-256), as stash identities must be.
+pub fn valid_object_id(value: &str) -> bool {
+    (value.len() == 40 || value.len() == 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn status_records_become_changes() {
+        let changes = parse_changes(b" M src/a.rs\0R  new name.rs\0old name.rs\0?? notes.txt\0MM both.rs\0");
+        assert_eq!(changes.len(), 4);
+        assert!(!changes[0].staged() && changes[0].unstaged());
+        assert_eq!(changes[1].original.as_deref(), Some("old name.rs"));
+        assert!(changes[1].staged() && !changes[1].unstaged());
+        assert!(changes[2].untracked() && !changes[2].staged());
+        assert!(changes[3].staged() && changes[3].unstaged());
+    }
+
+    #[test]
+    fn unsafe_paths_and_names_are_refused() {
+        let change = |path: &str| Change { path: path.into(), original: None, index: 'M', worktree: ' ' };
+        assert!(change("src/a.rs").has_safe_paths());
+        assert!(!change("/etc/passwd").has_safe_paths());
+        assert!(!change("a/../../b").has_safe_paths());
+        assert!(plausible_branch_name("feature/x") && !plausible_branch_name("-f") && !plausible_branch_name("a@{1}") && !plausible_branch_name(""));
+        assert!(valid_object_id(&"a".repeat(40)) && !valid_object_id("abc") && !valid_object_id(&"g".repeat(40)));
+    }
+}

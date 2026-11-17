@@ -5,6 +5,7 @@ mod clock;
 mod editor;
 mod explorer;
 mod frame;
+mod gitview;
 mod gpu;
 mod icons;
 mod input;
@@ -194,6 +195,10 @@ impl App {
             "q" => event_loop.exit(),
             "p" => {
                 self.with_workspace(|workspace, _| workspace.open_search(false));
+                self.invalidate();
+            }
+            "g" if modifiers.shift_key() => {
+                self.with_workspace(|workspace, _| workspace.open_git());
                 self.invalidate();
             }
             "f" if modifiers.shift_key() => {

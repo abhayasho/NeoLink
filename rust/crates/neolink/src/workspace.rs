@@ -108,6 +108,9 @@ pub struct Workspace {
     creation: Option<Creation>,
     /// Quick Open or Find in Files, while it is open.
     search: Option<crate::search::SearchSheet>,
+    /// Source Control, while it is open; and how many repository snapshots the explorer has seen.
+    git: Option<crate::gitview::GitSheet>,
+    git_seen: u64,
     /// Clickable parts of the editor toolbar: `(where, what)`.
     toolbar_buttons: Vec<(Rect, &'static str)>,
     window: (f32, f32),
@@ -162,6 +165,8 @@ impl Workspace {
             menu: None,
             creation: None,
             search: None,
+            git: None,
+            git_seen: 0,
             toolbar_buttons: Vec::new(),
             window: (size.0 as f32, size.1 as f32),
             focused: true,
@@ -426,6 +431,10 @@ impl Workspace {
 
     /// A scroll event in device pixels over the pane.
     pub fn scroll(&mut self, time: f64, _delta_x: f64, delta_y: f64, phase: ScrollPhase) {
+        if let Some(git) = &mut self.git {
+            git.scroll(self.pointer.0, self.pointer.1, _delta_x as f32 * self.scale, delta_y as f32 * self.scale);
+            return;
+        }
         if self.scroll_search((delta_y as f32) * self.scale) {
             return;
         }
@@ -467,6 +476,9 @@ impl Workspace {
                 _ => {}
             }
         }
+        if let Some(part) = name.strip_prefix("git:") {
+            return self.git.as_ref()?.control_rect(part).map(middle);
+        }
         if let Some((rect, _)) = self.header_buttons.iter().find(|(_, action)| *action == name) {
             return Some(middle(*rect));
         }
@@ -482,6 +494,14 @@ impl Workspace {
         if self.menu.is_some() {
             if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.menu = None;
+            }
+            return true;
+        }
+        if self.git.is_some() {
+            let unsaved = self.any_unsaved();
+            let outcome = self.git.as_mut().map(|git| git.key(key, text, unsaved));
+            if let Some(outcome) = outcome {
+                self.git_outcome(outcome);
             }
             return true;
         }
@@ -506,6 +526,36 @@ impl Workspace {
             return true;
         }
         self.explorer.filter_key(key, text)
+    }
+
+    /// Opens Source Control for the project.
+    pub fn open_git(&mut self) {
+        self.menu = None;
+        self.search = None;
+        self.git = Some(crate::gitview::GitSheet::new(self.explorer.root(), self.shared.clone()));
+        self.git_seen = 0;
+    }
+
+    /// Some document has changes that are not on disk.
+    fn any_unsaved(&self) -> bool {
+        let Some(editor) = &self.editor else { return false };
+        self.tabs.iter().filter_map(|tab| tab.document()).any(|path| editor.is_modified(path))
+    }
+
+    fn git_outcome(&mut self, outcome: crate::gitview::Outcome) {
+        match outcome {
+            crate::gitview::Outcome::Stay => {}
+            crate::gitview::Outcome::Close => {
+                self.git = None;
+                self.explorer.refresh();
+            }
+            crate::gitview::Outcome::Open(path) => {
+                self.git = None;
+                self.explorer.refresh();
+                self.open_document(&path);
+            }
+            crate::gitview::Outcome::Menu(menu) => self.menu = Some(menu),
+        }
     }
 
     /// Opens Quick Open (`contents` false) or Find in Files.
@@ -628,6 +678,12 @@ impl Workspace {
             Action::ToggleReveal => self.explorer.reveal_active = !self.explorer.reveal_active,
             Action::NewFile => self.begin_create(false),
             Action::NewFolder => self.begin_create(true),
+            Action::GitCreateBranch | Action::GitSwitch(_) | Action::GitStash(_) => {
+                let unsaved = self.any_unsaved();
+                if let Some(git) = &mut self.git {
+                    git.perform(&action, unsaved);
+                }
+            }
             Action::Nothing => {}
         }
     }
@@ -663,6 +719,22 @@ impl Workspace {
 
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        if let Some(menu) = self.menu.take() {
+            if let Some(action) = menu.action_at(x, y) {
+                self.perform(action);
+            } else if menu.contains(x, y) {
+                self.menu = Some(menu);
+            }
+            return true;
+        }
+        if self.git.is_some() {
+            let unsaved = self.any_unsaved();
+            let outcome = self.git.as_mut().map(|git| git.click(x, y, unsaved));
+            if let Some(outcome) = outcome {
+                self.git_outcome(outcome);
+            }
+            return true;
+        }
         if let Some(search) = &mut self.search {
             let outcome = search.click(x, y);
             self.search_outcome(outcome);
@@ -673,14 +745,6 @@ impl Workspace {
                 self.creation = None;
             } else if creation.create.contains(x, y) {
                 self.create_item();
-            }
-            return true;
-        }
-        if let Some(menu) = self.menu.take() {
-            if let Some(action) = menu.action_at(x, y) {
-                self.perform(action);
-            } else if menu.contains(x, y) {
-                self.menu = Some(menu);
             }
             return true;
         }
@@ -725,10 +789,10 @@ impl Workspace {
                 "files" => self.toggle_explorer(),
                 "quick-open" => self.open_search(false),
                 "find" => self.open_search(true),
+                "git" => self.open_git(),
                 // Quick Open, Find in Files, Source Control, connections, the agent panel and the
                 // agent launcher do not exist in this build yet (PLAN.md).
                 _ => self.notice = Some(format!("{} is not available in this build yet.", match action {
-                    "git" => "Source Control",
                     "connections" => "The connections sidebar",
                     "agent-panel" => "The agent panel",
                     "agent" => "The agent launcher",
@@ -798,6 +862,9 @@ impl Workspace {
         self.pointer = (x, y);
         if let Some(search) = &mut self.search {
             return search.pointer(x, y);
+        }
+        if self.git.is_some() && self.menu.is_none() {
+            return false;
         }
         if let Some(menu) = &mut self.menu {
             return menu.pointer(x, y);
@@ -1196,6 +1263,17 @@ impl Content for Workspace {
             };
         }
         self.draw_creation(painter);
+        if let Some(mut git) = self.git.take() {
+            // The explorer's decorations follow what the review changes.
+            if git.mutations() != self.git_seen {
+                self.git_seen = git.mutations();
+                self.explorer.refresh();
+            }
+            let cell_height = self.cell.height;
+            let mut ui = Ui { painter, scale: self.scale };
+            git.draw(&mut ui, self.window, cell_height);
+            self.git = Some(git);
+        }
         if let Some(mut search) = self.search.take() {
             let mut ui = Ui { painter, scale: self.scale };
             search.draw(&mut ui, self.window);
@@ -1218,6 +1296,9 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
+        if let Some(git) = &self.git {
+            signature.add(0x474954).add(git.signature());
+        }
         if let Some(search) = &self.search {
             signature.add(0x53454152).add(search.signature());
         }
