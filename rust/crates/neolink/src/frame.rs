@@ -24,6 +24,8 @@ pub struct Shared {
     pub log: FrameLog,
     /// Frames drawn since launch.
     pub frames: AtomicU64,
+    pub foreground: AtomicBool,
+    pub visibility_epoch: AtomicU64,
     /// Frames among them that only repeated the previous content to keep the display at full rate.
     pub warm_frames: AtomicU64,
     /// Frames that were built and found identical to what is shown, so nothing was presented.
@@ -166,6 +168,8 @@ impl Shared {
             render_thread: OnceLock::new(),
             log: FrameLog::default(),
             frames: AtomicU64::new(0),
+            foreground: AtomicBool::new(false),
+            visibility_epoch: AtomicU64::new(0),
             warm_frames: AtomicU64::new(0),
             skipped: AtomicU64::new(0),
             displayed: parking_lot::Mutex::new(std::collections::VecDeque::new()),

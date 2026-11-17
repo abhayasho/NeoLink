@@ -235,3 +235,57 @@ fn a_hidden_buffer_that_changes_loses_its_remembered_screen() {
     assert_ne!(FileSignature::of(&b).unwrap(), before);
     assert!(FileSignature::of(&scratch.0.join("missing.txt").to_string_lossy()).is_none());
 }
+
+#[test]
+fn horizontal_answers_keep_their_exact_redraw_and_obey_selection_order() {
+    let Some(nvim) = nvim() else { return };
+    let scratch = Scratch::new("horizontal");
+    let line = "abcdefghijklmnopqrstuvwxyz0123456789".repeat(20);
+    let a = scratch.file("a.txt", &(line.clone() + "\n").repeat(30));
+    let b = scratch.file("b.txt", &("BRAVO_".repeat(120) + "\n").repeat(30));
+    let client = Client::spawn(&nvim, &config(), 80, 24, || {}).unwrap();
+    client.open(&a, None, 1).unwrap();
+    wait_for(&client, "first selection", |c| c.with_state(|s| s.selection.as_ref().map(|s| s.0)) == Some(1));
+    for (token, column) in [(10, 24), (11, 48), (12, 7), (13, 0)] {
+        client.horizontal_scroll(token, 0, 12, column, false).unwrap();
+        wait_for(&client, "horizontal acknowledgement", |c| c.with_state(|s| s.horizontal.as_ref().map(|a| a.token)) == Some(token));
+        let answer = client.with_state(|s| s.horizontal.clone().unwrap());
+        assert_eq!(answer.after, column as u64);
+        assert_eq!(answer.width, 80);
+        assert_eq!(answer.height, 23);
+        let row = answer.screen.row_text(0);
+        // Ignore Neovim's optional listchars precedes marker in the very first text cell.
+        let cells: Vec<char> = row.chars().skip(answer.gutter + 1).take(20).collect();
+        let expected: Vec<char> = line.chars().skip(column as usize + 1).take(20).collect();
+        assert_eq!(cells, expected, "token={token} row={row}");
+        // The acknowledgement owns immutable rows even as a later redraw arrives.
+        client.notify("nvim_command", vec![Value::from("redraw!")]).unwrap();
+        assert_eq!(answer.screen.row_text(0), row);
+    }
+    // A scroll immediately following a switch must target the newly selected file.
+    client.open(&b, None, 2).unwrap();
+    client.horizontal_scroll(20, 0, 12, 18, false).unwrap();
+    wait_for(&client, "scroll after selection", |c| c.with_state(|s| s.horizontal.as_ref().map(|a| a.token)) == Some(20));
+    let answer = client.with_state(|s| s.horizontal.clone().unwrap());
+    assert!(answer.screen.row_text(0).contains("BRAVO_"));
+    assert!(!answer.screen.row_text(0).contains("abcdef"));
+    assert_eq!(answer.after, 18);
+}
+
+#[test]
+fn horizontal_flush_fallback_and_split_eligibility() {
+    let Some(nvim) = nvim() else { return };
+    let scratch = Scratch::new("horizontal-fallback");
+    let path = scratch.file("long.txt", &("abcdefghij".repeat(100) + "\n").repeat(30));
+    let client = Client::spawn(&nvim, &config(), 80, 24, || {}).unwrap();
+    client.open(&path, None, 1).unwrap();
+    wait_for(&client, "single unwrapped window", |c| c.with_state(|s| s.horizontal_allowed));
+    client.call("nvim_exec_lua", vec![Value::from("vim.api.nvim__redraw = nil"), Value::Array(vec![])], Duration::from_secs(5)).unwrap();
+    client.horizontal_scroll(30, 0, 10, 17, false).unwrap();
+    wait_for(&client, "fallback redraw", |c| c.with_state(|s| s.horizontal.as_ref().map(|a| a.token)) == Some(30));
+    assert_eq!(client.with_state(|s| s.horizontal.as_ref().unwrap().after), 17);
+    client.call("nvim_command", vec![Value::from("setlocal wrap")], Duration::from_secs(5)).unwrap();
+    wait_for(&client, "wrapped window uses fallback", |c| c.with_state(|s| !s.horizontal_allowed));
+    client.call("nvim_command", vec![Value::from("setlocal nowrap | split")], Duration::from_secs(5)).unwrap();
+    wait_for(&client, "split uses fallback", |c| c.with_state(|s| !s.horizontal_allowed));
+}

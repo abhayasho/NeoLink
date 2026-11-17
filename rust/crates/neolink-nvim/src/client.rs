@@ -57,6 +57,21 @@ pub struct Left {
 /// Buffers remembered at most.
 pub const LEFT_LIMIT: usize = 8;
 
+/// An ordered horizontal-scroll acknowledgement. Its screen is captured only after Lua's redraw;
+/// a later reader update must never be paired with these coordinates.
+#[derive(Clone, Debug)]
+pub struct HorizontalFrame {
+    pub token: u64,
+    pub before: u64,
+    pub after: u64,
+    pub row: usize,
+    pub column: usize,
+    pub height: usize,
+    pub width: usize,
+    pub gutter: usize,
+    pub screen: Screen,
+}
+
 /// What the reader thread has learned, shared with whoever draws.
 pub struct State {
     /// Screens of buffers that were left and not touched since, newest last. An entry is taken when
@@ -69,10 +84,12 @@ pub struct State {
     pub touched: Vec<String>,
     /// The last reply of `NeoLink.dispatch`, decoded (`ok`, `error`, `state`).
     pub last_reply: Option<serde_json::Value>,
-    /// Where each buffer's window is: `(top line, lines in the buffer)` by path (`neolink_view`).
-    pub views: std::collections::HashMap<String, (u64, u64)>,
+    /// Where each buffer's window is: `(top line, lines in the buffer, left column)` by path (`neolink_view`).
+    pub views: std::collections::HashMap<String, (u64, u64, u64)>,
     /// Views announced but not yet drawn, with when they were announced.
-    pub pending_views: std::collections::HashMap<String, ((u64, u64), std::time::Instant)>,
+    pub pending_views: std::collections::HashMap<String, ((u64, u64, u64), std::time::Instant)>,
+    pub horizontal: Option<HorizontalFrame>,
+    pub horizontal_allowed: bool,
     /// Requests whose reply has been read (for tests and the benchmark).
     pub replies: u64,
     /// Files with unsaved changes, as Neovim reports them when they change (`neolink_modified`).
@@ -151,9 +168,11 @@ vim.api.nvim_create_autocmd({'BufModifiedSet', 'BufWritePost', 'BufReadPost', 'B
 end})
 -- Where the window is in its buffer, for pixel scrolling: the top line, the number of lines, the path.
 local function view()
-  pcall(vim.rpcnotify, channel, 'neolink_view', vim.api.nvim_buf_get_name(0), vim.fn.line('w0'), vim.api.nvim_buf_line_count(0))
+  pcall(vim.rpcnotify, channel, 'neolink_view', vim.api.nvim_buf_get_name(0), vim.fn.line('w0'), vim.api.nvim_buf_line_count(0), vim.fn.winsaveview().leftcol,
+    #vim.api.nvim_tabpage_list_wins(0) == 1 and not vim.wo.wrap)
 end
-vim.api.nvim_create_autocmd({'WinScrolled', 'BufWinEnter', 'TextChanged', 'TextChangedI', 'VimResized'}, {callback = view})
+vim.api.nvim_create_autocmd({'WinScrolled', 'BufWinEnter', 'WinEnter', 'WinClosed', 'TextChanged', 'TextChangedI', 'VimResized'}, {callback = view})
+vim.api.nvim_create_autocmd('OptionSet', {pattern='wrap', callback=view})
 -- A front end that slides the text by pixels hides up to four rows at an edge; the cursor stays clear of them.
 if vim.o.scrolloff < 4 then vim.o.scrolloff = 4 end
 -- Diagnostics and language servers change without a command from the app: send the state then too
@@ -200,7 +219,7 @@ impl Client {
             stdin: Mutex::new(stdin),
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
-            state: Mutex::new(State { left: Vec::new(), screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, views: Default::default(), pending_views: Default::default(), replies: 0, modified: Default::default() }),
+            state: Mutex::new(State { left: Vec::new(), screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, views: Default::default(), pending_views: Default::default(), horizontal: None, horizontal_allowed: false, replies: 0, modified: Default::default() }),
             exited: AtomicBool::new(false),
             on_change: Box::new(on_change),
         });
@@ -290,6 +309,25 @@ impl Client {
     /// Sends without asking for a reply (resizes).
     pub fn notify(&self, method: &str, params: Vec<Value>) -> Result<(), ClientError> {
         self.send(&rpc::notification(method, params))
+    }
+
+    /// Uses the same input gate as typing, so no scroll can overtake a pending buffer selection.
+    pub fn horizontal_scroll(&self, token: u64, row: usize, column: usize, amount: i64, relative: bool) -> Result<(), ClientError> {
+        // :redraw can leave a UI flush pending during back-to-back RPC notifications. Publish our
+        // acknowledgement only after flushing it; the older shared Lua notice is not sufficient.
+        // nvim__redraw is available since 0.10 but experimental, so retain the full-redraw fallback.
+        const SCROLL: &str = r#"
+local token, row, col, amount, relative = ...
+local before = vim.fn.winsaveview().leftcol
+NeoLink.hscroll(token, row, col, amount, relative)
+if not (vim.api.nvim__redraw and pcall(vim.api.nvim__redraw, {flush=true, valid=true})) then vim.cmd('redraw!') end
+local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
+vim.rpcnotify(NeoLink.ui_channel, 'neolink_hscroll_ready', token, before, vim.fn.winsaveview().leftcol,
+  info.winrow - 1, info.wincol - 1, info.height, info.width, info.textoff)
+"#;
+        self.user_input("nvim_exec_lua", vec![Value::from(SCROLL), Value::Array(vec![
+            Value::from(token), Value::from(row as u64), Value::from(column as u64), Value::from(amount), Value::from(relative),
+        ])])
     }
 
     /// Sends user input, or holds it while a buffer switch is unconfirmed.
@@ -479,11 +517,27 @@ impl Inner {
                     self.release(Some(token), None);
                     true
                 }
+                "neolink_hscroll_ready" => {
+                    if params.len() != 8 || params.iter().any(|value| value.as_u64().is_none()) {
+                        return false;
+                    }
+                    let n = |index: usize| params[index].as_u64().unwrap();
+                    let mut state = self.state.lock().unwrap();
+                    state.horizontal = Some(HorizontalFrame {
+                        token: n(0), before: n(1), after: n(2), row: n(3) as usize,
+                        column: n(4) as usize, height: n(5) as usize, width: n(6) as usize,
+                        gutter: n(7) as usize, screen: state.screen.clone(),
+                    });
+                    true
+                }
                 "neolink_view" => {
                     let path = params.first().and_then(Value::as_str).unwrap_or("").to_string();
                     let top = params.get(1).and_then(Value::as_u64).unwrap_or(1).max(1);
                     let total = params.get(2).and_then(Value::as_u64).unwrap_or(1).max(1);
-                    self.state.lock().unwrap().pending_views.insert(path, ((top, total), std::time::Instant::now()));
+                    let left = params.get(3).and_then(Value::as_u64).unwrap_or(0);
+                    let mut state = self.state.lock().unwrap();
+                    state.horizontal_allowed = params.get(4).and_then(Value::as_bool).unwrap_or(false);
+                    state.pending_views.insert(path, ((top, total, left), std::time::Instant::now()));
                     true
                 }
                 "neolink_state" => {

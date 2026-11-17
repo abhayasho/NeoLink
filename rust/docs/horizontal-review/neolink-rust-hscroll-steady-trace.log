@@ -1,0 +1,32 @@
+benchmark: editor-horizontal
+hscroll send 1 0 relative=true position=0 drawn=0
+hscroll ack 1 0 -> 0 generation=4
+hscroll send 2 24 relative=false position=12 drawn=0
+hscroll ack 2 0 -> 24 generation=5
+hscroll send 3 46 relative=false position=348 drawn=348
+hscroll ack 3 24 -> 46 generation=6
+hscroll send 4 65 relative=false position=648 drawn=648
+hscroll ack 4 46 -> 65 generation=7
+hscroll send 5 83 relative=false position=936 drawn=936
+hscroll ack 5 65 -> 83 generation=8
+hscroll send 6 102 relative=false position=1248 drawn=1248
+hscroll ack 6 83 -> 102 generation=9
+hscroll send 7 121 relative=false position=1548 drawn=1548
+hscroll ack 7 102 -> 121 generation=10
+hscroll send 8 85 relative=false position=1752 drawn=1752
+hscroll ack 8 121 -> 85 generation=10
+hscroll spontaneous redraw 10 -> 11
+hscroll send 9 91 relative=false position=1452 drawn=1452
+hscroll ack 9 85 -> 91 generation=12
+hscroll send 10 0 relative=true position=0 drawn=1360
+hscroll ack 10 91 -> 91 generation=13
+hscroll send 11 67 relative=false position=1444 drawn=1456
+hscroll ack 11 91 -> 67 generation=14
+hscroll send 12 47 relative=false position=1144 drawn=1144
+hscroll ack 12 67 -> 47 generation=16
+hscroll send 13 28 relative=false position=844 drawn=844
+hscroll ack 13 47 -> 28 generation=18
+hscroll send 14 10 relative=false position=544 drawn=544
+hscroll ack 14 28 -> 10 generation=20
+hscroll send 15 20 relative=false position=316 drawn=316
+hscroll ack 15 10 -> 20 generation=22

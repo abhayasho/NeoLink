@@ -1,0 +1,12 @@
+{
+  "date": "2026-11-17",
+  "base_commit": "e7df757",
+  "rust_tests_passed": 109,
+  "packaging_tests_passed": 1,
+  "horizontal_scrolling_default": "column steps; pixel composition requires NEOLINK_HSCROLL=1",
+  "live_acceptance": "blocked: Mac locked; no final smoothness claim",
+  "hashes": {
+    "target/release/neolink": "23deb88be12f3047eed970613427555f327a166d4a3253bae652c45291de536c",
+    "target/NeoLink.app/Contents/MacOS/NeoLink": "d32a41861dd1f0080fec51bf1c104dea6467da44747e411876213d7803f5767d"
+  }
+}

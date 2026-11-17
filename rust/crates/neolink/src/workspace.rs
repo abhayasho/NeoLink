@@ -111,6 +111,7 @@ pub struct Workspace {
     grid: (usize, usize),
     /// The editor's grid: its pane has a toolbar above and a footer below instead of a status bar.
     editor_grid: (usize, usize),
+    pub benchmark_horizontal: bool,
     pane: Rect,
     editor_pane: Rect,
     header: Rect,
@@ -234,6 +235,7 @@ impl Workspace {
             period,
             grid: (80, 24),
             editor_grid: (80, 24),
+            benchmark_horizontal: false,
             pane: Rect::default(),
             editor_pane: Rect::default(),
             header: Rect::default(),
@@ -549,7 +551,7 @@ impl Workspace {
         self.close_warned = None;
         let shown_id = self.tabs.get(self.shown).map(|tab| tab.id);
         let removed = self.tabs.remove(index);
-        if let (Pane::Document { path, .. }, Some(editor)) = (&removed.pane, &self.editor) {
+        if let (Pane::Document { path, .. }, Some(editor)) = (&removed.pane, &mut self.editor) {
             editor.command("close", path);
         }
         if let Pane::Document { path, .. } = &removed.pane {
@@ -1017,7 +1019,7 @@ impl Workspace {
             editor.insert(&keys.replace("<lt>", "<").replace("<CR>", "\n"));
             return;
         }
-        if let Some(editor) = &self.editor {
+        if let Some(editor) = &mut self.editor {
             editor.input(keys);
         }
     }
@@ -1027,7 +1029,7 @@ impl Workspace {
             self.save_native(&path);
             return;
         }
-        if let (Some(path), Some(editor)) = (self.active_document().filter(|path| !crate::pdf::is_pdf(path)), &self.editor) {
+        if let (Some(path), Some(editor)) = (self.active_document().filter(|path| !crate::pdf::is_pdf(path)), &mut self.editor) {
             editor.command("save", &path);
             self.refresh_explorer_soon = true;
         }
@@ -1055,7 +1057,7 @@ impl Workspace {
             }
             return;
         }
-        if let (true, Some(editor)) = (self.active_is_document(), &self.editor) {
+        if let (true, Some(editor)) = (self.active_is_document(), &mut self.editor) {
             editor.action(action);
         }
     }
@@ -1076,7 +1078,7 @@ impl Workspace {
         if let Some(editor) = self.native_editor() {
             editor.insert(text);
         } else if self.active_is_document() {
-            if let Some(editor) = &self.editor {
+            if let Some(editor) = &mut self.editor {
                 editor.paste(text);
             }
         } else if let Some(terminal) = self.active() {
@@ -1430,7 +1432,7 @@ impl Workspace {
             crate::search::Outcome::Open(path, line) => {
                 self.search = None;
                 self.open_document(&path);
-                if let (Some(line), Some(editor)) = (line, &self.editor) {
+                if let (Some(line), Some(editor)) = (line, &mut self.editor) {
                     // Typed after the switch is confirmed (the client holds input until then).
                     editor.input(&format!("<C-o>{line}G<C-o>zz"));
                 }
@@ -1797,7 +1799,7 @@ impl Workspace {
         let Some(index) = self.tabs.iter().position(|tab| tab.document() == Some(closing.path.as_str())) else { return };
         match what {
             "save" => {
-                if let Some(editor) = &self.editor {
+                if let Some(editor) = &mut self.editor {
                     editor.command("save", &closing.path);
                 }
                 self.save_native(&closing.path);
@@ -2212,7 +2214,7 @@ impl Workspace {
                 if pane.contains(x, y) {
                     editor.mouse(x, y, clicks, false, false);
                 }
-            } else if let Some(editor) = &self.editor {
+            } else if let Some(editor) = &mut self.editor {
                 editor.mouse("press", row, column);
             }
             self.pressed_in = 3;
@@ -2414,7 +2416,7 @@ impl Workspace {
         }
         if self.editor_pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
             let (row, column) = self.pointer_cell();
-            if let Some(editor) = &self.editor {
+            if let Some(editor) = &mut self.editor {
                 editor.mouse("release", row, column);
             }
         }
@@ -2453,7 +2455,7 @@ impl Workspace {
                     editor.mouse(x, y, 0, true, false);
                     return true;
                 }
-                if let Some(editor) = &self.editor {
+                if let Some(editor) = &mut self.editor {
                     editor.mouse("drag", row, column);
                 }
                 return false;
@@ -2514,6 +2516,7 @@ impl Workspace {
             Some(terminal) => ((terminal.scroll() + terminal.program_position(self.cell.height as f64)) / self.cell.height as f64, terminal.received / self.cell.height as f64),
             // A document: fingers moving down show earlier lines, so the position counts downwards.
             None => match (&self.editor, self.active_is_document()) {
+                (Some(editor), true) if self.benchmark_horizontal => (-editor.horizontal_position(&self.active_document().unwrap_or_default(), self.cell) / self.cell.width as f64, editor.received_x / self.cell.width as f64),
                 (Some(editor), true) => (-editor.drawn_position / self.cell.height as f64, editor.received / self.cell.height as f64),
                 _ => (0.0, 0.0),
             },
@@ -2991,7 +2994,7 @@ impl Content for Workspace {
         if let Some(file) = fetched {
             // A remote file opens as a read-only preview of its downloaded copy.
             self.open_document(&file);
-            if let Some(editor) = &self.editor {
+            if let Some(editor) = &mut self.editor {
                 editor.input("<C-o>:setlocal readonly nomodifiable<CR>");
             }
         }
@@ -3114,7 +3117,7 @@ impl Content for Workspace {
         signature.add(self.tabs.get(self.shown).and_then(Tab::terminal).map_or(0, Terminal::look)).text(&self.shown_directory);
         if let Some(editor) = &self.editor {
             // A scroll within one line changes no cell, only where the text is drawn.
-            signature.text(editor.mode_label()).add(editor.drawn_position.to_bits());
+            signature.text(editor.mode_label()).add(editor.drawn_position.to_bits()).add(editor.horizontal_signature());
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());

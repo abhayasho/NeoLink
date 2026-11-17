@@ -1,0 +1,114 @@
+{
+  "app": "neolink-rust",
+  "environment": {
+    "busyMainThread": true,
+    "cellPixels": [
+      16.0,
+      32.0
+    ],
+    "exactDisplayTimes": true,
+    "font": "SF Mono",
+    "fontPoints": 13.0,
+    "grid": [
+      183,
+      59
+    ],
+    "input": "synthetic events posted to the main thread with their sampling time; not a physical trackpad or keyboard, and not the operating system's event delivery",
+    "os": "macos",
+    "refreshHz": 120.0,
+    "scale": 2.0,
+    "scrollSmoothing": "auto",
+    "window": "fullscreen"
+  },
+  "scenarios": {
+    "editor-horizontal": {
+      "commitToDisplayMs": {
+        "count": 101,
+        "max": 10.98,
+        "mean": 6.71,
+        "p05": 2.64,
+        "p50": 7.29,
+        "p95": 10.94
+      },
+      "commitToDisplayRefreshesP50": 0.87,
+      "cpuPercentInKernel": 1.2,
+      "cpuPercentMainThread": 18.5,
+      "cpuPercentOfOneCore": 27.5,
+      "cpuPercentRenderThread": 1.7,
+      "cpuPercentWithoutBenchmarkTimers": 21.5,
+      "displayIntervalMs": {
+        "count": 100,
+        "max": 250.0,
+        "mean": 30.17,
+        "p05": 8.33,
+        "p50": 8.33,
+        "p95": 159.37
+      },
+      "displayPath": "direct",
+      "drawCostMs": {
+        "count": 102,
+        "max": 1.48,
+        "mean": 0.32,
+        "p05": 0.15,
+        "p50": 0.19,
+        "p95": 1.01
+      },
+      "framesDisplayed": 101,
+      "framesDrawn": 102,
+      "framesLaterThanPlanned": 1,
+      "framesNeverDisplayed": 0,
+      "framesRepeatedToKeepDisplayFast": 2,
+      "framesUnreported": 1,
+      "frontmostAndUnoccludedThroughout": true,
+      "inputLatenessMs": {
+        "count": 300,
+        "max": 0.01,
+        "mean": 0.0,
+        "p05": 0.0,
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "scroll": {
+        "aheadLinesMax": 0.0,
+        "backwardFrames": 4,
+        "backwardLinesMax": 6.0,
+        "burstFrames": 1,
+        "drawnLines": -20.0,
+        "eventsSpread": 0,
+        "firstMotionMs": 244.5,
+        "frames": 101,
+        "idealLines": 0.0,
+        "inputEvents": 0,
+        "jerkPixelsMax": 19.61,
+        "jerkPixelsP50": 0.0,
+        "jerkPixelsP95": 12.36,
+        "jumpFrames": 0,
+        "lagMs": 71.0,
+        "largestStepPixels": 348.0,
+        "longestSmoothingDelayMs": 0.0,
+        "missedRefreshesWhileMoving": 200,
+        "pixelSteps": 95,
+        "positionErrorLinesP95": 14.362,
+        "receivedLines": 0.0,
+        "settleLines": -0.25,
+        "settleMs": -0.0,
+        "stallFrames": 1,
+        "stepErrorPixelsP95": 6.0,
+        "stepGapMeanMs": 24.6,
+        "stepGapSpread": 1.87,
+        "trailingLinesP50": 1.003,
+        "trailingLinesP95": 20.752,
+        "unevenFrames": 35,
+        "velocityErrorP95": 74.0
+      },
+      "seconds": 2.89,
+      "stageMsP50": {
+        "acquireDrawable": 0.008,
+        "build": 0.091,
+        "encodeAndSubmit": 0.089,
+        "present": 0.002
+      },
+      "visibleTimingValid": true
+    }
+  }
+}

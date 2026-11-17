@@ -52,3 +52,22 @@ NeoLink is a native macOS (13+) SwiftUI/AppKit coding workspace: tabbed terminal
 - `Resources/` is not a SwiftPM resource target. Code falls back to `#filePath`-relative paths; `scripts/build-app.sh` must copy `Resources/Editor` and the SwiftTerm bundle for a packaged app to work.
 - Resource limits are deliberate: >2 MiB files skip LSP/Tree-sitter, code tabs cap at 128 MiB, SFTP remote previews are read-only. See `docs/CODING_WORKSPACE.md`, `docs/RENDERING.md`, and `docs/EXPLORER.md` for behavior worth preserving.
 - Ad-hoc rebuilds can change app identity and re-trigger macOS folder permissions; bookmark behavior depends on consistent signing.
+
+## Rust migration (`rust-rewrite`)
+- Rust code is under `rust/`; the Swift application remains separate. Read `rust/README.md` for current
+  parity and `rust/PLAN.md` for historical milestones. Do not infer feature availability from older tables.
+- Verify with `cargo test --workspace --locked` from `rust/`,
+  `python3 scripts/test-package-windows.py`, and `./scripts/build-app.sh` for the macOS release bundle.
+  The Windows CI archive must contain the executable plus `Resources/Editor`, not just an `.exe`.
+- Horizontal retained composition (`rust/crates/neolink/src/horizontal.rs`) is experimental and opt-in
+  with `NEOLINK_HSCROLL=1`. Keep the default stepped path until valid matched release comparisons and
+  real-input checks pass. See `rust/docs/HORIZONTAL_SCROLL.md`; locked/occluded runs establish no cadence.
+- Pair horizontal coordinates only with the screen captured at `neolink_hscroll_ready`, after the explicit
+  UI flush. Respect the selection input gate, token checks, dimension/style invalidation and settlement
+  before input. Retain at most two previous screens, keep text native resolution and the gutter fixed,
+  and include fractional composition position in the workspace signature. Preserve the Unicode GPU
+  pixel test and real-Neovim ordering/fallback tests. Split/wrapped views use the existing wheel path.
+- Explorer row replacement preserves a path anchor plus fractional offset through `reanchored_scroll`;
+  clamp only after computing the new viewport limit. The pure projection helper must do no filesystem I/O.
+- Benchmark focus/occlusion validity and actual presented frames must be checked before interpreting
+  timing. Procedural runs, GPU pixel tests and physical-input acceptance are separate forms of evidence.

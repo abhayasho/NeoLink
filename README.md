@@ -38,7 +38,9 @@ What the Rust app has today (macOS):
 - **Agents:** terminal agents and native ACP conversations (streaming, tool previews, permissions, modes, stop).
 - **Rendering:** its own GPU renderer (wgpu on Metal) that presents a frame only when something changed. In full screen on an M2 Max it measured about 7 ms from key press to screen, against 14-15 ms for the Swift app under the same display conditions.
 
-Not there yet: PDF tabs (PDFs open in the system viewer), saved SSH passwords (the system's `ssh` asks in the terminal), sideways smooth scrolling in the editor, the Performance Monitor, a fallback editor without Neovim, and accessibility. Menus and dialogs inside the window are drawn by the app, so they look close to, but not exactly like, the native ones. On Windows the app builds and its tests pass in CI, but it has not been run there. The full checklist and every measurement are in [`rust/PLAN.md`](rust/PLAN.md).
+Also implemented: **PDF tabs on macOS**, saved SSH passwords (Keychain / Windows Credential Manager), **View → Performance Monitor**, project-file watching, and a built-in text editor when Neovim is missing. Explorer refreshes now preserve the visible file and fractional offset. Experimental pixel-smooth horizontal editor scrolling is available with `NEOLINK_HSCROLL=1`; it stays opt-in until matched release checks and physical input verification pass. [Current migration status and verification](rust/README.md).
+
+Remaining gaps include accessibility, IME, cross-platform PDF tabs, remote save-back, full session recovery, and some rendering preferences. Windows builds and tests run in CI, but on-device Windows UI verification is still outstanding. The Windows artifact now includes the editor resources in an extract-and-run ZIP. Historical measurements and the evolving parity checklist are in [`rust/PLAN.md`](rust/PLAN.md).
 
 Build and install it (needs [Rust](https://rustup.rs), Neovim and ripgrep):
 

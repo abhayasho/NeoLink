@@ -43,9 +43,11 @@ pub struct Editor {
     /// Sideways wheel input not yet turned into whole columns, and the lock that keeps a gesture on
     /// one axis (a vertical scroll never drifts sideways: each column redraws every row).
     sideways: f64,
+    horizontal: crate::horizontal::Horizontal,
     axis_lock: neolink_core::scroll::AxisLock,
     /// Wheel input received, in device pixels (for the benchmark).
     pub received: f64,
+    pub received_x: f64,
     /// The view's top as the last frame drew it, in device pixels from the top of the buffer.
     pub drawn_position: f64,
     scratch: Vec<Instance>,
@@ -126,7 +128,7 @@ impl Editor {
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, sideways: 0.0, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {
@@ -140,6 +142,9 @@ impl Editor {
                 return *token;
             }
         }
+        self.horizontal.finish(&self.client);
+        self.horizontal.clear();
+        self.smoother.cancel();
         let token = self.next_token;
         self.next_token += 1;
         // Until Neovim confirms, the pane keeps showing this...
@@ -193,26 +198,32 @@ impl Editor {
     pub fn resize(&mut self, columns: usize, rows: usize) {
         let grid = (columns.max(20), rows.max(4) + if self.smooth { EXTRA_ROWS } else { 0 });
         if grid != self.grid {
+            self.horizontal.finish(&self.client);
+            self.horizontal.clear();
             self.grid = grid;
             let _ = self.client.resize(grid.0, grid.1);
         }
     }
 
     /// Keys in Neovim's notation.
-    pub fn input(&self, keys: &str) {
+    pub fn input(&mut self, keys: &str) {
+        self.horizontal.finish(&self.client);
         let _ = self.client.input(keys);
     }
 
-    pub fn paste(&self, text: &str) {
+    pub fn paste(&mut self, text: &str) {
+        self.horizontal.finish(&self.client);
         let _ = self.client.paste(text);
     }
 
     /// One of `neolink.lua`'s commands for the buffer shown; errors come back in the reply.
-    pub fn command(&self, method: &str, path: &str) {
+    pub fn command(&mut self, method: &str, path: &str) {
+        self.horizontal.finish(&self.client);
         let _ = self.client.dispatch(&serde_json::json!({"method": method, "path": path}));
     }
 
-    pub fn action(&self, action: &str) {
+    pub fn action(&mut self, action: &str) {
+        self.horizontal.finish(&self.client);
         let _ = self.client.dispatch(&serde_json::json!({"method": "action", "action": action}));
     }
 
@@ -309,7 +320,7 @@ impl Editor {
             }
             state.views.get(path).copied()
         })
-        .unwrap_or((1, u64::MAX / 4))
+        .map(|(top, total, _)| (top, total)).unwrap_or((1, u64::MAX / 4))
     }
 
     /// A wheel report of `delta` device pixels at grid cell `(row, column)`. With pixel scrolling the
@@ -330,6 +341,19 @@ impl Editor {
         let scale = scale.max(1.0);
         let (dx, dy) = self.axis_lock.filter(time, delta_x / scale, delta_y / scale, momentum);
         let (dx, dy) = (dx * scale, dy * scale);
+        if matches!(phase, ScrollPhase::Ended | ScrollPhase::MomentumEnded) {
+            self.horizontal.release();
+        }
+        self.received_x += dx;
+        if dx != 0.0 && self.shows(path) && self.client.with_state(|s| s.horizontal_allowed)
+            // Opt in until matched on-screen checks can validate the new presenter path. The existing
+            // column-stepped path remains the shipping default; a passing pixel test is not a cadence test.
+            && std::env::var("NEOLINK_HSCROLL").as_deref() == Ok("1") {
+            self.smoother.cancel();
+            self.horizontal.input(&self.client, self.client.screen(), time, dx, period, cell.width as f64, row, column);
+            if matches!(phase, ScrollPhase::Ended | ScrollPhase::MomentumEnded) { self.horizontal.release(); }
+            return;
+        }
         if dx != 0.0 {
             self.sideways += dx;
             let columns = (self.sideways / cell.width as f64).trunc();
@@ -342,7 +366,9 @@ impl Editor {
                 }
             }
         }
-        if dy != 0.0 || dx == 0.0 {
+        if dy != 0.0 {
+            self.horizontal.finish(&self.client);
+            self.horizontal.clear();
             self.scroll(time, dy, period, cell, row, column, path);
         }
     }
@@ -406,13 +432,23 @@ impl Editor {
         self.smoother.begin_gesture();
     }
 
-    pub fn mouse(&self, action: &str, row: usize, column: usize) {
+    pub fn mouse(&mut self, action: &str, row: usize, column: usize) {
+        self.horizontal.finish(&self.client);
         let _ = self.client.input_mouse("left", action, "", row, column);
     }
 
     /// Generation of the live screen (changes with every published redraw).
     pub fn generation(&self) -> u64 {
         self.client.with_state(|state| state.screen.generation)
+    }
+
+    pub fn horizontal_position(&self, path: &str, cell: CellMetrics) -> f64 {
+        if self.horizontal.active() { self.horizontal.drawn }
+        else { self.client.with_state(|s| s.views.get(path).map(|v| v.2).unwrap_or(0)) as f64 * cell.width as f64 }
+    }
+
+    pub fn horizontal_signature(&self) -> u64 {
+        self.horizontal.drawn.to_bits() ^ ((self.horizontal.active() as u64) << 63)
     }
 
     pub fn drawn_generation(&self) -> u64 {
@@ -428,7 +464,9 @@ impl Editor {
             let cell = painter.text.cell;
             self.scroll_now(-step, cell, 0, 0, path);
         }
+        let horizontal_next = self.horizontal.advance(&self.client, display, period);
         self.draw(painter, rect, focused, path);
+        if self.horizontal.active() { return horizontal_next; }
         match self.smoother.next_visible_change(display, period, self.position) {
             None => Next::Idle,
             Some(at) if at <= display + 1.5 * period => Next::Soon,
@@ -441,7 +479,7 @@ impl Editor {
         let screen = if self.shows(path) {
             self.frozen = None;
             self.speculative = None;
-            self.client.screen()
+            self.horizontal.screen().cloned().unwrap_or_else(|| self.client.screen())
         } else if let (true, Some(screen)) = (requested_here, &self.speculative) {
             screen.clone()
         } else {
@@ -457,7 +495,6 @@ impl Editor {
         if default_background != theme::EDITOR_BACKGROUND {
             painter.scene.fill_rect(rect, default_background);
         }
-        let shape = screen.cursor_shape();
         // Pixel scrolling: the text rows are drawn shifted up by between zero and two lines (the two
         // extra rows Neovim draws), the status line stays at the bottom.
         let text_rows = screen.rows.len().saturating_sub(1);
@@ -505,30 +542,55 @@ impl Editor {
             if y >= rect.bottom() || y + cell.height <= rect.y {
                 continue;
             }
-            let cursor_column = (screen.cursor.0 == index && !screen.busy).then_some(screen.cursor.1);
-            let mut key = RowKey::new(screen.style_epoch ^ (row.len() as u64) << 32);
-            for cell_ref in row.iter() {
-                key.cell(cell_ref);
-            }
-            if let Some(column) = cursor_column {
-                key.add(0xC0FFEE ^ (column as u64) << 8 ^ (shape as u64) << 40 ^ (focused as u64) << 48);
-            }
-            let key = key.finish();
-            let retained = match painter.rows.get(key) {
-                Some(row) => Some(row),
-                None => {
-                    scratch.clear();
-                    build_row(&mut scratch, painter, &screen, row, cell, cursor_column, shape, focused);
-                    painter.rows.insert(key, &scratch)
+            if index < text_rows {
+                if let Some((window, layers)) = self.horizontal.layers() {
+                    let gutter = window.gutter as f32 * cell.width;
+                    let band_width = (rect.width - gutter).max(0.0);
+                    // Gutter artwork stays in place. Each text strip has a disjoint scissor rectangle.
+                    painter.scene.set_clip(Some(Rect::new(rect.x, text_clip.y, gutter.min(rect.width), text_clip.height)));
+                    paint_row(painter, &mut scratch, &screen, row, index, cell, focused, true, rect.x, y);
+                    for (source, band) in layers {
+                        if let Some(source_row) = source.rows.get(index) {
+                            let end = band.end.min(band_width);
+                            if end > band.start {
+                                painter.scene.set_clip(Some(Rect::new(rect.x + gutter + band.start, text_clip.y, end - band.start, text_clip.height)));
+                                paint_row(painter, &mut scratch, source, source_row, index, cell, focused, false, rect.x + band.translation, y);
+                            }
+                        }
+                    }
+                    continue;
                 }
-            };
-            match retained {
-                Some(row) => painter.scene.retained(row, rect.x, y),
-                None => painter.scene.translated(&scratch, rect.x, y),
             }
+            paint_row(painter, &mut scratch, &screen, row, index, cell, focused, true, rect.x, y);
         }
         self.scratch = scratch;
         painter.scene.set_clip(None);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_row(painter: &mut Painter, scratch: &mut Vec<Instance>, screen: &Screen, row: &[Cell], index: usize, cell: CellMetrics, focused: bool, show_cursor: bool, x: f32, y: f32) {
+    let shape = screen.cursor_shape();
+    let cursor_column = (show_cursor && screen.cursor.0 == index && !screen.busy).then_some(screen.cursor.1);
+    let mut key = RowKey::new(screen.style_epoch ^ (row.len() as u64) << 32);
+    for cell_ref in row.iter() {
+        key.cell(cell_ref);
+    }
+    if let Some(column) = cursor_column {
+        key.add(0xC0FFEE ^ (column as u64) << 8 ^ (shape as u64) << 40 ^ (focused as u64) << 48);
+    }
+    let key = key.finish();
+    let retained = match painter.rows.get(key) {
+        Some(row) => Some(row),
+        None => {
+            scratch.clear();
+            build_row(scratch, painter, screen, row, cell, cursor_column, shape, focused);
+            painter.rows.insert(key, scratch)
+        }
+    };
+    match retained {
+        Some(row) => painter.scene.retained(row, x, y),
+        None => painter.scene.translated(scratch, x, y),
     }
 }
 
@@ -634,5 +696,72 @@ impl RowKey {
 
     fn finish(&self) -> u64 {
         self.0 ^ (self.0 >> 29)
+    }
+}
+
+#[cfg(test)]
+mod horizontal_pixel_tests {
+    use super::*;
+    use crate::{capture, gpu::Gpu, horizontal::bands, render::{Renderer, Scene}, text::TextSystem};
+    use neolink_nvim::grid::GridModel;
+
+    #[test]
+    fn cached_horizontal_bands_equal_direct_text_pixels_including_unicode() {
+        let Ok(gpu) = Gpu::new() else { eprintln!("No GPU: horizontal pixel comparison skipped"); return };
+        let mut text = TextSystem::new(&gpu.device, 13.0, 2.0);
+        let cell = text.cell;
+        let mut renderer = Renderer::new(&gpu.device, &text, crate::present::FORMAT);
+        let gutter = 6;
+        let columns = 64;
+        let mut content = Vec::new();
+        while content.len() < 200 {
+            content.extend("abCD_012".chars().map(|ch| Cell { text: Text::Char(ch), highlight: 0 }));
+            content.push(Cell { text: Text::Cluster("e\u{301}".into()), highlight: 0 });
+            content.push(Cell { text: Text::Cluster("界".into()), highlight: 0 });
+            content.push(Cell { text: Text::Cluster("".into()), highlight: 0 });
+            content.push(Cell { text: Text::Cluster("🙂".into()), highlight: 0 });
+            content.push(Cell { text: Text::Cluster("".into()), highlight: 0 });
+        }
+        let make_screen = |origin: usize, count: usize| {
+            let mut screen = GridModel::new(count, 2).screen().clone();
+            let mut row: Vec<_> = "  123 ".chars().map(|ch| Cell { text: Text::Char(ch), highlight: 0 }).collect();
+            row.extend_from_slice(&content[origin..origin + count - gutter]);
+            screen.rows[0] = Arc::new(row);
+            screen
+        };
+        let old = make_screen(0, columns);
+        let new = make_screen(24, columns);
+        let reference = make_screen(0, 170);
+        let width = columns as f32 * cell.width;
+        let rect = Rect::new(0.0, 0.0, width, cell.height);
+        let band = Rect::new(gutter as f32 * cell.width, 0.0, (columns - gutter) as f32 * cell.width, cell.height);
+        let directory = std::env::temp_dir().join(format!("neolink-horizontal-pixels-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        for offset in [0.0, 1.0, 7.0, 63.0, 191.0, 24.0 * cell.width] {
+            let mut paths = Vec::new();
+            for cached in [false, true] {
+                renderer.begin_frame();
+                let mut scene = Scene::default();
+                let mut scratch = Vec::new();
+                let mut painter = Painter { scene: &mut scene, text: &mut text, queue: &gpu.queue, rows: &mut renderer.rows };
+                painter.scene.set_clip(Some(Rect::new(0.0, 0.0, band.x, rect.height)));
+                paint_row(&mut painter, &mut scratch, &old, &old.rows[0], 0, cell, false, false, 0.0, 0.0);
+                if cached {
+                    for slice in bands(&[0, 24], offset as f64, cell.width as f64, band.width) {
+                        let source = if slice.source == 0 { &old } else { &new };
+                        painter.scene.set_clip(Some(Rect::new(band.x + slice.start, 0.0, slice.end - slice.start, band.height)));
+                        paint_row(&mut painter, &mut scratch, source, &source.rows[0], 0, cell, false, false, slice.translation, 0.0);
+                    }
+                } else {
+                    painter.scene.set_clip(Some(band));
+                    paint_row(&mut painter, &mut scratch, &reference, &reference.rows[0], 0, cell, false, false, -offset, 0.0);
+                }
+                let path = directory.join(format!("{offset}-{cached}.png"));
+                capture::write_png(&gpu, &mut renderer, &scene, (width as u32, cell.height as u32), [0.1; 3], &path).unwrap();
+                paths.push(path);
+            }
+            assert_eq!(std::fs::read(&paths[0]).unwrap(), std::fs::read(&paths[1]).unwrap(), "pixel mismatch at {offset}; captures in {}", directory.display());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

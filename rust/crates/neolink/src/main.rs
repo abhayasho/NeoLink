@@ -10,6 +10,7 @@ mod explorer;
 mod frame;
 mod gitview;
 mod gpu;
+mod horizontal;
 mod icons;
 mod input;
 mod menu;
@@ -544,6 +545,7 @@ impl App {
             }
             shared
         };
+        shared.foreground.store(window.has_focus(), std::sync::atomic::Ordering::Release);
         frame::spawn(shared.clone(), gpu, presenter, text);
         let fullscreen = std::env::var("NEOLINK_WINDOW").as_deref() == Ok("fullscreen");
         if fullscreen {
@@ -767,10 +769,13 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::Occluded(occluded) => {
+                shared.visibility_epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 shared.state.lock().visible = !occluded;
                 shared.invalidate();
             }
             WindowEvent::Focused(focused) => {
+                shared.foreground.store(focused, std::sync::atomic::Ordering::Release);
+                shared.visibility_epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 self.with_workspace(|workspace, _| {
                     workspace.focused = focused;
                     if focused {

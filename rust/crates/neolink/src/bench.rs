@@ -142,6 +142,7 @@ struct Measurement {
     main_cpu: f64,
     frames_drawn: u64,
     warm_frames: u64,
+    foreground_valid: bool,
 }
 
 impl Runner {
@@ -158,6 +159,8 @@ impl Runner {
     fn measure(&self, body: impl FnOnce()) -> Measurement {
         self.state.keys.lock().clear();
         self.state.selections.lock().clear();
+        let visibility_epoch = self.shared.visibility_epoch.load(Ordering::Acquire);
+        let foreground_start = self.shared.foreground.load(Ordering::Acquire) && self.shared.state.lock().visible;
         let drawn_before = self.shared.frames.load(Ordering::Relaxed);
         let warm_before = self.shared.warm_frames.load(Ordering::Relaxed);
         self.shared.log.start();
@@ -183,7 +186,9 @@ impl Runner {
         let frames = self.shared.log.stop();
         let frames_drawn = self.shared.frames.load(Ordering::Relaxed) - drawn_before;
         let warm_frames = self.shared.warm_frames.load(Ordering::Relaxed) - warm_before;
-        Measurement { frames, seconds, cpu, timers, system_cpu, render_cpu, main_cpu, frames_drawn, warm_frames }
+        let foreground_valid = foreground_start && self.shared.foreground.load(Ordering::Acquire)
+            && self.shared.state.lock().visible && visibility_epoch == self.shared.visibility_epoch.load(Ordering::Acquire);
+        Measurement { foreground_valid, frames, seconds, cpu, timers, system_cpu, render_cpu, main_cpu, frames_drawn, warm_frames }
     }
 
     /// Frame statistics common to every scenario.
@@ -197,6 +202,8 @@ impl Runner {
         let cost: Vec<f64> = frames.iter().map(|frame| (frame.committed - frame.planned) * 1000.0).collect();
         let late = shown.iter().filter(|frame| frame.displayed - frame.expected > 0.5 * self.period).count();
         let mut report = Map::new();
+        report.insert("frontmostAndUnoccludedThroughout".into(), json!(measurement.foreground_valid));
+        report.insert("visibleTimingValid".into(), json!(measurement.foreground_valid && !shown.is_empty()));
         report.insert("seconds".into(), json!(round_to(measurement.seconds, 2)));
         report.insert("framesDrawn".into(), json!(measurement.frames_drawn));
         report.insert("framesRepeatedToKeepDisplayFast".into(), json!(measurement.warm_frames));
@@ -282,8 +289,11 @@ impl Runner {
     }
 
     /// Plays a scroll profile over the active pane and analyses every displayed frame.
-    fn scroll(&self, profile: &ScrollProfile) -> Value {
-        let Some((origin, cell_height, scale)) = with_workspace(&self.shared, |workspace| (workspace.scroll_lines(), workspace.cell.height as f64, workspace.scale() as f64)) else {
+    fn scroll(&self, profile: &ScrollProfile) -> Value { self.scroll_axis(profile, false) }
+
+    fn scroll_axis(&self, profile: &ScrollProfile, horizontal: bool) -> Value {
+        with_workspace(&self.shared, |w| w.benchmark_horizontal = horizontal);
+        let Some((origin, cell_height, scale)) = with_workspace(&self.shared, |workspace| (workspace.scroll_lines(), (if horizontal {workspace.cell.width} else {workspace.cell.height}) as f64, workspace.scale() as f64)) else {
             return json!({"error": "no workspace"});
         };
         let cell_points = cell_height / scale;
@@ -324,7 +334,7 @@ impl Runner {
                             (_, GesturePhase::Ended) => ScrollPhase::Ended,
                             _ => ScrollPhase::Changed,
                         };
-                        (self.post)(Injected::Scroll { time: sampled, delta_x: report.delta_x, delta_y: report.delta, phase });
+                        (self.post)(Injected::Scroll { time: sampled, delta_x: if horizontal { report.delta } else { report.delta_x }, delta_y: if horizontal { 0.0 } else { report.delta }, phase });
                     }
                     next += profile.interval;
                 }
@@ -523,10 +533,13 @@ impl Runner {
         match scenario {
             "editor-type" => self.editor_typing(),
             "editor-tabs" => self.editor_tabs(),
-            "editor-scroll" | "editor-crawl" | "editor-flick" => {
+            "editor-scroll" | "editor-crawl" | "editor-flick" | "editor-horizontal" | "editor-horizontal-crawl" | "editor-horizontal-flick" => {
                 // A long file, scrolled down from its top with the terminal's profiles.
-                let path = std::env::temp_dir().join(format!("neolink-bench-{}-long.rs", std::process::id()));
+                let horizontal = scenario.starts_with("editor-horizontal");
+                let extension = if horizontal { "txt" } else { "rs" };
+                let path = std::env::temp_dir().join(format!("neolink-bench-{}-{scenario}-long.{extension}", std::process::id()));
                 let text: String = (0..6000).map(|index| format!("    let value_{index} = compute(input_{index}, {index}); // line {index} of the scrolling benchmark\n")).collect();
+                let text = if horizontal { ("abcdefghijklmnopqrstuvwxyz0123456789".repeat(25) + "\n").repeat(100) } else { text };
                 if std::fs::write(&path, text).is_err() {
                     return json!({"error": "no file to scroll"});
                 }
@@ -534,11 +547,12 @@ impl Runner {
                 self.wait_for_selection(10.0);
                 sleep(1.0);
                 let profile = match scenario {
-                    "editor-crawl" => ScrollProfile::crawl(5.0, false),
-                    "editor-flick" => ScrollProfile::flick(false),
+                    "editor-crawl" | "editor-horizontal-crawl" => ScrollProfile::crawl(5.0, false),
+                    "editor-flick" | "editor-horizontal-flick" => ScrollProfile::flick(false),
                     _ => ScrollProfile::steady(720.0, 2.5, false),
                 };
-                let report = self.scroll(&profile);
+                let report = self.scroll_axis(&profile, horizontal);
+                with_workspace(&self.shared, |w| w.benchmark_horizontal = false);
                 let _ = std::fs::remove_file(&path);
                 report
             }
