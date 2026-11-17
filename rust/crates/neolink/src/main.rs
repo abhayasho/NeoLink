@@ -15,6 +15,7 @@ mod input;
 mod menu;
 #[cfg(target_os = "macos")]
 mod menubar;
+mod native;
 mod pdf;
 mod present;
 mod remote;
@@ -419,6 +420,10 @@ impl App {
             "c" => {
                 self.with_workspace(|workspace, _| workspace.copy());
             }
+            "x" => {
+                self.with_workspace(|workspace, _| workspace.cut());
+                self.invalidate();
+            }
             "a" => {
                 self.with_workspace(|workspace, _| workspace.select_all());
                 self.invalidate();
@@ -783,7 +788,9 @@ impl ApplicationHandler<UserEvent> for App {
                 if self.shortcut(&event.logical_key, event_loop) {
                     return;
                 }
-                if cfg!(target_os = "macos") && self.modifiers.super_key() {
+                // The native editor (no Neovim) also takes Command-arrows.
+                let native = self.with_workspace(|workspace, _| workspace.native_editor().is_some()) == Some(true);
+                if cfg!(target_os = "macos") && self.modifiers.super_key() && !native {
                     return;
                 }
                 if self.with_workspace(|workspace, _| workspace.dismiss_notice()) == Some(true) {
@@ -793,6 +800,12 @@ impl ApplicationHandler<UserEvent> for App {
                 let key = event.logical_key.clone();
                 let text = event.text.as_ref().map(|text| text.to_string());
                 if self.with_workspace(|workspace, _| workspace.key_for_chrome(&key, text.as_deref())) == Some(true) {
+                    shared.invalidate();
+                    return;
+                }
+                if native {
+                    let modifiers = self.modifiers;
+                    self.with_workspace(|workspace, _| workspace.native_key(&key, text.as_deref(), modifiers));
                     shared.invalidate();
                     return;
                 }

@@ -138,8 +138,8 @@ pub struct Terminal {
     last_history: usize,
     /// Pixels of wheel input not yet turned into whole lines for a full-screen program.
     program_remainder: f64,
-    /// Smooth scrolling in full-screen programs (vim, less, htop), opt-in with NEOLINK_PROGRAM_SMOOTH=1
-    /// until its movement detection stops over-counting (PLAN.md): the text slides by `target` minus
+    /// Smooth scrolling in full-screen programs (less, man, git log, htop; NEOLINK_PROGRAM_SMOOTH=0 turns
+    /// it off): the text slides by `target` minus
     /// what the program has been seen to scroll, while whole-line wheel events go to the program ahead
     /// of it. Lines are counted positive towards earlier content.
     program: ProgramScroll,
@@ -204,10 +204,18 @@ struct ProgramScroll {
     rows: Vec<u64>,
     /// The direction of the last movement (1 towards earlier content, -1 later).
     direction: i64,
+    /// When the text last moved (a gesture is at rest 150 ms after that).
+    moved_at: f64,
+    /// The program has been seen to scroll since the text was last at rest. Until then the text
+    /// does not slide: a program may treat the wheel as cursor movement (vim) and not scroll at all.
+    confirmed: bool,
 }
 
 impl ProgramScroll {
     fn offset(&self, height: f64) -> f64 {
+        if !self.confirmed {
+            return 0.0;
+        }
         (self.target - self.seen as f64 * height).clamp(-height, height)
     }
 }
@@ -567,7 +575,7 @@ impl Terminal {
         self.received += delta;
         let mode = self.mode();
         let full_screen = mode.contains(TermMode::ALT_SCREEN) || mode.intersects(TermMode::MOUSE_MODE);
-        if full_screen && std::env::var("NEOLINK_PROGRAM_SMOOTH").as_deref() == Ok("1") && (mode.intersects(TermMode::MOUSE_MODE) || mode.contains(TermMode::ALTERNATE_SCROLL)) {
+        if full_screen && std::env::var("NEOLINK_PROGRAM_SMOOTH").as_deref() != Ok("0") && (mode.intersects(TermMode::MOUSE_MODE) || mode.contains(TermMode::ALTERNATE_SCROLL)) {
             // Applied at the display's cadence in `build`, which sends the program whole lines.
             self.smoother.push(time, delta, period);
             return;
@@ -733,36 +741,70 @@ impl Terminal {
                 // Nothing expected: the screen as it is now is what the next movement is measured from.
                 program.rows = rows;
             } else if let Some(moved) = row_shift(&program.rows, &rows, program.sent - program.seen) {
+                if std::env::var_os("NEOLINK_DEBUG_PROGRAM").is_some() {
+                    eprintln!("program moved {moved}: sent {} seen {} -> {}", program.sent, program.seen, program.seen + moved);
+                }
                 program.seen += moved;
+                program.confirmed = true;
                 program.rows = rows;
             }
             let now = crate::clock::now();
             if step != 0.0 {
+                program.moved_at = now;
                 program.target += step;
-                program.direction = step.signum() as i64;
+                // The direction of travel changes only with real movement, not the smoother's
+                // sub-pixel corrections (which made the lead flip and the program scroll back and forth).
+                if step.abs() >= 0.5 {
+                    program.direction = step.signum() as i64;
+                }
                 // Never more than a line ahead of the program: the text follows the program's pace.
                 let seen = program.seen as f64 * height;
                 program.target = program.target.clamp(seen - height, seen + height);
-                // Whole lines go to the program a line ahead of the text, so its answer is there in time.
-                let wanted = (program.target / height).round() as i64 + program.direction;
+                // The program gets the line the text is moving into before the text gets there.
+                let lines = program.target / height;
+                let wanted = if program.direction >= 0 { lines.ceil() } else { lines.floor() } as i64;
                 if wanted != program.sent && (wanted - program.seen).abs() <= 2 {
                     let lines = wanted - program.sent;
                     program.sent = wanted;
                     program.sent_at = now;
                     program_send = lines;
+                    if std::env::var_os("NEOLINK_DEBUG_PROGRAM").is_some() {
+                        eprintln!("send {lines}: target {:.1} lines, sent {} seen {}", program.target / height, program.sent, program.seen);
+                    }
                 }
             }
             let program = &mut self.program;
             if program.sent != program.seen && now - program.sent_at > 0.15 {
-                // The program did not move (an end of its text): stop expecting it to.
+                // The program did not move (an end of its text, or it moves a cursor instead): stop
+                // expecting it to, and put the text back where the program has it.
+                if std::env::var_os("NEOLINK_DEBUG_PROGRAM").is_some() {
+                    eprintln!("gave up: sent {} seen {}", program.sent, program.seen);
+                }
                 program.sent = program.seen;
                 program.rows.clear();
+                program.target = program.seen as f64 * height;
             }
-            if !self.smoother.is_active() {
-                // At rest the text eases back onto the program's grid.
-                let seen = program.seen as f64 * height;
-                let rest = program.target - seen;
-                program.target = if rest.abs() < 0.5 { seen } else { seen + rest * 0.6 };
+            if !self.smoother.is_active() && now - program.moved_at > 0.15 {
+                // At rest: the program goes back to the line nearest the text (the line sent ahead is
+                // given back; the text is drawn relative to the program, so this does not show), then
+                // the last fraction of a line eases out.
+                let nearest = (program.target / height).round() as i64;
+                if program.sent == program.seen && program.seen != nearest {
+                    let lines = nearest - program.sent;
+                    program.sent = nearest;
+                    program.sent_at = now;
+                    program_send = lines;
+                } else if program.sent == program.seen {
+                    let seen = program.seen as f64 * height;
+                    let rest = program.target - seen;
+                    program.target = if rest.abs() < 0.5 { seen } else { seen + rest * 0.6 };
+                    if program.target == seen {
+                        if program.confirmed && std::env::var_os("NEOLINK_DEBUG_PROGRAM").is_some() {
+                            eprintln!("at rest: seen {}", program.seen);
+                        }
+                        program.confirmed = false;
+                    }
+                }
             }
             program_next = program.offset(height).abs() >= 0.5 || program.sent != program.seen;
         } else if self.program.target != 0.0 || self.program.seen != 0 {
@@ -882,7 +924,9 @@ impl Terminal {
         if program_next {
             return Next::Soon;
         }
-        match self.smoother.next_visible_change(display, period, self.scroll) {
+        // Inside a full-screen program the smoothed position is the program's, not the scrollback's.
+        let position = if full_screen { self.program.target } else { self.scroll };
+        match self.smoother.next_visible_change(display, period, position) {
             None => Next::Idle,
             Some(at) if at <= display + 1.5 * period => Next::Soon,
             Some(at) => Next::At(at),

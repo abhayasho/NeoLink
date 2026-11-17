@@ -88,6 +88,10 @@ pub struct Workspace {
     shown_selection: u64,
     /// One Neovim for every document tab, started with the first one.
     editor: Option<Editor>,
+    /// Native text editors for documents while Neovim is unavailable (the Swift app's fallback).
+    native: std::collections::HashMap<String, crate::native::NativeEditor>,
+    /// Neovim could not start (or `NEOLINK_NO_NVIM=1`): documents open in the native editor.
+    native_only: bool,
     pub explorer: Explorer,
     sidebar: Rect,
     notice: Option<String>,
@@ -213,6 +217,8 @@ impl Workspace {
             shown: 0,
             shown_selection: 0,
             editor: None,
+            native: std::collections::HashMap::new(),
+            native_only: std::env::var("NEOLINK_NO_NVIM").is_ok_and(|value| value == "1"),
             explorer: Explorer::new(project_directory()),
             sidebar: Rect::default(),
             notice: None,
@@ -502,6 +508,9 @@ impl Workspace {
         if self.editor.as_ref().is_some_and(|editor| !editor.has_exited()) {
             return true;
         }
+        if self.native_only {
+            return false;
+        }
         let Some(shared) = self.shared.upgrade() else { return false };
         match Editor::start(&shared, self.editor_grid.0, self.editor_grid.1) {
             Ok(editor) => {
@@ -509,8 +518,10 @@ impl Workspace {
                 true
             }
             Err(error) => {
-                self.notice = Some(error);
+                // Said once; documents then open in the native editor without asking Neovim again.
+                self.notice = Some(format!("{error} Files open in the built-in text editor instead."));
                 self.editor = None;
+                self.native_only = true;
                 false
             }
         }
@@ -522,7 +533,7 @@ impl Workspace {
             return;
         }
         if let Some(path) = self.tabs[index].document().map(str::to_string) {
-            if self.editor.as_ref().is_some_and(|editor| editor.is_modified(&path)) {
+            if self.doc_modified(&path) {
                 self.select(index);
                 self.closing = Some(Closing { path, buttons: Vec::new() });
                 return;
@@ -540,6 +551,11 @@ impl Workspace {
         let removed = self.tabs.remove(index);
         if let (Pane::Document { path, .. }, Some(editor)) = (&removed.pane, &self.editor) {
             editor.command("close", path);
+        }
+        if let Pane::Document { path, .. } = &removed.pane {
+            if !self.tabs.iter().any(|tab| tab.document() == Some(path.as_str())) {
+                self.native.remove(path);
+            }
         }
         if self.active > index || self.active >= self.tabs.len() {
             self.active = self.active.saturating_sub(1);
@@ -572,9 +588,21 @@ impl Workspace {
             if self.explorer.reveal_active {
                 self.explorer.reveal(std::path::Path::new(&path));
             }
-            if !crate::pdf::is_pdf(&path) && self.ensure_editor() {
-                if let Some(editor) = &mut self.editor {
-                    editor.select(&path);
+            if !crate::pdf::is_pdf(&path) {
+                if self.ensure_editor() {
+                    if let Some(editor) = &mut self.editor {
+                        editor.select(&path);
+                    }
+                } else if !self.native.contains_key(&path) {
+                    match crate::native::NativeEditor::open(&path, self.cell) {
+                        Ok(editor) => {
+                            if editor.read_only {
+                                self.notice = Some("This file opens read-only: it is larger than 8 MiB or not UTF-8 text.".into());
+                            }
+                            self.native.insert(path, editor);
+                        }
+                        Err(error) => self.notice = Some(error),
+                    }
                 }
             }
         }
@@ -984,12 +1012,21 @@ impl Workspace {
 
     /// Keys for the editor, in Neovim's notation (the active tab is a document).
     pub fn editor_input(&mut self, keys: &str) {
+        if let Some(editor) = self.native_editor() {
+            // Injected text: literal characters.
+            editor.insert(&keys.replace("<lt>", "<").replace("<CR>", "\n"));
+            return;
+        }
         if let Some(editor) = &self.editor {
             editor.input(keys);
         }
     }
 
     pub fn save_active(&mut self) {
+        if let Some(path) = self.active_document().filter(|path| self.native.contains_key(path)) {
+            self.save_native(&path);
+            return;
+        }
         if let (Some(path), Some(editor)) = (self.active_document().filter(|path| !crate::pdf::is_pdf(path)), &self.editor) {
             editor.command("save", &path);
             self.refresh_explorer_soon = true;
@@ -1002,6 +1039,22 @@ impl Workspace {
     }
 
     pub fn editor_action(&mut self, action: &str) {
+        if let Some(editor) = self.native_editor() {
+            match action {
+                "undo" => editor.undo(),
+                "redo" => editor.redo(),
+                "selectAll" => editor.select_all(),
+                "copy" => {
+                    if let Some(text) = editor.selected_text() {
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            let _ = clipboard.set_text(text);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         if let (true, Some(editor)) = (self.active_is_document(), &self.editor) {
             editor.action(action);
         }
@@ -1020,7 +1073,9 @@ impl Workspace {
             }
             return;
         }
-        if self.active_is_document() {
+        if let Some(editor) = self.native_editor() {
+            editor.insert(text);
+        } else if self.active_is_document() {
             if let Some(editor) = &self.editor {
                 editor.paste(text);
             }
@@ -1085,7 +1140,9 @@ impl Workspace {
             self.explorer.scroll_input(time, delta_y, phase, period);
             return;
         }
-        if self.active_is_document() {
+        if let Some(editor) = self.native_editor() {
+            editor.scroll_input(time, delta_y, phase == ScrollPhase::Began, period);
+        } else if self.active_is_document() {
             let (row, column) = self.pointer_cell();
             let path = self.active_document().unwrap_or_default();
             if let Some(editor) = &mut self.editor {
@@ -1142,6 +1199,9 @@ impl Workspace {
         }
         if let Some(part) = name.strip_prefix("git:") {
             return self.git.as_ref()?.control_rect(part).map(middle);
+        }
+        if let Some(index) = name.strip_prefix("tab:").and_then(|index| index.parse::<usize>().ok()) {
+            return self.tab_rects.get(index).copied().map(middle);
         }
         if let Some((rect, _)) = self.header_buttons.iter().find(|(_, action)| *action == name) {
             return Some(middle(*rect));
@@ -1278,8 +1338,52 @@ impl Workspace {
 
     /// Some document has changes that are not on disk.
     fn any_unsaved(&self) -> bool {
-        let Some(editor) = &self.editor else { return false };
-        self.tabs.iter().filter_map(|tab| tab.document()).any(|path| editor.is_modified(path))
+        self.tabs.iter().filter_map(|tab| tab.document()).any(|path| self.doc_modified(path))
+    }
+
+    /// The document has changes that are not on disk (in Neovim or the native editor).
+    fn doc_modified(&self, path: &str) -> bool {
+        self.editor.as_ref().is_some_and(|editor| editor.is_modified(path)) || self.native.get(path).is_some_and(|editor| editor.is_modified())
+    }
+
+    /// The native editor showing the active document, if that is how it is open.
+    pub fn native_editor(&mut self) -> Option<&mut crate::native::NativeEditor> {
+        if !self.active_is_document() || (self.agent.focused && self.agent.visible) || (self.dock.focused && self.dock.visible) {
+            return None;
+        }
+        let path = self.active_document()?;
+        self.native.get_mut(&path)
+    }
+
+    /// A key for the native editor. Returns `true` if it used the key.
+    pub fn native_key(&mut self, key: &winit::keyboard::Key, text: Option<&str>, modifiers: winit::keyboard::ModifiersState) -> bool {
+        match self.native_editor() {
+            Some(editor) => {
+                editor.key(key, text, modifiers);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cut (the native editor; Neovim cuts by its own means).
+    pub fn cut(&mut self) {
+        if let Some(text) = self.native_editor().and_then(|editor| editor.cut()) {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(text);
+            }
+        } else if self.keys_go_to_editor() {
+            self.editor_action("cut");
+        }
+    }
+
+    fn save_native(&mut self, path: &str) {
+        if let Some(editor) = self.native.get_mut(path) {
+            if let Err(error) = editor.save() {
+                self.notice = Some(error);
+            }
+            self.refresh_explorer_soon = true;
+        }
     }
 
     fn git_outcome(&mut self, outcome: crate::gitview::Outcome) {
@@ -1696,6 +1800,12 @@ impl Workspace {
                 if let Some(editor) = &self.editor {
                     editor.command("save", &closing.path);
                 }
+                self.save_native(&closing.path);
+                if self.native.get(&closing.path).is_some_and(|editor| editor.is_modified()) {
+                    // Not saved (changed on disk): keep the tab and say why.
+                    self.quitting = false;
+                    return;
+                }
                 self.force_close(index);
             }
             "discard" => self.force_close(index),
@@ -1715,10 +1825,7 @@ impl Workspace {
     /// Asks to quit. Returns `true` if nothing is unsaved; otherwise the first unsaved document asks
     /// what to do with it, and the app quits after the last answer (`TabsController.confirmClose`).
     pub fn request_quit(&mut self) -> bool {
-        let unsaved = match &self.editor {
-            Some(editor) => self.tabs.iter().filter_map(|tab| tab.document()).find(|path| editor.is_modified(path)).map(str::to_string),
-            None => None,
-        };
+        let unsaved = self.tabs.iter().filter_map(|tab| tab.document()).find(|path| self.doc_modified(path)).map(str::to_string);
         match unsaved {
             Some(path) => {
                 self.quitting = true;
@@ -2100,7 +2207,12 @@ impl Workspace {
         }
         if self.editor_pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
             let (row, column) = self.pointer_cell();
-            if let Some(editor) = &self.editor {
+            let pane = self.editor_pane;
+            if let Some(editor) = self.active_document().and_then(|path| self.native.get_mut(&path)) {
+                if pane.contains(x, y) {
+                    editor.mouse(x, y, clicks, false, false);
+                }
+            } else if let Some(editor) = &self.editor {
                 editor.mouse("press", row, column);
             }
             self.pressed_in = 3;
@@ -2337,6 +2449,10 @@ impl Workspace {
             }
             3 => {
                 let (row, column) = self.pointer_cell();
+                if let Some(editor) = self.active_document().and_then(|path| self.native.get_mut(&path)) {
+                    editor.mouse(x, y, 0, true, false);
+                    return true;
+                }
                 if let Some(editor) = &self.editor {
                     editor.mouse("drag", row, column);
                 }
@@ -2503,7 +2619,7 @@ impl Workspace {
             .iter()
             .map(|tab| match &tab.pane {
                 Pane::Terminal(terminal) => (terminal.title(), false, false),
-                Pane::Document { path, title } => (title.clone(), true, self.editor.as_ref().is_some_and(|editor| editor.is_modified(path))),
+                Pane::Document { path, title } => (title.clone(), true, self.doc_modified(path)),
             })
             .collect();
         // Files with the same name show the folder that tells them apart (`TabPresentation`).
@@ -2600,9 +2716,10 @@ impl Workspace {
 
     /// The editor's toolbar and footer (`CodeToolbar`, `CodeWorkspaceView`).
     fn draw_editor_chrome(&mut self, painter: &mut Painter, path: &str) {
-        let (filetype, diagnostics, mode, modified, servers) = match &self.editor {
-            Some(editor) => (editor.filetype(path), editor.diagnostics(path), editor.mode_label(), editor.is_modified(path), editor.servers(path)),
-            None => (String::new(), 0, "Insert", false, String::new()),
+        let (filetype, diagnostics, mode, modified, servers) = match (&self.editor, self.native.get(path)) {
+            (_, Some(native)) => (String::new(), 0, if native.read_only { "Read Only" } else { "Insert" }, native.is_modified(), String::new()),
+            (Some(editor), None) => (editor.filetype(path), editor.diagnostics(path), editor.mode_label(), editor.is_modified(path), editor.servers(path)),
+            (None, None) => (String::new(), 0, "Insert", false, String::new()),
         };
         self.shown_servers = servers.clone();
         let points = self.font_points;
@@ -2645,8 +2762,15 @@ impl Workspace {
         let footer = self.editor_footer;
         ui.fill(footer, theme::EDITOR_BACKGROUND);
         let middle = footer.y + footer.height * 0.5;
-        ui.text(&format!("Neovim \u{b7} {mode}"), footer.x + ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
-        let hints = if cfg!(target_os = "macos") { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   \u{2318}S  Save" } else { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   Ctrl+Shift+S  Save" };
+        let (status, hints) = match self.native.get(path) {
+            // The built-in editor (Neovim is not installed): no modes.
+            Some(native) => (
+                format!("Text Editor \u{b7} {}{}", native.cursor_label(), if native.read_only { " \u{b7} Read Only" } else { "" }),
+                if cfg!(target_os = "macos") { "\u{2318}Z  Undo   \u{b7}   \u{2318}S  Save" } else { "Ctrl+Z  Undo   \u{b7}   Ctrl+Shift+S  Save" },
+            ),
+            None => (format!("Neovim \u{b7} {mode}"), if cfg!(target_os = "macos") { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   \u{2318}S  Save" } else { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   Ctrl+Shift+S  Save" }),
+        };
+        ui.text(&status, footer.x + ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         ui.text_right(hints, footer.right() - ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         self.toolbar_buttons = buttons;
     }
@@ -2758,7 +2882,7 @@ impl Content for Workspace {
         }
         // Which pane to show: the active one, unless it is a document Neovim has not confirmed yet.
         let ready = match self.tabs.get(self.active).map(|tab| &tab.pane) {
-            Some(Pane::Document { path, .. }) => crate::pdf::is_pdf(path) || self.editor.as_ref().is_some_and(|editor| editor.can_show(path)),
+            Some(Pane::Document { path, .. }) => crate::pdf::is_pdf(path) || self.native.contains_key(path) || self.editor.as_ref().is_some_and(|editor| editor.can_show(path)),
             _ => true,
         };
         if ready {
@@ -2831,6 +2955,14 @@ impl Content for Workspace {
                 // The PDF itself is a native view over this pane; only its bars are drawn here.
                 chrome = Some(Some(path.clone()));
                 Next::Idle
+            }
+            Some(Pane::Document { path, .. }) if self.native.contains_key(path.as_str()) => {
+                let editor = self.native.get_mut(path.as_str()).expect("checked");
+                painter.scene.fill_rect(editor_pane, theme::EDITOR_BACKGROUND);
+                let next = editor.build(painter, editor_pane, focused, frame.display, period);
+                output = editor.revision();
+                chrome = Some(Some(path.clone()));
+                next
             }
             Some(Pane::Document { path, .. }) => {
                 let mut next = Next::Idle;
@@ -3032,11 +3164,11 @@ impl Content for Workspace {
                 Pane::Terminal(terminal) => {
                     signature.text(&terminal.title());
                     if index == self.shown {
-                        signature.add(terminal.scroll().to_bits());
+                        signature.add(terminal.scroll().to_bits()).add(terminal.program_position(self.cell.height as f64).to_bits());
                     }
                 }
                 Pane::Document { path, .. } => {
-                    signature.text(path).add(self.editor.as_ref().is_some_and(|editor| editor.is_modified(path)) as u64);
+                    signature.text(path).add(self.doc_modified(path) as u64);
                 }
             }
         }
