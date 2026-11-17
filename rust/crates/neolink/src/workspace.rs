@@ -4,6 +4,7 @@
 use crate::chrome::{faded, Ui};
 use crate::editor::Editor;
 use crate::icons::IconWeight;
+use crate::menu::{Action, Item, Menu};
 use crate::explorer::Explorer;
 use crate::frame::{Built, Content, FrameContext, FrameMarks, Next, Painter, Shared};
 use crate::render::Rect;
@@ -88,6 +89,10 @@ pub struct Workspace {
     /// Clickable parts of the header: `(where, what)`.
     header_buttons: Vec<(Rect, &'static str)>,
     hover_close: Option<usize>,
+    menu: Option<Menu>,
+    /// Clickable parts of the editor toolbar: `(where, what)`.
+    toolbar_buttons: Vec<(Rect, &'static str)>,
+    window: (f32, f32),
     pub focused: bool,
     selection: u64,
     marks: FrameMarks,
@@ -136,6 +141,9 @@ impl Workspace {
             plus_rect: Rect::default(),
             header_buttons: Vec::new(),
             hover_close: None,
+            menu: None,
+            toolbar_buttons: Vec::new(),
+            window: (size.0 as f32, size.1 as f32),
             focused: true,
             selection: 0,
             marks: FrameMarks::default(),
@@ -419,8 +427,121 @@ impl Workspace {
         }
     }
 
+    /// The middle of a named control, for synthetic presses (see `bench::Injected::Control`).
+    pub fn control_point(&self, name: &str) -> Option<(f32, f32)> {
+        let middle = |rect: Rect| (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+        if let Some(index) = name.strip_prefix("menu:") {
+            return self.menu.as_ref()?.item_rect(index.parse().ok()?).map(middle);
+        }
+        if let Some(rect) = self.explorer.control_rect(name) {
+            return Some(middle(rect));
+        }
+        self.toolbar_buttons.iter().find(|(_, what)| *what == name).map(|(rect, _)| middle(*rect))
+    }
+
+    /// A key for the chrome (an open menu, the filter field). Returns `true` if it was used.
+    pub fn key_for_chrome(&mut self, key: &winit::keyboard::Key, text: Option<&str>) -> bool {
+        if self.menu.is_some() {
+            if matches!(key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)) {
+                self.menu = None;
+            }
+            return true;
+        }
+        self.explorer.filter_key(key, text)
+    }
+
+    fn perform(&mut self, action: Action) {
+        match action {
+            Action::Editor(name) => self.editor_action(name),
+            Action::TextSize(points) => self.set_font_points(points),
+            Action::TextSizeBy(delta) => self.set_font_points(self.font_points + delta),
+            Action::ToggleCompact => self.explorer.toggle_compact(),
+            Action::ToggleHidden => self.explorer.toggle_hidden(),
+            Action::ToggleHideIgnored => {
+                self.explorer.hide_ignored = !self.explorer.hide_ignored;
+                self.explorer.mark_stale();
+            }
+            Action::ToggleReveal => self.explorer.reveal_active = !self.explorer.reveal_active,
+            Action::NewFile | Action::NewFolder => self.notice = Some("Creating files and folders is not available in this build yet.".into()),
+            Action::Nothing => {}
+        }
+    }
+
+    /// Saves the active document and runs it in a new terminal, as the Swift app's Run button does.
+    pub fn run_active(&mut self) {
+        let Some(path) = self.active_document() else { return };
+        let file = std::path::Path::new(&path);
+        let runner = match file.extension().and_then(|extension| extension.to_str()).unwrap_or("").to_lowercase().as_str() {
+            "py" => "python3",
+            "js" | "mjs" => "node",
+            "swift" => "swift",
+            "sh" => "bash",
+            "rb" => "ruby",
+            "lua" => "lua",
+            "go" => "go",
+            _ => {
+                self.notice = Some("There is no runner for this kind of file.".into());
+                return;
+            }
+        };
+        self.save_active();
+        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+        let directory = file.parent().map(|parent| parent.display().to_string()).unwrap_or_default();
+        let go = if runner == "go" { " run " } else { " " };
+        let command = format!("cd -- {} && {}{}{}\r", quote(&directory), quote(runner), go, quote(&path));
+        if let Some(shared) = self.shared.upgrade() {
+            if self.new_tab(&shared).is_ok() {
+                self.write(command.into_bytes());
+            }
+        }
+    }
+
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        if let Some(menu) = self.menu.take() {
+            if let Some(action) = menu.action_at(x, y) {
+                self.perform(action);
+            } else if menu.contains(x, y) {
+                self.menu = Some(menu);
+            }
+            return true;
+        }
+        if !self.explorer.contains(x, y) {
+            self.explorer.filter_focused = false;
+        }
+        if self.shown == self.active && self.active_is_document() {
+            if let Some((rect, what)) = self.toolbar_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
+                match what {
+                    "save" => self.save_active(),
+                    "run" => self.run_active(),
+                    "diagnostics" => self.editor_action("diagnostics"),
+                    "size" => {
+                        let mut items = vec![Item::entry("Increase Text Size  \u{2318}+", Action::TextSizeBy(1.0)), Item::entry("Decrease Text Size  \u{2318}\u{2212}", Action::TextSizeBy(-1.0)), Item::Separator, Item::entry("Reset to 13 pt  \u{2318}0", Action::TextSize(13.0)), Item::Separator];
+                        items.extend([10.0, 12.0, 13.0, 14.0, 16.0, 18.0, 20.0, 24.0].map(|size: f32| Item::toggle(&format!("{} pt", size as i32), Action::TextSize(size), size == self.font_points)));
+                        self.menu = Some(Menu::new(rect, items));
+                    }
+                    "code" => {
+                        self.menu = Some(Menu::new(rect, vec![
+                            Item::entry("Go to Definition", Action::Editor("definition")),
+                            Item::entry("Find References", Action::Editor("references")),
+                            Item::entry("Show Documentation", Action::Editor("hover")),
+                            Item::entry("Rename Symbol\u{2026}", Action::Editor("rename")),
+                            Item::entry("Code Actions\u{2026}", Action::Editor("codeAction")),
+                            Item::entry("Format Document", Action::Editor("format")),
+                            Item::Separator,
+                            Item::entry("Toggle Fold", Action::Editor("fold")),
+                            Item::entry("Fold All", Action::Editor("foldAll")),
+                            Item::entry("Unfold All", Action::Editor("unfoldAll")),
+                            Item::entry("Toggle Inlay Hints", Action::Editor("inlayHints")),
+                            Item::Separator,
+                            Item::note("No language server for this file"),
+                        ]));
+                    }
+                    _ => {}
+                }
+                return true;
+            }
+        }
         if let Some((_, action)) = self.header_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
             match action {
                 "files" => self.toggle_explorer(),
@@ -443,6 +564,20 @@ impl Workspace {
             match self.explorer.click(x, y) {
                 crate::explorer::Clicked::File(file) => self.open_document(&file),
                 crate::explorer::Clicked::Close => self.toggle_explorer(),
+                crate::explorer::Clicked::NewMenu(rect) => self.menu = Some(Menu::new(rect, vec![Item::entry("New File\u{2026}", Action::NewFile), Item::entry("New Folder\u{2026}", Action::NewFolder)])),
+                crate::explorer::Clicked::OptionsMenu(rect) => {
+                    self.menu = Some(Menu::new(rect, vec![
+                        Item::toggle("Project Tree", Action::Nothing, true),
+                        Item::note("Folder List"),
+                        Item::Separator,
+                        Item::toggle("Compact Folders", Action::ToggleCompact, self.explorer.compact()),
+                        Item::toggle("Reveal Active File", Action::ToggleReveal, self.explorer.reveal_active),
+                        Item::toggle("Hide Git-Ignored Files", Action::ToggleHideIgnored, self.explorer.hide_ignored),
+                        Item::Separator,
+                        Item::note("Follow Terminal"),
+                        Item::toggle("Show Hidden Files", Action::ToggleHidden, self.explorer.show_hidden()),
+                    ]))
+                }
                 crate::explorer::Clicked::Nothing => {}
             }
             return true;
@@ -483,6 +618,9 @@ impl Workspace {
     /// The pointer moved to `(x, y)`. Returns `true` if a hover highlight changed.
     pub fn pointer(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
+        if let Some(menu) = &mut self.menu {
+            return menu.pointer(x, y);
+        }
         let hover = self.tab_rects.iter().position(|rect| rect.contains(x, y));
         let hover_close = self.close_rects.iter().position(|rect| rect.contains(x, y));
         let mut changed = hover != self.hover || hover_close != self.hover_close;
@@ -667,6 +805,7 @@ impl Workspace {
             None => (String::new(), 0, "Insert", false),
         };
         let points = self.font_points;
+        let runnable = matches!(std::path::Path::new(path).extension().and_then(|extension| extension.to_str()).unwrap_or(""), "py" | "js" | "mjs" | "swift" | "sh" | "rb" | "lua" | "go");
         let mut ui = Ui { painter, scale: self.scale };
         let bar = self.toolbar;
         ui.fill(bar, theme::EDITOR_BACKGROUND);
@@ -678,22 +817,31 @@ impl Workspace {
         ui.text(&language, bar.x + ui.px(12.0), middle, 11.0, 500, false, theme::TEXT_SECONDARY);
         let gap = ui.px(8.0);
         let mut right = bar.right() - ui.px(12.0);
-        let save = ui.icon("square.and.arrow.down", 11.0, IconWeight::Medium, right - ui.px(7.0), middle, faded(theme::TEXT_SECONDARY, if modified { 1.0 } else { 0.45 }));
-        right -= save.max(ui.px(14.0)) + gap;
-        let run = ui.icon("play.fill", 11.0, IconWeight::Medium, right - ui.px(6.0), middle, faded(theme::TEXT_SECONDARY, 0.45));
-        right -= run.max(ui.px(12.0)) + gap;
-        right -= ui.text_right(&format!("{} pt", points as i32), right, middle, 11.0, 500, false, theme::TEXT_SECONDARY) + gap;
+        let mut buttons: Vec<(Rect, &'static str)> = Vec::new();
+        let area = |left: f32, right: f32| Rect::new(left - gap * 0.5, bar.y, right - left + gap, bar.height);
+        let save = ui.icon("square.and.arrow.down", 11.0, IconWeight::Medium, right - ui.px(7.0), middle, faded(theme::TEXT_SECONDARY, if modified { 1.0 } else { 0.45 })).max(ui.px(14.0));
+        buttons.push((area(right - save, right), "save"));
+        right -= save + gap;
+        let run = ui.icon("play.fill", 11.0, IconWeight::Medium, right - ui.px(6.0), middle, faded(theme::TEXT_SECONDARY, if runnable { 1.0 } else { 0.45 })).max(ui.px(12.0));
+        buttons.push((area(right - run, right), "run"));
+        right -= run + gap;
+        let size = ui.text_right(&format!("{} pt", points as i32), right, middle, 11.0, 500, false, theme::TEXT_SECONDARY);
+        buttons.push((area(right - size, right), "size"));
+        right -= size + gap;
         let code = ui.text_right("Code", right, middle, 11.0, 500, false, theme::TEXT_SECONDARY);
         let braces = ui.icon("curlybraces", 11.0, IconWeight::Medium, right - code - ui.px(10.0), middle, theme::TEXT_SECONDARY);
+        buttons.push((area(right - code - braces - ui.px(6.0), right), "code"));
         right -= code + braces + ui.px(6.0) + gap;
         let count = ui.text_right(&diagnostics.to_string(), right, middle, 11.0, 500, false, theme::TEXT_SECONDARY);
-        ui.icon("exclamationmark.circle", 11.0, IconWeight::Medium, right - count - ui.px(10.0), middle, theme::TEXT_SECONDARY);
+        let mark = ui.icon("exclamationmark.circle", 11.0, IconWeight::Medium, right - count - ui.px(10.0), middle, theme::TEXT_SECONDARY);
+        buttons.push((area(right - count - mark - ui.px(6.0), right), "diagnostics"));
         let footer = self.editor_footer;
         ui.fill(footer, theme::EDITOR_BACKGROUND);
         let middle = footer.y + footer.height * 0.5;
         ui.text(&format!("Neovim \u{b7} {mode}"), footer.x + ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         let hints = if cfg!(target_os = "macos") { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   \u{2318}S  Save" } else { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   Ctrl+Shift+S  Save" };
         ui.text_right(hints, footer.right() - ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+        self.toolbar_buttons = buttons;
     }
 
     /// The window's footer (`WorkspaceFooter`).
@@ -853,6 +1001,7 @@ impl Content for Workspace {
         }
         self.draw_notice(painter);
         self.draw_footer(painter);
+        self.window = (frame.size.0 as f32, frame.size.1 as f32);
         let mut next = next;
         if self.explorer.visible {
             let active_file = self.tabs.get(self.shown).and_then(Tab::document).map(str::to_string);
@@ -864,6 +1013,11 @@ impl Content for Workspace {
                 (Next::At(a), Next::Idle) | (Next::Idle, Next::At(a)) => Next::At(a),
                 (Next::Idle, Next::Idle) => Next::Idle,
             };
+        }
+        if let Some(mut menu) = self.menu.take() {
+            let mut ui = Ui { painter, scale: self.scale };
+            menu.draw(&mut ui, self.window);
+            self.menu = Some(menu);
         }
         let (scroll_lines, input_lines) = self.scroll_lines();
         self.marks = FrameMarks { scroll_lines, input_lines, output, selection: self.shown_selection, instances: 0 };
@@ -877,6 +1031,9 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
+        if let Some(menu) = &self.menu {
+            signature.add(0x4D454E55 ^ menu.items.len() as u64).add(menu.hover.map_or(u64::MAX, |index| index as u64)).add(menu.anchor.x.to_bits() as u64);
+        }
         for (index, tab) in self.tabs.iter().enumerate() {
             signature.add(tab.id);
             match &tab.pane {

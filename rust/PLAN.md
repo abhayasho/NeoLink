@@ -366,8 +366,15 @@ default text. Icons are the same SF Symbols, rasterised on macOS; Windows has st
 Known differences still open:
 - Header tools other than the explorer toggle only say that they are not available; the project menu, Agent
   launcher, connections sidebar and agent panel do not exist.
-- The filter field, the explorer's new/options menus, "Follow terminal", the Code menu, text-size menu, Run and
-  the toolbar's Save button are drawn but do nothing.
+- Working since 2026-11-17 (checked with synthetic presses and captures, `docs/milestone-2-menu-capture.png`): the
+  filter field (typing narrows loaded rows; Esc clears), the explorer options menu (Compact Folders, Hide
+  Git-Ignored Files, Show Hidden Files), the Code menu (sends the same editor actions as the Swift app), the
+  text-size menu, the toolbar's Save button and Run (same runner table and command as `TabsController`; the command
+  itself was not exercised by a test).
+- Still drawn but not working: New File / New Folder (the menu opens, the entries only show a notice), Folder
+  List, "Follow terminal", Reveal Active File (the option toggles, nothing follows it yet).
+- Menus are drawn by the app, not native `NSMenu`s, so they do not look like the Swift app's menus; the Code menu
+  always says there is no language server; Cmd-P does not focus the filter.
 - Rounded corners (filter field, buttons) are square; the terminal font is Menlo, not SF Mono; the status bar shows
   the project folder, not the shell's directory; tab titles of duplicate file names carry no parent folder; the
   tab strip does not scroll; panes cannot be resized by dragging; no native menus or context menus.
@@ -384,6 +391,8 @@ Known differences still open:
 
 ## 8. Log
 
+- 2026-11-17 (night): in-app popup menus and a text field; explorer filter and options, Code menu, text-size
+  menu, toolbar Save and Run now act. `controls` benchmark scenario presses named controls for captures.
 - 2026-11-17 (later): remembered screens for instant document switches (tested against real Neovim), live
   unsaved marker and close warning, Windows path spelling fixed after the first Windows run of the editor tests,
   explorer refresh and Git decorations. 68 tests; CI green on both systems for `821875e`.

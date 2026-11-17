@@ -27,6 +27,9 @@ pub enum Clicked {
     File(PathBuf),
     /// The pane's close button.
     Close,
+    /// The "new" and "options" menus, with the control they hang from.
+    NewMenu(Rect),
+    OptionsMenu(Rect),
     Nothing,
 }
 
@@ -96,6 +99,15 @@ pub struct Explorer {
     close_rect: Rect,
     collapse_rect: Rect,
     refresh_rect: Rect,
+    plus_rect: Rect,
+    options_rect: Rect,
+    filter_rect: Rect,
+    /// Text of the filter field, and whether it has the keyboard.
+    pub filter: String,
+    pub filter_focused: bool,
+    /// Explorer options (the Swift app's defaults).
+    pub hide_ignored: bool,
+    pub reveal_active: bool,
     git: Decorations,
     git_loaded: Arc<Mutex<Option<Decorations>>>,
     git_running: Arc<std::sync::atomic::AtomicBool>,
@@ -169,6 +181,13 @@ impl Explorer {
             close_rect: Rect::default(),
             collapse_rect: Rect::default(),
             refresh_rect: Rect::default(),
+            plus_rect: Rect::default(),
+            options_rect: Rect::default(),
+            filter_rect: Rect::default(),
+            filter: String::new(),
+            filter_focused: false,
+            hide_ignored: false,
+            reveal_active: true,
             git: Decorations::default(),
             git_loaded: Arc::new(Mutex::new(None)),
             git_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -243,10 +262,109 @@ impl Explorer {
         }
         if self.stale {
             self.stale = false;
-            self.rows = self.tree.rows();
+            let rows = self.tree.rows();
+            self.rows = self.filtered(rows);
             self.revision += 1;
             self.request_listings();
         }
+    }
+
+    /// Applies the filter text and the "hide ignored" option to the tree's rows: a row stays if its
+    /// name matches, or if something beneath it does (loaded branches only, as in the Swift app).
+    fn filtered(&self, rows: Vec<Row>) -> Vec<Row> {
+        let needle = self.filter.trim().to_lowercase();
+        let hide_ignored = self.hide_ignored;
+        if needle.is_empty() && !hide_ignored {
+            return rows;
+        }
+        let visible: Vec<bool> = rows.iter().map(|row| !(hide_ignored && self.git.status(&row.path) == Some(Status::Ignored))).collect();
+        let mut keep = vec![false; rows.len()];
+        for index in (0..rows.len()).rev() {
+            if !visible[index] {
+                continue;
+            }
+            let matches = needle.is_empty() || rows[index].label.to_lowercase().contains(&needle);
+            let has_kept_child = rows.get(index + 1).is_some_and(|next| next.depth > rows[index].depth) && (index + 1..rows.len()).take_while(|later| rows[*later].depth > rows[index].depth).any(|later| keep[later]);
+            keep[index] = matches || (!needle.is_empty() && has_kept_child);
+        }
+        // Hidden (ignored) folders take their contents with them.
+        let mut result = Vec::new();
+        let mut hidden_depth: Option<usize> = None;
+        for (index, row) in rows.into_iter().enumerate() {
+            if let Some(depth) = hidden_depth {
+                if row.depth > depth {
+                    continue;
+                }
+                hidden_depth = None;
+            }
+            if !visible[index] {
+                hidden_depth = Some(row.depth);
+                continue;
+            }
+            if keep[index] {
+                result.push(row);
+            }
+        }
+        result
+    }
+
+    pub fn control_rect(&self, name: &str) -> Option<Rect> {
+        match name {
+            "explorer-options" => Some(self.options_rect),
+            "explorer-new" => Some(self.plus_rect),
+            "explorer-filter" => Some(self.filter_rect),
+            "explorer-refresh" => Some(self.refresh_rect),
+            "explorer-collapse" => Some(self.collapse_rect),
+            _ => None,
+        }
+    }
+
+    /// The rows need recomputing (the filter or an option changed).
+    pub fn mark_stale(&mut self) {
+        self.stale = true;
+    }
+
+    pub fn compact(&self) -> bool {
+        self.tree.compact
+    }
+
+    pub fn show_hidden(&self) -> bool {
+        self.tree.show_hidden
+    }
+
+    pub fn toggle_compact(&mut self) {
+        self.tree.compact = !self.tree.compact;
+        self.stale = true;
+    }
+
+    pub fn toggle_hidden(&mut self) {
+        self.tree.show_hidden = !self.tree.show_hidden;
+        self.stale = true;
+    }
+
+    /// A key while the filter field has the keyboard. Returns `true` if it was used.
+    pub fn filter_key(&mut self, key: &winit::keyboard::Key, text: Option<&str>) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+        if !self.filter_focused {
+            return false;
+        }
+        match key {
+            Key::Named(NamedKey::Escape) => {
+                self.filter.clear();
+                self.filter_focused = false;
+            }
+            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) => self.filter_focused = false,
+            Key::Named(NamedKey::Backspace) => {
+                self.filter.pop();
+            }
+            _ => match text {
+                Some(text) if !text.chars().any(char::is_control) => self.filter.push_str(text),
+                _ => return true,
+            },
+        }
+        self.scroll = 0.0;
+        self.stale = true;
+        true
     }
 
     /// Reads the open folders and the Git status again (after a save, or when the window is activated).
@@ -290,6 +408,16 @@ impl Explorer {
         if self.close_rect.contains(x, y) {
             return Clicked::Close;
         }
+        self.filter_focused = self.filter_rect.contains(x, y);
+        if self.filter_focused {
+            return Clicked::Nothing;
+        }
+        if self.plus_rect.contains(x, y) {
+            return Clicked::NewMenu(self.plus_rect);
+        }
+        if self.options_rect.contains(x, y) {
+            return Clicked::OptionsMenu(self.options_rect);
+        }
         if self.collapse_rect.contains(x, y) {
             self.tree.collapse_all();
             self.stale = true;
@@ -328,7 +456,7 @@ impl Explorer {
 
     /// What decides the sidebar's pixels, apart from the active file.
     pub fn signature(&self) -> u64 {
-        self.revision ^ (self.drawn_scroll.to_bits().rotate_left(17)) ^ (self.hover.map_or(u64::MAX, |index| index as u64) << 40) ^ self.visible as u64
+        self.revision ^ (self.filter.len() as u64).rotate_left(50) ^ ((self.filter_focused as u64) << 58) ^ (self.drawn_scroll.to_bits().rotate_left(17)) ^ (self.hover.map_or(u64::MAX, |index| index as u64) << 40) ^ self.visible as u64
     }
 
     /// Draws the pane as the Swift app's `FileBrowserPane` and explorer cells do (sizes in points there).
@@ -366,9 +494,11 @@ impl Explorer {
         let bar_top = header.bottom() + line + ui.px(4.0);
         let bar_middle = bar_top + ui.px(12.0);
         let slot = ui.px(22.0);
+        self.plus_rect = Rect::new(rect.x + inset, bar_top, slot, ui.px(24.0));
         ui.icon("plus", 12.0, IconWeight::Regular, rect.x + inset + slot * 0.5, bar_middle, theme::TEXT_SECONDARY);
         let name = self.tree.root().file_name().and_then(|name| name.to_str()).unwrap_or("Macintosh HD").to_string();
         let mut right = rect.right() - inset;
+        self.options_rect = Rect::new(right - slot, bar_top, slot, ui.px(24.0));
         ui.icon("line.3.horizontal.decrease.circle", 12.0, IconWeight::Regular, right - slot * 0.5, bar_middle, theme::TEXT_SECONDARY);
         right -= slot + ui.px(8.0);
         self.refresh_rect = Rect::new(right - slot, bar_top, slot, ui.px(24.0));
@@ -386,7 +516,17 @@ impl Explorer {
         ui.fill(Rect::new(field.x + line, field.y + line, field.width - 2.0 * line, field.height - 2.0 * line), theme::rgb(0x161616));
         let field_middle = field.y + field.height * 0.5;
         let glass = ui.icon("magnifyingglass", 11.0, IconWeight::Regular, field.x + ui.px(9.0 + 6.0), field_middle, theme::TEXT_SECONDARY);
-        ui.text("Filter tree\u{2026}", field.x + ui.px(9.0) + glass.max(ui.px(12.0)) + ui.px(7.0), field_middle, 11.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
+        self.filter_rect = field;
+        let text_x = field.x + ui.px(9.0) + glass.max(ui.px(12.0)) + ui.px(7.0);
+        if self.filter.is_empty() && !self.filter_focused {
+            ui.text("Filter tree\u{2026}", text_x, field_middle, 11.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
+        } else {
+            let filter = self.filter.clone();
+            let width = ui.text(&filter, text_x, field_middle, 11.0, 400, false, theme::TEXT_PRIMARY);
+            if self.filter_focused {
+                ui.painter.scene.fill(text_x + width + line, field_middle - ui.px(7.0), line.max(2.0), ui.px(14.0), theme::ACCENT);
+            }
+        }
         ui.text_right(if cfg!(target_os = "macos") { "\u{2318}P" } else { "Ctrl+P" }, field.right() - ui.px(9.0), field_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
 
         // Rows (`ExplorerCellView`): chevron, icon or abbreviation, name, badge.

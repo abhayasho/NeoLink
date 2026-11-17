@@ -8,6 +8,7 @@ mod frame;
 mod gpu;
 mod icons;
 mod input;
+mod menu;
 mod present;
 mod render;
 mod spike;
@@ -405,6 +406,30 @@ impl ApplicationHandler<UserEvent> for App {
                 Injected::Keys(keys) => {
                     self.with_workspace(|workspace, _| workspace.editor_input(&keys));
                 }
+                Injected::Control(name) => {
+                    self.with_workspace(|workspace, _| {
+                        if let Some((x, y)) = workspace.control_point(&name) {
+                            workspace.pointer(x, y);
+                            workspace.click(x, y);
+                        } else {
+                            eprintln!("no control named {name}");
+                        }
+                    });
+                    if let Some(shared) = &self.shared {
+                        shared.invalidate();
+                    }
+                }
+                Injected::ChromeText(text) => {
+                    self.with_workspace(|workspace, _| {
+                        for character in text.chars() {
+                            let piece = character.to_string();
+                            workspace.key_for_chrome(&winit::keyboard::Key::Character(piece.as_str().into()), Some(&piece));
+                        }
+                    });
+                    if let Some(shared) = &self.shared {
+                        shared.invalidate();
+                    }
+                }
                 Injected::SelectTab { index, sent } => self.select_tab(index, sent),
                 Injected::Finished => event_loop.exit(),
             },
@@ -475,6 +500,13 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.with_workspace(|workspace, _| workspace.dismiss_notice()) == Some(true) {
                     shared.invalidate();
+                }
+                // A focused text field (the explorer's filter) or an open menu takes the key.
+                let key = event.logical_key.clone();
+                let text = event.text.as_ref().map(|text| text.to_string());
+                if self.with_workspace(|workspace, _| workspace.key_for_chrome(&key, text.as_deref())) == Some(true) {
+                    shared.invalidate();
+                    return;
                 }
                 if self.with_workspace(|workspace, _| workspace.active_is_document()) == Some(true) {
                     if let Some(keys) = input::neovim_keys(&event.logical_key, event.text.as_deref(), self.modifiers) {

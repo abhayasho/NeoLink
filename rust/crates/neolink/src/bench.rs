@@ -37,6 +37,11 @@ pub enum Injected {
     OpenDocument { path: String, sent: f64 },
     /// Keys for the editor in Neovim's notation.
     Keys(String),
+    /// Press a named control ("code", "size", "save", "run", "explorer-options", "explorer-new",
+    /// "explorer-filter", or "menu:<n>" for the n-th item of the open menu).
+    Control(String),
+    /// Text typed into whichever chrome field has the keyboard.
+    ChromeText(String),
     Finished,
 }
 
@@ -552,6 +557,24 @@ impl Runner {
                 report
             }
             "ui-tabs" => self.tabs(),
+            "controls" => {
+                // Presses the controls named in NEOLINK_CONTROLS ("code", "explorer-filter=src", ...), for
+                // captures and for checking that they do something.
+                sleep(1.5);
+                for step in std::env::var("NEOLINK_CONTROLS").unwrap_or_default().split(',').filter(|step| !step.is_empty()) {
+                    match step.split_once('=') {
+                        Some((control, text)) => {
+                            (self.post)(Injected::Control(control.to_string()));
+                            sleep(0.2);
+                            (self.post)(Injected::ChromeText(text.to_string()));
+                        }
+                        None => (self.post)(Injected::Control(step.to_string())),
+                    }
+                    sleep(0.5);
+                }
+                sleep(30.0);
+                json!({})
+            }
             "demo" => {
                 // Something to look at (used with NEOLINK_CAPTURE): styles, colours, wide and combined
                 // characters, a listing.
