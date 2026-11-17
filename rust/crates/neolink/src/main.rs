@@ -11,6 +11,7 @@ mod input;
 mod menu;
 mod present;
 mod render;
+mod search;
 mod spike;
 mod term;
 mod text;
@@ -192,7 +193,11 @@ impl App {
             }
             "q" => event_loop.exit(),
             "p" => {
-                self.with_workspace(|workspace, _| workspace.focus_filter());
+                self.with_workspace(|workspace, _| workspace.open_search(false));
+                self.invalidate();
+            }
+            "f" if modifiers.shift_key() => {
+                self.with_workspace(|workspace, _| workspace.open_search(true));
                 self.invalidate();
             }
             "b" => {
@@ -426,6 +431,11 @@ impl ApplicationHandler<UserEvent> for App {
                 Injected::ChromeText(text) => {
                     self.with_workspace(|workspace, _| {
                         for character in text.chars() {
+                            // "^" stands for Return in a scenario's text.
+                            if character == '^' {
+                                workspace.key_for_chrome(&winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter), None);
+                                continue;
+                            }
                             let piece = character.to_string();
                             workspace.key_for_chrome(&winit::keyboard::Key::Character(piece.as_str().into()), Some(&piece));
                         }

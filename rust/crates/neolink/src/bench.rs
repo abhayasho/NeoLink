@@ -566,7 +566,15 @@ impl Runner {
                         Some((control, text)) => {
                             (self.post)(Injected::Control(control.to_string()));
                             sleep(0.2);
-                            (self.post)(Injected::ChromeText(text.to_string()));
+                            // Text ending in "^" is typed, given time to be answered, then Return is pressed.
+                            match text.strip_suffix('^') {
+                                Some(typed) => {
+                                    (self.post)(Injected::ChromeText(typed.to_string()));
+                                    sleep(1.0);
+                                    (self.post)(Injected::ChromeText("^".into()));
+                                }
+                                None => (self.post)(Injected::ChromeText(text.to_string())),
+                            }
                         }
                         None => (self.post)(Injected::Control(step.to_string())),
                     }

@@ -106,6 +106,8 @@ pub struct Workspace {
     menu: Option<Menu>,
     /// The "New File" / "New Folder" sheet, while it is open.
     creation: Option<Creation>,
+    /// Quick Open or Find in Files, while it is open.
+    search: Option<crate::search::SearchSheet>,
     /// Clickable parts of the editor toolbar: `(where, what)`.
     toolbar_buttons: Vec<(Rect, &'static str)>,
     window: (f32, f32),
@@ -159,6 +161,7 @@ impl Workspace {
             hover_close: None,
             menu: None,
             creation: None,
+            search: None,
             toolbar_buttons: Vec::new(),
             window: (size.0 as f32, size.1 as f32),
             focused: true,
@@ -423,6 +426,9 @@ impl Workspace {
 
     /// A scroll event in device pixels over the pane.
     pub fn scroll(&mut self, time: f64, _delta_x: f64, delta_y: f64, phase: ScrollPhase) {
+        if self.scroll_search((delta_y as f32) * self.scale) {
+            return;
+        }
         let (cell, period) = (self.cell, self.period);
         if self.explorer.contains(self.pointer.0, self.pointer.1) {
             self.explorer.scroll_input(time, delta_y, phase, period);
@@ -461,6 +467,9 @@ impl Workspace {
                 _ => {}
             }
         }
+        if let Some((rect, _)) = self.header_buttons.iter().find(|(_, action)| *action == name) {
+            return Some(middle(*rect));
+        }
         if let Some(rect) = self.explorer.control_rect(name) {
             return Some(middle(rect));
         }
@@ -474,6 +483,11 @@ impl Workspace {
             if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.menu = None;
             }
+            return true;
+        }
+        if let Some(search) = &mut self.search {
+            let outcome = search.key(key, text);
+            self.search_outcome(outcome);
             return true;
         }
         if let Some(creation) = &mut self.creation {
@@ -492,6 +506,42 @@ impl Workspace {
             return true;
         }
         self.explorer.filter_key(key, text)
+    }
+
+    /// Opens Quick Open (`contents` false) or Find in Files.
+    pub fn open_search(&mut self, contents: bool) {
+        self.menu = None;
+        self.search = Some(crate::search::SearchSheet::new(self.explorer.root(), contents, self.shared.clone()));
+    }
+
+    pub fn search_is_open(&self) -> bool {
+        self.search.is_some()
+    }
+
+    /// Scrolls the search results. Returns `false` if no search is open.
+    pub fn scroll_search(&mut self, delta: f32) -> bool {
+        match &mut self.search {
+            Some(search) => {
+                search.scroll(delta);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn search_outcome(&mut self, outcome: crate::search::Outcome) {
+        match outcome {
+            crate::search::Outcome::Stay => {}
+            crate::search::Outcome::Close => self.search = None,
+            crate::search::Outcome::Open(path, line) => {
+                self.search = None;
+                self.open_document(&path);
+                if let (Some(line), Some(editor)) = (line, &self.editor) {
+                    // Typed after the switch is confirmed (the client holds input until then).
+                    editor.input(&format!("<C-o>{line}G<C-o>zz"));
+                }
+            }
+        }
     }
 
     /// Puts the keyboard in the explorer's filter field (Cmd-P).
@@ -613,6 +663,11 @@ impl Workspace {
 
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        if let Some(search) = &mut self.search {
+            let outcome = search.click(x, y);
+            self.search_outcome(outcome);
+            return true;
+        }
         if let Some(creation) = &self.creation {
             if creation.cancel.contains(x, y) {
                 self.creation = None;
@@ -668,11 +723,11 @@ impl Workspace {
         if let Some((_, action)) = self.header_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
             match action {
                 "files" => self.toggle_explorer(),
+                "quick-open" => self.open_search(false),
+                "find" => self.open_search(true),
                 // Quick Open, Find in Files, Source Control, connections, the agent panel and the
                 // agent launcher do not exist in this build yet (PLAN.md).
                 _ => self.notice = Some(format!("{} is not available in this build yet.", match action {
-                    "quick-open" => "Quick Open",
-                    "find" => "Find in Files",
                     "git" => "Source Control",
                     "connections" => "The connections sidebar",
                     "agent-panel" => "The agent panel",
@@ -741,6 +796,9 @@ impl Workspace {
     /// The pointer moved to `(x, y)`. Returns `true` if a hover highlight changed.
     pub fn pointer(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
+        if let Some(search) = &mut self.search {
+            return search.pointer(x, y);
+        }
         if let Some(menu) = &mut self.menu {
             return menu.pointer(x, y);
         }
@@ -1138,6 +1196,11 @@ impl Content for Workspace {
             };
         }
         self.draw_creation(painter);
+        if let Some(mut search) = self.search.take() {
+            let mut ui = Ui { painter, scale: self.scale };
+            search.draw(&mut ui, self.window);
+            self.search = Some(search);
+        }
         if let Some(mut menu) = self.menu.take() {
             let mut ui = Ui { painter, scale: self.scale };
             menu.draw(&mut ui, self.window);
@@ -1155,6 +1218,9 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
+        if let Some(search) = &self.search {
+            signature.add(0x53454152).add(search.signature());
+        }
         if let Some(creation) = &self.creation {
             signature.add(0x4E4557 ^ creation.is_directory as u64);
             for byte in creation.name.bytes() {

@@ -9,5 +9,6 @@ pub mod pacer;
 pub mod paths;
 pub mod profile;
 pub mod scroll;
+pub mod search;
 pub mod stats;
 pub mod tree;
