@@ -40,6 +40,10 @@ pub struct Editor {
     last_wheel: f64,
     /// The shift the last frame drew the text with, and the rows it showed.
     drawn_shift: f32,
+    /// Sideways wheel input not yet turned into whole columns, and the lock that keeps a gesture on
+    /// one axis (a vertical scroll never drifts sideways: each column redraws every row).
+    sideways: f64,
+    axis_lock: neolink_core::scroll::AxisLock,
     /// Wheel input received, in device pixels (for the benchmark).
     pub received: f64,
     /// The view's top as the last frame drew it, in device pixels from the top of the buffer.
@@ -122,7 +126,7 @@ impl Editor {
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, received: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, sideways: 0.0, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {
@@ -311,6 +315,38 @@ impl Editor {
     /// A wheel report of `delta` device pixels at grid cell `(row, column)`. With pixel scrolling the
     /// view's position moves by exactly that and Neovim is asked for the lines around it; otherwise whole
     /// lines go to Neovim.
+    /// A trackpad report with both axes: locked to the gesture's main axis, sideways movement goes to
+    /// Neovim as whole columns (wheel left/right), vertical movement as `scroll`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn scroll_both(&mut self, time: f64, delta_x: f64, delta_y: f64, phase: crate::term::ScrollPhase, scale: f64, period: f64, cell: CellMetrics, row: usize, column: usize, path: &str) {
+        use crate::term::ScrollPhase;
+        match phase {
+            ScrollPhase::Began => self.axis_lock.set_fingers_down(true, time),
+            ScrollPhase::Ended => self.axis_lock.set_fingers_down(false, time),
+            _ => {}
+        }
+        let momentum = matches!(phase, ScrollPhase::Momentum | ScrollPhase::MomentumEnded);
+        // The lock's thresholds are in points.
+        let scale = scale.max(1.0);
+        let (dx, dy) = self.axis_lock.filter(time, delta_x / scale, delta_y / scale, momentum);
+        let (dx, dy) = (dx * scale, dy * scale);
+        if dx != 0.0 {
+            self.sideways += dx;
+            let columns = (self.sideways / cell.width as f64).trunc();
+            if columns != 0.0 {
+                self.sideways -= columns * cell.width as f64;
+                // Fingers moving right show what is to the left.
+                let direction = if columns > 0.0 { "left" } else { "right" };
+                for _ in 0..columns.abs() as usize {
+                    let _ = self.client.input_mouse("wheel", direction, "", row, column);
+                }
+            }
+        }
+        if dy != 0.0 || dx == 0.0 {
+            self.scroll(time, dy, period, cell, row, column, path);
+        }
+    }
+
     pub fn scroll(&mut self, time: f64, delta: f64, period: f64, cell: CellMetrics, row: usize, column: usize, path: &str) {
         if self.smooth && self.shows(path) {
             // Fingers moving down show earlier lines.
@@ -366,6 +402,7 @@ impl Editor {
 
     pub fn end_scroll_gesture(&mut self) {
         self.wheel = 0.0;
+        self.sideways = 0.0;
         self.smoother.begin_gesture();
     }
 

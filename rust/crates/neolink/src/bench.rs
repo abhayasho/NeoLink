@@ -604,6 +604,17 @@ impl Runner {
                         sleep(0.5);
                         continue;
                     }
+                    if let Some(points) = step.strip_prefix("hscroll:").and_then(|points| points.parse::<f64>().ok()) {
+                        // A sideways gesture of this many points (positive: fingers to the right).
+                        for index in 0..12 {
+                            let phase = if index == 0 { ScrollPhase::Began } else { ScrollPhase::Changed };
+                            (self.post)(Injected::Scroll { time: clock::now(), delta_x: points / 12.0, delta_y: 0.0, phase });
+                            sleep(0.016);
+                        }
+                        (self.post)(Injected::Scroll { time: clock::now(), delta_x: 0.0, delta_y: 0.0, phase: ScrollPhase::Ended });
+                        sleep(0.6);
+                        continue;
+                    }
                     if let Some(points) = step.strip_prefix("scroll:").and_then(|points| points.parse::<f64>().ok()) {
                         // A short gesture of this many points at the pointer, in 12 reports.
                         for index in 0..12 {

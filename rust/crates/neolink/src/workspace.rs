@@ -1092,7 +1092,7 @@ impl Workspace {
                 if phase == ScrollPhase::Began {
                     editor.end_scroll_gesture();
                 }
-                editor.scroll(time, delta_y, period, cell, row, column, &path);
+                editor.scroll_both(time, _delta_x, delta_y, phase, self.scale as f64, period, cell, row, column, &path);
             }
         } else if let Some(terminal) = self.active() {
             terminal.scroll_input(time, delta_y, phase, cell, period);
