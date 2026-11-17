@@ -61,17 +61,18 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          path: assets
+          # Not "assets": that is the repository's own image folder in this checkout.
+          path: release-downloads
           merge-multiple: true
       - name: Attach the downloads to a draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          ls -la assets
+          ls -la release-downloads
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             notes="docs/releases/$TAG.md"
             [ -f "$notes" ] || notes=/dev/null
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "NeoLink ${TAG#v}" --notes-file "$notes"
           fi
-          gh release upload "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" release-downloads/* --repo "$GITHUB_REPOSITORY" --clobber
