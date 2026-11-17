@@ -191,6 +191,10 @@ impl App {
                 self.invalidate();
             }
             "q" => event_loop.exit(),
+            "p" => {
+                self.with_workspace(|workspace, _| workspace.focus_filter());
+                self.invalidate();
+            }
             "b" => {
                 self.with_workspace(|workspace, _| workspace.toggle_explorer());
                 self.invalidate();

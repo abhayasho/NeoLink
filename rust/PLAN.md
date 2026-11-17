@@ -369,10 +369,11 @@ Known differences still open:
 - Working since 2026-11-17 (checked with synthetic presses and captures, `docs/milestone-2-menu-capture.png`): the
   filter field (typing narrows loaded rows; Esc clears), the explorer options menu (Compact Folders, Hide
   Git-Ignored Files, Show Hidden Files), the Code menu (sends the same editor actions as the Swift app), the
-  text-size menu, the toolbar's Save button and Run (same runner table and command as `TabsController`; the command
-  itself was not exercised by a test).
-- Still drawn but not working: New File / New Folder (the menu opens, the entries only show a notice), Folder
-  List, "Follow terminal", Reveal Active File (the option toggles, nothing follows it yet).
+  text-size menu, the toolbar's Save button, Run (same runner table and command as `TabsController`; a Python
+  file ran and printed its output in a new shell tab), New File / New Folder (sheet with the Swift app's name
+  rules; a new file opens in a tab), Cmd-P (focuses the filter) and Reveal Active File.
+- Still drawn but not working: Folder List, "Follow terminal". New items are always created in the project
+  folder (the Swift app also offers "New File Here" on a row's context menu).
 - Menus are drawn by the app, not native `NSMenu`s, so they do not look like the Swift app's menus; the Code menu
   always says there is no language server; Cmd-P does not focus the filter.
 - Rounded corners (filter field, buttons) are square; the terminal font is Menlo, not SF Mono; the status bar shows
@@ -392,7 +393,7 @@ Known differences still open:
 ## 8. Log
 
 - 2026-11-17 (night): in-app popup menus and a text field; explorer filter and options, Code menu, text-size
-  menu, toolbar Save and Run now act. `controls` benchmark scenario presses named controls for captures.
+  menu, toolbar Save, Run, New File / New Folder, Cmd-P and Reveal Active File now act. `controls` benchmark scenario presses named controls for captures.
 - 2026-11-17 (later): remembered screens for instant document switches (tested against real Neovim), live
   unsaved marker and close warning, Windows path spelling fixed after the first Windows run of the editor tests,
   explorer refresh and Git decorations. 68 tests; CI green on both systems for `821875e`.

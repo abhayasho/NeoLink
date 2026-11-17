@@ -43,6 +43,20 @@ impl Tab {
     }
 }
 
+/// The sheet that asks for a new item's name (`LocalFileBrowserView`'s creation sheet).
+struct Creation {
+    directory: std::path::PathBuf,
+    is_directory: bool,
+    name: String,
+    cancel: Rect,
+    create: Rect,
+}
+
+/// `LocalFileOperations.validName`.
+fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty() && !name.contains('/') && !name.contains('\0') && name != "." && name != ".." && (cfg!(not(windows)) || !name.contains('\\'))
+}
+
 pub struct Workspace {
     shared: Weak<Shared>,
     tabs: Vec<Tab>,
@@ -90,6 +104,8 @@ pub struct Workspace {
     header_buttons: Vec<(Rect, &'static str)>,
     hover_close: Option<usize>,
     menu: Option<Menu>,
+    /// The "New File" / "New Folder" sheet, while it is open.
+    creation: Option<Creation>,
     /// Clickable parts of the editor toolbar: `(where, what)`.
     toolbar_buttons: Vec<(Rect, &'static str)>,
     window: (f32, f32),
@@ -142,6 +158,7 @@ impl Workspace {
             header_buttons: Vec::new(),
             hover_close: None,
             menu: None,
+            creation: None,
             toolbar_buttons: Vec::new(),
             window: (size.0 as f32, size.1 as f32),
             focused: true,
@@ -330,6 +347,10 @@ impl Workspace {
     fn reselect(&mut self) {
         self.selection += 1;
         if let Some(path) = self.active_document() {
+            // `onChange(of: activeFileURL)`: the tree follows the active file while the option is on.
+            if self.explorer.reveal_active {
+                self.explorer.reveal(std::path::Path::new(&path));
+            }
             if self.ensure_editor() {
                 if let Some(editor) = &mut self.editor {
                     editor.select(&path);
@@ -433,6 +454,13 @@ impl Workspace {
         if let Some(index) = name.strip_prefix("menu:") {
             return self.menu.as_ref()?.item_rect(index.parse().ok()?).map(middle);
         }
+        if let Some(creation) = &self.creation {
+            match name {
+                "sheet-create" => return Some(middle(creation.create)),
+                "sheet-cancel" => return Some(middle(creation.cancel)),
+                _ => {}
+            }
+        }
         if let Some(rect) = self.explorer.control_rect(name) {
             return Some(middle(rect));
         }
@@ -441,13 +469,98 @@ impl Workspace {
 
     /// A key for the chrome (an open menu, the filter field). Returns `true` if it was used.
     pub fn key_for_chrome(&mut self, key: &winit::keyboard::Key, text: Option<&str>) -> bool {
+        use winit::keyboard::{Key, NamedKey};
         if self.menu.is_some() {
-            if matches!(key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)) {
+            if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.menu = None;
             }
             return true;
         }
+        if let Some(creation) = &mut self.creation {
+            match key {
+                Key::Named(NamedKey::Escape) => self.creation = None,
+                Key::Named(NamedKey::Enter) => self.create_item(),
+                Key::Named(NamedKey::Backspace) => {
+                    creation.name.pop();
+                }
+                _ => {
+                    if let Some(text) = text.filter(|text| !text.chars().any(char::is_control)) {
+                        creation.name.push_str(text);
+                    }
+                }
+            }
+            return true;
+        }
         self.explorer.filter_key(key, text)
+    }
+
+    /// Puts the keyboard in the explorer's filter field (Cmd-P).
+    pub fn focus_filter(&mut self) {
+        self.explorer.visible = true;
+        self.explorer.filter_focused = true;
+    }
+
+    /// Creates what the sheet names; a new file is opened, as in the Swift app.
+    fn create_item(&mut self) {
+        let Some(creation) = self.creation.take_if(|creation| valid_name(&creation.name)) else { return };
+        let path = creation.directory.join(&creation.name);
+        let result = if creation.is_directory { std::fs::create_dir(&path) } else { std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map(|_| ()) };
+        match result {
+            Ok(()) => {
+                self.explorer.refresh();
+                if !creation.is_directory {
+                    self.open_document(&path);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => self.notice = Some("An item with that name already exists. Choose another name.".into()),
+            Err(error) => self.notice = Some(format!("Could not create {}: {error}", creation.name)),
+        }
+    }
+
+    fn draw_creation(&mut self, painter: &mut Painter) {
+        let Some(mut creation) = self.creation.take() else { return };
+        let mut ui = Ui { painter, scale: self.scale };
+        ui.fill(Rect::new(0.0, 0.0, self.window.0, self.window.1), [0, 0, 0, 90]);
+        let (width, height, pad) = (ui.px(360.0), ui.px(168.0), ui.px(24.0));
+        let sheet = Rect::new(((self.window.0 - width) * 0.5).round(), ui.px(34.0), width, height);
+        let line = ui.px(1.0).max(1.0);
+        ui.fill(Rect::new(sheet.x - line, sheet.y - line, width + 2.0 * line, height + 2.0 * line), theme::white(0.14));
+        ui.fill(sheet, theme::rgb(0x262626));
+        let left = sheet.x + pad;
+        let mut y = sheet.y + pad + ui.px(9.0);
+        let icon = ui.icon(if creation.is_directory { "folder.badge.plus" } else { "doc.badge.plus" }, 13.0, IconWeight::Semibold, left + ui.px(9.0), y, theme::TEXT_PRIMARY).max(ui.px(18.0));
+        ui.text(if creation.is_directory { "New Folder" } else { "New File" }, left + icon + ui.px(6.0), y, 13.0, 600, false, theme::TEXT_PRIMARY);
+        y += ui.px(28.0);
+        let directory = creation.directory.display().to_string();
+        let shown = ui.fit_middle(&directory, width - 2.0 * pad, 10.0, 400, false);
+        ui.text(&shown, left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
+        y += ui.px(16.0);
+        let field = Rect::new(left, y, width - 2.0 * pad, ui.px(22.0));
+        ui.fill(Rect::new(field.x - line, field.y - line, field.width + 2.0 * line, field.height + 2.0 * line), theme::white(0.18));
+        ui.fill(field, theme::rgb(0x1A1A1A));
+        let middle = field.y + field.height * 0.5;
+        if creation.name.is_empty() {
+            ui.text(if creation.is_directory { "Folder name" } else { "File name, e.g. main.py" }, field.x + ui.px(6.0), middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
+            ui.painter.scene.fill(field.x + ui.px(5.0), middle - ui.px(7.0), line.max(2.0), ui.px(14.0), theme::ACCENT);
+        } else {
+            let end = ui.text(&creation.name, field.x + ui.px(6.0), middle, 12.0, 400, false, theme::TEXT_PRIMARY);
+            ui.painter.scene.fill(field.x + ui.px(6.0) + end + line, middle - ui.px(7.0), line.max(2.0), ui.px(14.0), theme::ACCENT);
+        }
+        let button_y = sheet.bottom() - pad - ui.px(22.0);
+        let valid = valid_name(&creation.name);
+        let create_width = ui.measure("Create", 12.0, 500, false) + ui.px(24.0);
+        creation.create = Rect::new(sheet.right() - pad - create_width, button_y, create_width, ui.px(22.0));
+        ui.fill(creation.create, if valid { theme::rgb(0x2F6FDB) } else { theme::rgb(0x333333) });
+        ui.text("Create", creation.create.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, if valid { theme::rgb(0xFFFFFF) } else { theme::TEXT_SECONDARY });
+        let cancel_width = ui.measure("Cancel", 12.0, 500, false) + ui.px(24.0);
+        creation.cancel = Rect::new(creation.create.x - ui.px(8.0) - cancel_width, button_y, cancel_width, ui.px(22.0));
+        ui.fill(creation.cancel, theme::rgb(0x3A3A3A));
+        ui.text("Cancel", creation.cancel.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, theme::TEXT_PRIMARY);
+        self.creation = Some(creation);
+    }
+
+    fn begin_create(&mut self, is_directory: bool) {
+        self.creation = Some(Creation { directory: self.explorer.root().to_path_buf(), is_directory, name: String::new(), cancel: Rect::default(), create: Rect::default() });
     }
 
     fn perform(&mut self, action: Action) {
@@ -462,7 +575,8 @@ impl Workspace {
                 self.explorer.mark_stale();
             }
             Action::ToggleReveal => self.explorer.reveal_active = !self.explorer.reveal_active,
-            Action::NewFile | Action::NewFolder => self.notice = Some("Creating files and folders is not available in this build yet.".into()),
+            Action::NewFile => self.begin_create(false),
+            Action::NewFolder => self.begin_create(true),
             Action::Nothing => {}
         }
     }
@@ -498,6 +612,14 @@ impl Workspace {
 
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        if let Some(creation) = &self.creation {
+            if creation.cancel.contains(x, y) {
+                self.creation = None;
+            } else if creation.create.contains(x, y) {
+                self.create_item();
+            }
+            return true;
+        }
         if let Some(menu) = self.menu.take() {
             if let Some(action) = menu.action_at(x, y) {
                 self.perform(action);
@@ -1014,6 +1136,7 @@ impl Content for Workspace {
                 (Next::Idle, Next::Idle) => Next::Idle,
             };
         }
+        self.draw_creation(painter);
         if let Some(mut menu) = self.menu.take() {
             let mut ui = Ui { painter, scale: self.scale };
             menu.draw(&mut ui, self.window);
@@ -1031,6 +1154,12 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
+        if let Some(creation) = &self.creation {
+            signature.add(0x4E4557 ^ creation.is_directory as u64);
+            for byte in creation.name.bytes() {
+                signature.add(byte as u64);
+            }
+        }
         if let Some(menu) = &self.menu {
             signature.add(0x4D454E55 ^ menu.items.len() as u64).add(menu.hover.map_or(u64::MAX, |index| index as u64)).add(menu.anchor.x.to_bits() as u64);
         }
