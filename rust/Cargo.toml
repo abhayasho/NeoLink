@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/neolink-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+debug = 1
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
