@@ -436,18 +436,24 @@ impl NativeEditor {
         Ok(())
     }
 
-    /// A key. `command` is Command on macOS, Control elsewhere.
+    /// A key, with each platform's conventions: on macOS Command-arrows go to line and document
+    /// ends and Option-arrows move by word; elsewhere Control-arrows move by word and Control-Home/End
+    /// go to the document's ends.
     pub fn key(&mut self, key: &Key, text: Option<&str>, modifiers: ModifiersState) -> Effect {
         let command = if cfg!(target_os = "macos") { modifiers.super_key() } else { modifiers.control_key() };
+        // Command-arrows exist only on macOS (on Windows, Control-arrows are word movement).
+        let line_jump = cfg!(target_os = "macos") && modifiers.super_key();
         let word = if cfg!(target_os = "macos") { modifiers.alt_key() } else { modifiers.control_key() };
         let extend = modifiers.shift_key();
         let page = self.visible_lines().saturating_sub(1).max(1) as isize;
         let last = self.lines.len() - 1;
         let to = match key {
-            Key::Named(NamedKey::ArrowLeft) if command => Some((Position { column: 0, ..self.cursor }, false)),
-            Key::Named(NamedKey::ArrowRight) if command => Some((Position { column: self.line_length(self.cursor.line), ..self.cursor }, false)),
-            Key::Named(NamedKey::ArrowUp) if command => Some((Position::default(), false)),
-            Key::Named(NamedKey::ArrowDown) if command => Some((Position { line: last, column: self.line_length(last) }, false)),
+            Key::Named(NamedKey::ArrowLeft) if line_jump => Some((Position { column: 0, ..self.cursor }, false)),
+            Key::Named(NamedKey::ArrowRight) if line_jump => Some((Position { column: self.line_length(self.cursor.line), ..self.cursor }, false)),
+            Key::Named(NamedKey::ArrowUp) if line_jump => Some((Position::default(), false)),
+            Key::Named(NamedKey::ArrowDown) if line_jump => Some((Position { line: last, column: self.line_length(last) }, false)),
+            Key::Named(NamedKey::Home) if modifiers.control_key() || modifiers.super_key() => Some((Position::default(), false)),
+            Key::Named(NamedKey::End) if modifiers.control_key() || modifiers.super_key() => Some((Position { line: last, column: self.line_length(last) }, false)),
             Key::Named(NamedKey::ArrowLeft) if word => Some((self.word_left(self.cursor), false)),
             Key::Named(NamedKey::ArrowRight) if word => Some((self.word_right(self.cursor), false)),
             Key::Named(NamedKey::ArrowLeft) => Some(match self.selection().filter(|_| !extend) {
@@ -676,7 +682,9 @@ mod tests {
     fn selection_cut_and_paste() {
         let path = scratch("select.txt", b"alpha beta\ngamma\n");
         let mut editor = NativeEditor::open(&path, cell()).unwrap();
-        editor.key(&Key::Named(NamedKey::ArrowRight), None, ModifiersState::ALT);
+        // Word movement: Option on macOS, Control elsewhere.
+        let word = if cfg!(target_os = "macos") { ModifiersState::ALT } else { ModifiersState::CONTROL };
+        editor.key(&Key::Named(NamedKey::ArrowRight), None, word);
         editor.key(&Key::Named(NamedKey::ArrowDown), None, ModifiersState::SHIFT);
         assert_eq!(editor.selected_text().as_deref(), Some(" beta\ngamma"));
         let cut = editor.cut().unwrap();
