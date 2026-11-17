@@ -27,6 +27,8 @@ pub enum Action {
     /// Show this agent session in the panel.
     /// A saved connection's context-menu choice: what, the connection's identity.
     Connection(&'static str, String),
+    /// A choice in the remote file browser: what, the entry's name.
+    Remote(&'static str, String),
     AgentSession(u64),
     /// Switch the shown conversation's mode.
     AgentMode(String),

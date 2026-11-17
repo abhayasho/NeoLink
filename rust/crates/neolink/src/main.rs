@@ -16,6 +16,7 @@ mod menu;
 #[cfg(target_os = "macos")]
 mod menubar;
 mod present;
+mod remote;
 mod render;
 mod search;
 mod settings;
@@ -166,6 +167,29 @@ impl App {
                 eprintln!("cannot start a shell: {error}");
             }
         });
+        self.invalidate();
+    }
+
+    /// Shows the system's file panel if the workspace asked for one (without holding the workspace).
+    fn answer_folder_request(&mut self) {
+        let Some(kind) = self.with_workspace(|workspace, _| workspace.take_folder_request()).flatten() else { return };
+        match kind {
+            3 => {
+                if let Some(files) = rfd::FileDialog::new().pick_files() {
+                    self.with_workspace(|workspace, _| workspace.remote_chosen(files, false));
+                }
+            }
+            _ => {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    let folder = neolink_core::paths::canonical(&folder);
+                    self.with_workspace(|workspace, _| match kind {
+                        0 => workspace.set_launcher_directory(folder),
+                        1 => workspace.set_project(folder),
+                        _ => workspace.remote_chosen(vec![folder], true),
+                    });
+                }
+            }
+        }
         self.invalidate();
     }
 
@@ -596,6 +620,18 @@ impl ApplicationHandler<UserEvent> for App {
                             workspace.toggle_dock(name == "dock-bottom");
                             return;
                         }
+                        // Remote transfers without the system's file panel: "upload:<local path>" and
+                        // "download:<remote name>|<local folder>".
+                        if let Some(path) = name.strip_prefix("upload:") {
+                            workspace.remote_chosen(vec![std::path::PathBuf::from(path)], false);
+                            return;
+                        }
+                        if let Some((remote, folder)) = name.strip_prefix("download:").and_then(|rest| rest.split_once('|')) {
+                            workspace.remote_action("download", remote);
+                            workspace.take_folder_request();
+                            workspace.remote_chosen(vec![std::path::PathBuf::from(folder)], true);
+                            return;
+                        }
                         if name == "close-active" {
                             let index = workspace.active_index();
                             workspace.close_tab(index);
@@ -778,19 +814,14 @@ impl ApplicationHandler<UserEvent> for App {
                     shared.invalidate();
                 }
                 // "Choose Folder...": the system's panel, shown without holding the workspace.
-                if let Some(for_project) = self.with_workspace(|workspace, _| workspace.take_folder_request()).flatten() {
-                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                        let folder = neolink_core::paths::canonical(&folder);
-                        self.with_workspace(|workspace, _| if for_project { workspace.set_project(folder) } else { workspace.set_launcher_directory(folder) });
-                    }
-                    shared.invalidate();
-                }
+                self.answer_folder_request();
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
                 let pointer = self.pointer;
                 if self.with_workspace(|workspace, _| workspace.right_click(pointer.0, pointer.1)) == Some(true) {
                     shared.invalidate();
                 }
+                self.answer_folder_request();
             }
             WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
                 let pointer = self.pointer;

@@ -127,8 +127,13 @@ pub struct Workspace {
     dock: crate::dock::Dock,
     dock_rect: Rect,
     dragging_dock: bool,
-    /// The system's folder panel was asked for: `true` for a project, `false` for the launcher.
-    folder_request: Option<bool>,
+    /// The system's file panel was asked for: 0 a folder for the launcher, 1 a project folder, 2 a
+    /// folder to download a remote item into, 3 files to upload.
+    folder_request: Option<u8>,
+    /// Remote file browsers by `user@host:port`, shown in place of the project tree while an SSH tab of
+    /// that connection is selected.
+    remotes: std::collections::HashMap<String, crate::remote::RemoteBrowser>,
+    remote_shown: Option<String>,
     /// Recent projects, newest first, and the sheet that manages them.
     recent: Vec<std::path::PathBuf>,
     recent_sheet: Option<Vec<(Rect, String)>>,
@@ -224,6 +229,8 @@ impl Workspace {
             dock_rect: Rect::default(),
             dragging_dock: false,
             folder_request: None,
+            remotes: Default::default(),
+            remote_shown: None,
             recent: Vec::new(),
             recent_sheet: None,
             explorer_options: None,
@@ -564,14 +571,55 @@ impl Workspace {
         let Some(shared) = self.shared.upgrade() else { return };
         let id = self.next_id;
         self.next_id += 1;
-        match Terminal::spawn_program(&shared, self.grid.0, self.grid.1, self.cell, home_directory(), id, Some(("ssh".to_string(), connection.ssh_arguments()))) {
+        // The tab's ssh shares its connection, so the file browser needs no sign-in of its own.
+        let mut arguments = crate::remote::sharing_options(connection);
+        arguments.extend(std::env::var("NEOLINK_SSH_OPTIONS").map(|options| options.split_whitespace().map(str::to_string).collect::<Vec<_>>()).unwrap_or_default());
+        arguments.extend(connection.ssh_arguments());
+        match Terminal::spawn_program(&shared, self.grid.0, self.grid.1, self.cell, home_directory(), id, Some(("ssh".to_string(), arguments))) {
             Ok(mut terminal) => {
                 terminal.fallback_title = connection.name.clone();
-                terminal.remote = Some(format!("{}:{}", connection.address(), connection.port));
+                let address = format!("{}:{}", connection.address(), connection.port);
+                self.remotes.entry(address.clone()).or_insert_with(|| crate::remote::RemoteBrowser::new(connection.clone(), self.shared.clone()));
+                terminal.remote = Some(address);
                 self.tabs.push(Tab { id, pane: Pane::Terminal(terminal) });
                 self.select(self.tabs.len() - 1);
             }
             Err(error) => self.notice = Some(format!("Could not start ssh: {error}")),
+        }
+    }
+
+    fn remote_browser(&mut self) -> Option<&mut crate::remote::RemoteBrowser> {
+        let address = self.remote_shown.clone()?;
+        self.remotes.get_mut(&address)
+    }
+
+    fn remote_outcome(&mut self, outcome: crate::remote::Outcome) {
+        use crate::remote::Outcome;
+        match outcome {
+            Outcome::Nothing => {}
+            Outcome::Menu(menu) => self.menu = Some(menu),
+            Outcome::Choose(folder) => self.folder_request = Some(if folder { 2 } else { 3 }),
+            Outcome::Disconnect => {
+                if let Some(address) = self.remote_shown.take() {
+                    self.remotes.remove(&address);
+                }
+            }
+        }
+    }
+
+    /// One of the remote browser's row actions, by name.
+    pub fn remote_action(&mut self, what: &'static str, name: &str) {
+        self.perform(Action::Remote(what, name.to_string()));
+    }
+
+    /// Files chosen for upload, or the folder chosen for a download.
+    pub fn remote_chosen(&mut self, paths: Vec<std::path::PathBuf>, download: bool) {
+        if let Some(browser) = self.remote_browser() {
+            match (download, paths.first()) {
+                (true, Some(folder)) => browser.download_into(folder),
+                (false, Some(_)) => browser.upload(&paths),
+                _ => {}
+            }
         }
     }
 
@@ -614,7 +662,7 @@ impl Workspace {
     }
 
     /// "Choose Folder..." was pressed in the launcher (the caller shows the system's panel).
-    pub fn take_folder_request(&mut self) -> Option<bool> {
+    pub fn take_folder_request(&mut self) -> Option<u8> {
         self.folder_request.take()
     }
 
@@ -770,7 +818,7 @@ impl Workspace {
             Outcome::OpenLauncher => self.open_launcher(),
             Outcome::Hide => self.toggle_agent_panel(),
             Outcome::Menu(menu) => self.menu = Some(menu),
-            Outcome::ChooseFolder => self.folder_request = Some(false),
+            Outcome::ChooseFolder => self.folder_request = Some(0),
             Outcome::Launch { agent, directory, docked } => {
                 if !directory.is_dir() {
                     if let Some(launcher) = &mut self.launcher {
@@ -907,6 +955,12 @@ impl Workspace {
             self.connections.scroll(delta_y as f32);
             return;
         }
+        if self.explorer.visible && self.sidebar.contains(self.pointer.0, self.pointer.1) {
+            if let Some(browser) = self.remote_browser() {
+                browser.scroll(delta_y as f32);
+                return;
+            }
+        }
         if self.strip.contains(self.pointer.0, self.pointer.1) {
             // Either axis moves the tabs sideways.
             let delta = if _delta_x.abs() > delta_y.abs() { _delta_x } else { delta_y };
@@ -969,6 +1023,9 @@ impl Workspace {
         if let (Some(part), Some(closing)) = (name.strip_prefix("closing:"), &self.closing) {
             return closing.buttons.iter().find(|(_, what)| *what == part).map(|(rect, _)| middle(*rect));
         }
+        if let Some(part) = name.strip_prefix("remote:") {
+            return self.remote_shown.as_ref().and_then(|address| self.remotes.get(address))?.control_rect(part).map(middle);
+        }
         if let Some(part) = name.strip_prefix("connections:") {
             return self.connections.control_rect(part).map(middle);
         }
@@ -1002,6 +1059,12 @@ impl Workspace {
         if self.menu.is_some() {
             if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.menu = None;
+            }
+            return true;
+        }
+        if self.menu.is_none() && self.remote_browser().is_some_and(|browser| browser.prompting()) {
+            if let Some(browser) = self.remote_browser() {
+                browser.key(key, text);
             }
             return true;
         }
@@ -1326,6 +1389,13 @@ impl Workspace {
             self.connections_outcome(outcome);
             return opened;
         }
+        if self.explorer.visible && self.sidebar.contains(x, y) && self.remote_browser().is_some() {
+            let outcome = self.remote_browser().map(|browser| browser.click(x, y, true));
+            if let Some(outcome) = outcome {
+                self.remote_outcome(outcome);
+            }
+            return true;
+        }
         let Some((path, is_directory)) = self.explorer.row_under(x, y) else { return false };
         self.explorer.selected = Some(path.clone());
         self.explorer.focused = true;
@@ -1524,7 +1594,7 @@ impl Workspace {
                 self.explorer.mark_stale();
             }
             Action::ToggleReveal => self.explorer.reveal_active = !self.explorer.reveal_active,
-            Action::OpenProject => self.folder_request = Some(true),
+            Action::OpenProject => self.folder_request = Some(1),
             Action::Project(path) => {
                 if path.is_dir() {
                     self.set_project(path);
@@ -1538,6 +1608,12 @@ impl Workspace {
             Action::NewFile => self.begin_create(false),
             Action::NewFolder => self.begin_create(true),
             Action::File(what, path, is_directory) => self.file_action(what, path, is_directory),
+            Action::Remote(what, name) => {
+                let outcome = self.remote_browser().map(|browser| browser.perform(what, &name));
+                if let Some(outcome) = outcome {
+                    self.remote_outcome(outcome);
+                }
+            }
             Action::Connection(what, id) => match what {
                 "open" => {
                     if let Some(connection) = self.connections.find(&id) {
@@ -1655,6 +1731,13 @@ impl Workspace {
             return true;
         }
         self.connections.search_focused = false;
+        if self.explorer.visible && self.sidebar.contains(x, y) && self.remote_browser().is_some() {
+            let outcome = self.remote_browser().map(|browser| browser.click(x, y, false));
+            if let Some(outcome) = outcome {
+                self.remote_outcome(outcome);
+            }
+            return true;
+        }
         if self.over_divider(x, y) {
             self.dragging_divider = true;
             return true;
@@ -1828,6 +1911,13 @@ impl Workspace {
     /// copied into the folder under it (never replacing anything), elsewhere it is opened.
     pub fn drop_file(&mut self, path: &std::path::Path) {
         let (x, y) = self.pointer;
+        if self.explorer.visible && self.sidebar.contains(x, y) && self.remote_browser().is_some() {
+            // Dropped on the remote browser: uploaded into the folder it shows.
+            if let Some(browser) = self.remote_browser() {
+                browser.upload(&[path.to_path_buf()]);
+            }
+            return;
+        }
         if self.explorer.contains(x, y) {
             let target = self.explorer.drop_target(x, y);
             match neolink_core::files::copy_into(path, &target) {
@@ -2430,7 +2520,22 @@ impl Content for Workspace {
         self.draw_footer(painter);
         self.window = (frame.size.0 as f32, frame.size.1 as f32);
         let mut next = next;
-        if self.explorer.visible {
+        // While an SSH tab is shown, its remote files take the project tree's place.
+        self.remote_shown = self.tabs.get(self.shown).and_then(Tab::terminal).and_then(|terminal| terminal.remote.clone()).filter(|address| self.remotes.contains_key(address));
+        let fetched = self.remote_browser().and_then(|browser| browser.take_fetched());
+        if let Some(file) = fetched {
+            // A remote file opens as a read-only preview of its downloaded copy.
+            self.open_document(&file);
+            if let Some(editor) = &self.editor {
+                editor.input("<C-o>:setlocal readonly nomodifiable<CR>");
+            }
+        }
+        if self.explorer.visible && self.remote_shown.is_some() {
+            let (sidebar, scale) = (self.sidebar, frame.scale);
+            if let Some(browser) = self.remote_browser() {
+                browser.build(painter, sidebar, scale);
+            }
+        } else if self.explorer.visible {
             let active_file = self.tabs.get(self.shown).and_then(Tab::document).map(str::to_string);
             let sidebar = self.sidebar;
             let explorer_next = self.explorer.build(painter, sidebar, frame.scale, active_file.as_deref(), frame.display, period);
@@ -2519,6 +2624,9 @@ impl Content for Workspace {
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
         signature.add(self.strip_scroll.to_bits() as u64).add(self.connections.signature());
+        if let Some(browser) = self.remote_shown.as_ref().and_then(|address| self.remotes.get(address)) {
+            signature.add(0x53465450).add(browser.signature());
+        }
         if let Some((text, since)) = &self.tip {
             // The same text before and after its delay is a different picture.
             signature.add((crate::clock::now() >= since + 0.8) as u64 + 3).text(text).add(self.pointer.0.to_bits() as u64);
