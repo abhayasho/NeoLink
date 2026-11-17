@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/neolink-core"]
+members = ["crates/neolink-core", "crates/neolink"]
+exclude = ["spikes"]
 
 [workspace.package]
 version = "0.1.0"

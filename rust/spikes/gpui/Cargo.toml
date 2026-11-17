@@ -1,0 +1,17 @@
+[package]
+name = "spike-gpui"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.13" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.13" }
+
+[patch.crates-io]
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+
+[profile.release]
+debug = 1

@@ -3,8 +3,7 @@
 Living document for the Rust rebuild (branch `rust-rewrite`, directory `rust/`). The Swift app in `Sources/` stays the
 working product until this reaches parity; nothing here replaces or modifies it.
 
-Status line (update every milestone): **Milestone 0: toolchain missing, research and pure-logic groundwork only. Nothing
-has been compiled or run yet.**
+Status line (update every milestone): **Stack decided by a measured spike; milestone 1 (terminal skeleton) in progress.**
 
 ## 1. Why a rewrite, and what "better" has to mean
 
@@ -27,8 +26,46 @@ Targets for the Rust app on the same display:
 
 ## 2. Stack decision
 
-**Not final. The rule set by the task is a timeboxed spike, and the spike needs `cargo`, which is not installed yet.**
-What is recorded here is the research that needs no compiler, the leaning it produces, and what the spike must show.
+**Decided by the spike (16 Nov 2026): `winit` + `wgpu` with an own presenter and a render thread.** GPUI is not used.
+
+### Spike result
+
+Two programs drawing the same 160 x 50 monospace grid, changing one row on a timer (`sparse`: every 90-250 ms,
+`dense`: every 33 ms) or every frame (`motion`). Each logs when the model changed, when the frame was committed and
+when the drawable's presented handler says it reached the display. M2 Max, built-in 120 Hz panel, on battery, 7-8 s
+per run, one run per cell (the differences are far outside run-to-run noise; they are not a statistical study).
+`spikes/gpui` holds the GPUI program and the renderer patch; `SPIKE_MODE=... neolink --spike` is the other.
+
+| Change to displayed, p50 / p95 (ms) | Own presenter | GPUI as shipped (`CAMetalDisplayLink`) | GPUI forced to `nextDrawable()` |
+| --- | --- | --- | --- |
+| Full screen, sparse | **7.7 / 11.3** | 19.7 / 24.5 | 15.2 / 18.4 |
+| Full screen, dense | **7.7 / 9.4** | 20.8 / 24.9 | 11.3 / 15.6 |
+| Windowed, sparse | 22.6 / 27.1 | 49.3 / 49.4 | 24.3 / 28.9 |
+| Windowed, dense | 22.2 / 26.8 | 45.7 / 49.9 | 24.8 / 30.2 |
+| Change to commit (waiting for a tick, drawing), p50 | 1.6-2.4 | 5.3-9.2 | 6.1-8.9 |
+| Motion, full screen: commit to displayed p50; refreshes without a frame | 6.2; 7 of 1162 | 14.5; 24 of 1109 | 16.1; 7 of 1048 |
+| Motion, windowed: commit to displayed p50; refreshes without a frame | 20.0; 7 of 1159 | 40.3; 0 of 1161 | 27.0; 0 of 1164 |
+
+The refreshes without a frame are at the start of each run in all three (the first second after the window appears).
+An earlier own-presenter run of full screen sparse, before the pacer learned the commit margin, measured 4.9 / 7.2.
+
+What the spike established beyond the table:
+
+- **Where latency comes from on this system.** The compositor latches what was committed before a refresh and shows
+  it a fixed number of refreshes later. For a window that number is two (commit to display is never under 16.7 ms).
+  In native full screen with the window being one opaque Metal layer it is zero: the layer is scanned out directly,
+  and a frame committed 2.7 ms or more before a refresh is on the display at that refresh. The Swift app composites a
+  transparent Metal overlay over native views, which is one reason it measured 11-14 ms from frame preparation to
+  display in full screen. A single opaque layer for the whole window is therefore a design rule here, not a detail.
+- **GPUI's default path costs three to five refreshes** on this machine (commit to display 14.5 ms in full screen,
+  40 ms windowed), and about half of its sparse frames report no display time at all. Forcing its older path helps,
+  but frames still start at a display-link tick on the main thread (6-9 ms after the change), and continuous motion
+  settles one to two refreshes behind (a standing queue).
+- **Starting the frame when the change arrives** instead of at the next tick is worth about 4-6 ms by itself.
+- Windowed latency (about 22 ms) is the system's; neither stack can do better there with VSync on.
+
+Decision rule from before the spike: GPUI wins if it is within 2 ms. It is 3.6 ms (best case, dense full screen with
+its legacy path) to 27 ms behind, and each better GPUI number needs a patched renderer.
 
 ### Verified facts (crates.io and upstream sources, 16 Nov 2026)
 
@@ -63,31 +100,13 @@ winit + wgpu:
 - Everything else (widgets, layout, IME plumbing, menus) is ours to build. `muda` (native menus, context menus) and
   `rfd` (file dialogs) cover the native pieces on both systems.
 
-### Leaning: winit + wgpu with an own presenter and render thread
+### Why the other reasons still hold
 
-1. The complaint is latency, and the two things that set it (when a frame starts, how it is presented) are exactly
-   what GPUI does not let an application control. GPUI's current macOS path is the one this project already measured
-   as slower.
-2. The measurement harness needs the drawable (presented handler) and synthetic input with real timestamps. With GPUI
-   that means carrying a patched fork of a framework whose only current distribution is a monorepo or a third-party
-   snapshot.
-3. A render thread that sleeps until something changes gives idle cost and main-thread independence by construction.
-4. One WGSL renderer and one text stack for both systems means the Windows build, which cannot be run here, shares
-   nearly all of its drawing code with the verified macOS build.
-
-The cost is real: a UI toolkit (lists, text fields, panels, split views) has to be written, and accessibility and IME
-start from winit's level. GPUI would give those for free.
-
-### What the spike must show (once `cargo` exists)
-
-Two minimal programs drawing the same 200 x 60 text grid, typing and scrolling, each for at most half a day:
-- `spike-wgpu`: winit + wgpu + own `CAMetalLayer` presenter.
-- `spike-gpui`: `gpui-pre`, with a local patch that logs presented times if that can be done inside the timebox.
-
-Decision table: key to presented (p50, p95), first scroll motion, held frames in a 3 s scroll, idle CPU, clean build
-time, whether `cargo check --target x86_64-pc-windows-msvc` passes. If GPUI is within 2 ms of the own presenter on the
-latency rows, GPUI wins on productivity and this section is rewritten. If the own presenter is not measurably better
-the leaning above is wrong and will be recorded as such.
+The measurement harness needs the drawable (presented handler) and control over when a frame starts; with GPUI both
+mean carrying a patched fork of a framework whose only current distribution is a monorepo or a third-party snapshot.
+One WGSL renderer and one text stack serve both systems, so the Windows build, which cannot be run here, shares its
+drawing code with the verified macOS build. The cost is real: lists, text fields, panels and split views are ours to
+write, and accessibility and IME start from winit's level.
 
 ### Confirmed building blocks (versions as of today; all permissively licensed)
 
@@ -101,7 +120,7 @@ the leaning above is wrong and will be recorded as such.
 | ACP | `agent-client-protocol` | 5.3.0 | Apache-2.0; to be checked against ACP v1 stdio behaviour of the Swift client |
 | Menus / dialogs | `muda` / `rfd` | 0.21.2 / 0.18.0 | native on both systems |
 
-## 3. Architecture (as designed; adjust after the spike)
+## 3. Architecture
 
 ```
 main thread (winit)            render thread                      I/O threads
@@ -117,8 +136,11 @@ main thread (winit)            render thread                      I/O threads
 - **Presentation.** macOS: own `CAMetalLayer` (2 drawables, VSync on), `nextDrawable()` on the render thread, present
   on commit, presented handler feeds the pacer and the harness. Windows: wgpu surface, FIFO, frame latency 1.
 - **Pacing (`neolink-core::pacer`).** At most one frame per refresh slot. If the slot for the next refresh is free when
-  something changes, the frame starts immediately; otherwise it starts at the slot boundary. Nothing is presented when
-  nothing changed.
+  something changes, the frame starts immediately; otherwise it starts when that slot closes. Nothing is presented when
+  nothing changed. The pipeline depth (0 in full screen, 2 windowed) and the commit margin (2.7 ms and 0.3 ms) are
+  learned from displayed times, not assumed.
+- **One opaque layer.** Everything in the window is drawn by the one renderer into one opaque `CAMetalLayer`; no
+  native views or transparent overlays over it, so full screen keeps direct scan-out.
 - **Scrolling (`neolink-core::scroll`).** Deltas reach the next frame. Smoothing is off for input at the display's
   rate. The only smoothing is *spreading*: when reports are measurably slower than the display (60 Hz finger on a
   120 Hz panel, or a creeping finger at one point every 40-250 ms) an event's distance is released linearly over the
@@ -179,6 +201,8 @@ has run, Windows support is "designed for, not compiled".
 
 ## 7. Log
 
+- 2026-11-16 (later): toolchain installed (Rust 1.100). Core crate: 33 tests pass. Stack spike run and decided
+  (section 2). Pacer reworked around what the spike measured (latch, depth, learned margin).
 - 2026-11-16: `cargo`, `rustc`, `rustup` not installed; install requested. Read the specification documents and the
   Swift benchmark; checked crate versions, licences and GPUI's current structure and presentation path; created the
   `rust-rewrite` branch as a separate worktree (the main checkout's branch is untouched); wrote this plan and the
