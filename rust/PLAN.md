@@ -441,6 +441,12 @@ scenario to run with the screen on.
 
 ## 8. Log
 
+- 2026-11-17 (afternoon): editor scrolling made even. Measured full screen, synthetic input: steady scroll uneven
+  frames 196/302 -> 2/303, jerk p95 24 px -> 0; slow scroll bursts 73 -> 0; flick on par with the terminal's
+  (42/114 vs 39/123, the rest is whole-point momentum input). Two causes fixed: wheel input now goes through the
+  frame-paced smoother, and Neovim's view notice is applied with the redraw it describes, with two hidden lines
+  either side instead of one. Full-screen terminal programs (less, vim): pixel scrolling written but off by default
+  (NEOLINK_PROGRAM_SMOOTH=1): its row-movement detection still over-counts (63 lines seen for 4.7 asked).
 - 2026-11-17 (early morning): the user's feature list became the floor (section 6c). Added: native ACP
   conversations (new `neolink-acp` crate, tested against `scripts/fixtures/acp-agent.py`), terminal under or beside
   the code, settings and recent projects, tab folder context / scrolling / tooltips, terminal selection and copy,

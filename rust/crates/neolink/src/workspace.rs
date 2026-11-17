@@ -1017,7 +1017,7 @@ impl Workspace {
                 if phase == ScrollPhase::Began {
                     editor.end_scroll_gesture();
                 }
-                editor.scroll(delta_y, cell, row, column, &path);
+                editor.scroll(time, delta_y, period, cell, row, column, &path);
             }
         } else if let Some(terminal) = self.active() {
             terminal.scroll_input(time, delta_y, phase, cell, period);
@@ -2234,7 +2234,7 @@ impl Workspace {
     /// The shown pane's scroll position and received input, in lines.
     pub fn scroll_lines(&self) -> (f64, f64) {
         match self.tabs.get(self.shown).and_then(Tab::terminal) {
-            Some(terminal) => (terminal.scroll() / self.cell.height as f64, terminal.received / self.cell.height as f64),
+            Some(terminal) => ((terminal.scroll() + terminal.program_position(self.cell.height as f64)) / self.cell.height as f64, terminal.received / self.cell.height as f64),
             // A document: fingers moving down show earlier lines, so the position counts downwards.
             None => match (&self.editor, self.active_is_document()) {
                 (Some(editor), true) => (-editor.drawn_position / self.cell.height as f64, editor.received / self.cell.height as f64),
@@ -2667,12 +2667,13 @@ impl Content for Workspace {
                 next
             }
             Some(Pane::Document { path, .. }) => {
+                let mut next = Next::Idle;
                 if let Some(editor) = &mut self.editor {
-                    editor.build(painter, editor_pane, focused, path);
+                    next = editor.build(painter, editor_pane, focused, path, frame.display, period);
                     output = editor.drawn_generation();
                 }
                 chrome = Some(Some(path.clone()));
-                Next::Idle
+                next
             }
             None => Next::Idle,
         };

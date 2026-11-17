@@ -551,6 +551,23 @@ impl Runner {
                 self.select_shell();
                 self.typing(6, 1.6)
             }
+            "program-scroll" | "program-crawl" | "program-flick" => {
+                // Scrolling inside a full-screen program (less), which receives whole lines.
+                self.select_shell();
+                self.type_text("clear; seq 1 6000 | less\r", 0.01);
+                sleep(1.5);
+                let profile = match scenario {
+                    "program-flick" => ScrollProfile::flick(false),
+                    "program-crawl" => ScrollProfile::crawl(5.0, false),
+                    _ => ScrollProfile::steady(720.0, 2.5, false),
+                };
+                let report = self.scroll(&profile);
+                self.type_text("q", 0.01);
+                sleep(0.3);
+                (self.post)(Injected::Text { bytes: b"clear\r".to_vec(), sent: clock::now(), measure: false });
+                sleep(0.3);
+                report
+            }
             "terminal-scroll" | "terminal-flick" | "terminal-swell" | "terminal-crawl" | "terminal-steady60" | "terminal-reversal" => {
                 self.select_shell();
                 self.fill_scrollback();

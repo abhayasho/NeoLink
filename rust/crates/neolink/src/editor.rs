@@ -4,7 +4,7 @@
 //! as it was when the selection was requested stays up (see `neolink-nvim`'s client for why input needs
 //! no such care here: the client holds it).
 
-use crate::frame::{Painter, Shared};
+use crate::frame::{Next, Painter, Shared};
 use crate::render::{Instance, Rect};
 use crate::text::CellMetrics;
 use crate::theme::{self, Rgba};
@@ -32,6 +32,8 @@ pub struct Editor {
     /// Pixel scrolling: the view's top in pixels from the top of the buffer, which buffer that is for,
     /// the top line last asked of Neovim, and when the wheel last moved.
     smooth: bool,
+    /// Wheel input is applied at the display's cadence, as the terminal's and the explorer's.
+    smoother: neolink_core::scroll::ScrollSmoother,
     position: f64,
     position_path: String,
     commanded_top: u64,
@@ -48,7 +50,10 @@ pub struct Editor {
 }
 
 /// Rows Neovim draws beyond what the pane shows, for pixel scrolling.
-const EXTRA_ROWS: usize = 2;
+const EXTRA_ROWS: usize = 4;
+/// Lines Neovim's window starts above the visible text: half of the extra rows, so the text can run
+/// ahead of Neovim's answer by up to two lines in either direction.
+const LEAD: u64 = (EXTRA_ROWS / 2) as u64;
 
 /// Scrolls the window so `...` is its top line, as Ctrl-E and Ctrl-Y do: the cursor comes along when it
 /// would leave the window (setting the top line alone is undone by Neovim to keep the cursor in view).
@@ -117,7 +122,7 @@ impl Editor {
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, received: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, received: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {
@@ -289,14 +294,36 @@ impl Editor {
 
     /// Where `path`'s window is in its buffer: `(top line, lines)`.
     fn view(&self, path: &str) -> (u64, u64) {
-        self.client.with_state(|state| state.views.get(path).copied()).unwrap_or((1, u64::MAX / 4))
+        self.client.with_state(|state| {
+            // A view that no redraw followed within 50 ms (nothing on screen changed) is current.
+            if let Some((view, at)) = state.pending_views.get(path) {
+                if at.elapsed().as_secs_f64() > 0.05 {
+                    let view = *view;
+                    state.views.insert(path.to_string(), view);
+                    state.pending_views.remove(path);
+                }
+            }
+            state.views.get(path).copied()
+        })
+        .unwrap_or((1, u64::MAX / 4))
     }
 
     /// A wheel report of `delta` device pixels at grid cell `(row, column)`. With pixel scrolling the
     /// view's position moves by exactly that and Neovim is asked for the lines around it; otherwise whole
     /// lines go to Neovim.
-    pub fn scroll(&mut self, delta: f64, cell: CellMetrics, row: usize, column: usize, path: &str) {
-        self.received += delta;
+    pub fn scroll(&mut self, time: f64, delta: f64, period: f64, cell: CellMetrics, row: usize, column: usize, path: &str) {
+        if self.smooth && self.shows(path) {
+            // Fingers moving down show earlier lines.
+            self.received += delta;
+            self.smoother.push(time, -delta, period);
+            self.last_wheel = crate::clock::now();
+            return;
+        }
+        self.scroll_now(delta, cell, row, column, path);
+    }
+
+    /// Moves the view by `delta` pixels at once and asks Neovim for the lines around it.
+    fn scroll_now(&mut self, delta: f64, cell: CellMetrics, row: usize, column: usize, path: &str) {
         if std::env::var_os("NEOLINK_DEBUG_SCROLL").is_some() {
             eprintln!("editor scroll delta {delta:.1} smooth {} shows {} view {:?} position {:.1}", self.smooth, self.shows(path), self.view(path), self.position);
         }
@@ -306,13 +333,18 @@ impl Editor {
             let visible = (self.grid.1 - 1 - EXTRA_ROWS) as u64;
             if self.position_path != path || (top != self.commanded_top && crate::clock::now() - self.last_wheel > 0.3) {
                 // Neovim moved the view itself since the last gesture: start from where it is.
-                self.position = (top - 1) as f64 * height + if top == 1 { 0.0 } else { height };
+                self.position = (top - 1) as f64 * height + (top - 1).min(LEAD) as f64 * height;
                 self.position_path = path.to_string();
             }
             let limit = total.saturating_sub(visible) as f64 * height;
-            self.position = (self.position - delta).clamp(0.0, limit.max(0.0));
+            let wanted = self.position - delta;
+            self.position = wanted.clamp(0.0, limit.max(0.0));
+            if wanted != self.position {
+                // An end of the file: what did not fit is dropped, so reversing answers at once.
+                self.smoother.cancel();
+            }
             // Neovim's top line is kept one line above the view's, so a line of slack lies either side.
-            let target = ((self.position / height).floor() as u64).saturating_sub(1).min(total.saturating_sub(visible + EXTRA_ROWS as u64)) + 1;
+            let target = ((self.position / height).floor() as u64).saturating_sub(LEAD).min(total.saturating_sub(visible + EXTRA_ROWS as u64)) + 1;
             if target != self.commanded_top || top != target {
                 self.commanded_top = target;
                 let _ = self.client.notify("nvim_exec_lua", vec![rmpv_string(SCROLL_TO), neolink_nvim::rmpv::Value::Array(vec![neolink_nvim::rmpv::Value::from(target)])]);
@@ -334,6 +366,7 @@ impl Editor {
 
     pub fn end_scroll_gesture(&mut self) {
         self.wheel = 0.0;
+        self.smoother.begin_gesture();
     }
 
     pub fn mouse(&self, action: &str, row: usize, column: usize) {
@@ -351,7 +384,22 @@ impl Editor {
 
     /// Draws `path`'s screen into `rect`: Neovim's own once the selection is confirmed, the remembered
     /// one before that if it is valid, otherwise what was on screen before the pending selection.
-    pub fn build(&mut self, painter: &mut Painter, rect: Rect, focused: bool, path: &str) {
+    pub fn build(&mut self, painter: &mut Painter, rect: Rect, focused: bool, path: &str, display: f64, period: f64) -> Next {
+        // This frame's share of the wheel input moves the view, then Neovim is asked for its lines.
+        let step = self.smoother.advance(display, period);
+        if step != 0.0 && self.smooth && self.shows(path) {
+            let cell = painter.text.cell;
+            self.scroll_now(-step, cell, 0, 0, path);
+        }
+        self.draw(painter, rect, focused, path);
+        match self.smoother.next_visible_change(display, period, self.position) {
+            None => Next::Idle,
+            Some(at) if at <= display + 1.5 * period => Next::Soon,
+            Some(at) => Next::At(at),
+        }
+    }
+
+    fn draw(&mut self, painter: &mut Painter, rect: Rect, focused: bool, path: &str) {
         let requested_here = self.requested.as_ref().is_some_and(|requested| requested.1 == path);
         let screen = if self.shows(path) {
             self.frozen = None;
@@ -382,7 +430,7 @@ impl Editor {
             let (top, total) = self.view(path);
             let scrolling = crate::clock::now() - self.last_wheel < 0.3;
             if self.position_path != path || (!scrolling && top != self.commanded_top) {
-                self.position = (top - 1) as f64 * height + if top == 1 { 0.0 } else { height };
+                self.position = (top - 1) as f64 * height + (top - 1).min(LEAD) as f64 * height;
                 self.position_path = path.to_string();
                 self.commanded_top = top;
             }

@@ -138,6 +138,11 @@ pub struct Terminal {
     last_history: usize,
     /// Pixels of wheel input not yet turned into whole lines for a full-screen program.
     program_remainder: f64,
+    /// Smooth scrolling in full-screen programs (vim, less, htop), opt-in with NEOLINK_PROGRAM_SMOOTH=1
+    /// until its movement detection stops over-counting (PLAN.md): the text slides by `target` minus
+    /// what the program has been seen to scroll, while whole-line wheel events go to the program ahead
+    /// of it. Lines are counted positive towards earlier content.
+    program: ProgramScroll,
     /// Scroll input received, in device pixels (for the benchmark).
     pub received: f64,
     scratch: Vec<Instance>,
@@ -182,6 +187,65 @@ fn process_directory(pid: u32) -> Option<std::path::PathBuf> {
         let _ = pid;
         None
     }
+}
+
+#[derive(Default)]
+struct ProgramScroll {
+    /// Pixels the fingers asked for since the program's screen was last at rest.
+    target: f64,
+    /// Lines sent to the program, and lines its screen was seen to move.
+    sent: i64,
+    seen: i64,
+    /// When lines were last sent (a program at the top or bottom does not move).
+    sent_at: f64,
+    /// Each visible row's text as of the last frame, to see the program move.
+    rows: Vec<u64>,
+    /// The direction of the last movement (1 towards earlier content, -1 later).
+    direction: i64,
+}
+
+impl ProgramScroll {
+    fn offset(&self, height: f64) -> f64 {
+        (self.target - self.seen as f64 * height).clamp(-height, height)
+    }
+}
+
+/// How far the rows moved between two frames: `k` lines down (content moved towards later rows, the
+/// program scrolled towards earlier content) or up (negative), if most rows agree.
+fn row_shift(old: &[u64], new: &[u64], expected: i64) -> Option<i64> {
+    if old.len() != new.len() || old.len() < 4 || old == new {
+        return None;
+    }
+    let count = new.len() as i64;
+    let mut best: Option<(i64, usize)> = None;
+    for k in (1..=6i64).flat_map(|k| [k, -k]) {
+        // Only movement in the direction asked for, and not much more than was asked.
+        if expected == 0 || k.signum() != expected.signum() || k.abs() > expected.abs() + 1 {
+            continue;
+        }
+        let mut matches = 0;
+        let mut candidates = 0;
+        for i in 0..count {
+            let from = i - k;
+            if from < 0 || from >= count {
+                continue;
+            }
+            let (before, after) = (old[from as usize], new[i as usize]);
+            // Rows that did not move (a status line) and blank rows say nothing.
+            if before == old[i as usize] || before == 0 {
+                continue;
+            }
+            candidates += 1;
+            if before == after {
+                matches += 1;
+            }
+        }
+        // Three quarters of the rows must agree: a screen the program has only half redrawn does not count.
+        if candidates >= 3 && matches * 4 >= candidates * 3 && best.is_none_or(|(_, best)| matches > best) {
+            best = Some((k, matches));
+        }
+    }
+    best.map(|(k, _)| k)
 }
 
 fn window_size(columns: usize, lines: usize, cell: CellMetrics) -> WindowSize {
@@ -243,6 +307,7 @@ impl Terminal {
             smoother: ScrollSmoother::new(smoothing),
             last_history: 0,
             program_remainder: 0.0,
+            program: ProgramScroll::default(),
             received: 0.0,
             scratch: Vec::new(),
             resolved: Vec::new(),
@@ -432,6 +497,11 @@ impl Terminal {
     }
 
     /// Scrollback position as last drawn: whole device pixels above the newest line.
+    /// Where a full-screen program's text is drawn, in pixels towards earlier content (benchmark).
+    pub fn program_position(&self, height: f64) -> f64 {
+        self.program.seen as f64 * height + self.program.offset(height).round()
+    }
+
     pub fn scroll(&self) -> f64 {
         self.drawn
     }
@@ -442,6 +512,10 @@ impl Terminal {
         let mut moved = self.scroll != 0.0 || self.smoother.is_active();
         self.scroll = 0.0;
         self.smoother.cancel();
+        // Typing puts a full-screen program's text back on its grid.
+        self.program.target = 0.0;
+        self.program.sent = 0;
+        self.program.seen = 0;
         // Typing ends a selection.
         if self.term.lock().selection.take().is_some() {
             self.look += 1;
@@ -489,7 +563,13 @@ impl Terminal {
         }
         self.received += delta;
         let mode = self.mode();
-        if mode.contains(TermMode::ALT_SCREEN) || mode.intersects(TermMode::MOUSE_MODE) {
+        let full_screen = mode.contains(TermMode::ALT_SCREEN) || mode.intersects(TermMode::MOUSE_MODE);
+        if full_screen && std::env::var("NEOLINK_PROGRAM_SMOOTH").as_deref() == Ok("1") && (mode.intersects(TermMode::MOUSE_MODE) || mode.contains(TermMode::ALTERNATE_SCROLL)) {
+            // Applied at the display's cadence in `build`, which sends the program whole lines.
+            self.smoother.push(time, delta, period);
+            return;
+        }
+        if full_screen {
             // A full-screen program scrolls itself: whole lines only.
             self.program_remainder += delta;
             let lines = (self.program_remainder / cell.height as f64).trunc();
@@ -526,6 +606,35 @@ impl Terminal {
             return;
         }
         self.smoother.push(time, delta, period);
+    }
+
+    /// Sends `lines` wheel steps to a full-screen program (positive: towards earlier content).
+    fn send_program_lines(&mut self, lines: i64, mode: TermMode) {
+        let (count, up) = (lines.unsigned_abs() as usize, lines > 0);
+        let mut bytes = Vec::new();
+        if mode.intersects(TermMode::MOUSE_MODE) {
+            let button = if up { 64 } else { 65 };
+            for _ in 0..count {
+                if mode.contains(TermMode::SGR_MOUSE) {
+                    bytes.extend_from_slice(format!("\x1b[<{button};1;1M").as_bytes());
+                } else {
+                    bytes.extend_from_slice(&[0x1b, b'[', b'M', 32 + button, 33, 33]);
+                }
+            }
+        } else if mode.contains(TermMode::ALTERNATE_SCROLL) {
+            let key: &[u8] = match (up, mode.contains(TermMode::APP_CURSOR)) {
+                (true, false) => b"\x1b[A",
+                (false, false) => b"\x1b[B",
+                (true, true) => b"\x1bOA",
+                (false, true) => b"\x1bOB",
+            };
+            for _ in 0..count {
+                bytes.extend_from_slice(key);
+            }
+        }
+        if !bytes.is_empty() {
+            self.notifier.notify(bytes);
+        }
     }
 
     /// Scrolls by whole pages or to an end, at once (keyboard).
@@ -579,6 +688,70 @@ impl Terminal {
         }
         self.last_history = history;
         let step = self.smoother.advance(display, period);
+        let mode = *term.mode();
+        let full_screen = mode.contains(TermMode::ALT_SCREEN) || mode.intersects(TermMode::MOUSE_MODE);
+        let height = cell.height as f64;
+        let mut program_next = false;
+        let mut program_send = 0i64;
+        if full_screen {
+            // What each visible row says, to see whether the program moved its text.
+            let rows: Vec<u64> = (0..lines as i32)
+                .map(|row| {
+                    let cells = &grid[Line(row)];
+                    let mut hash = 0u64;
+                    let mut blank = true;
+                    for column in 0..columns {
+                        let character = cells[Column(column)].c;
+                        if character != ' ' {
+                            blank = false;
+                        }
+                        hash = (hash.rotate_left(5) ^ character as u64).wrapping_mul(0x100000001b3);
+                    }
+                    if blank { 0 } else { hash | 1 }
+                })
+                .collect();
+            let program = &mut self.program;
+            if program.sent == program.seen {
+                // Nothing expected: the screen as it is now is what the next movement is measured from.
+                program.rows = rows;
+            } else if let Some(moved) = row_shift(&program.rows, &rows, program.sent - program.seen) {
+                program.seen += moved;
+                program.rows = rows;
+            }
+            let now = crate::clock::now();
+            if step != 0.0 {
+                program.target += step;
+                program.direction = step.signum() as i64;
+                // Never more than a line ahead of the program: the text follows the program's pace.
+                let seen = program.seen as f64 * height;
+                program.target = program.target.clamp(seen - height, seen + height);
+                // Whole lines go to the program a line ahead of the text, so its answer is there in time.
+                let wanted = (program.target / height).round() as i64 + program.direction;
+                if wanted != program.sent && (wanted - program.seen).abs() <= 2 {
+                    let lines = wanted - program.sent;
+                    program.sent = wanted;
+                    program.sent_at = now;
+                    program_send = lines;
+                }
+            }
+            let program = &mut self.program;
+            if program.sent != program.seen && now - program.sent_at > 0.15 {
+                // The program did not move (an end of its text): stop expecting it to.
+                program.sent = program.seen;
+                program.rows.clear();
+            }
+            if !self.smoother.is_active() {
+                // At rest the text eases back onto the program's grid.
+                let seen = program.seen as f64 * height;
+                let rest = program.target - seen;
+                program.target = if rest.abs() < 0.5 { seen } else { seen + rest * 0.6 };
+            }
+            program_next = program.offset(height).abs() >= 0.5 || program.sent != program.seen;
+        } else if self.program.target != 0.0 || self.program.seen != 0 {
+            self.program = ProgramScroll::default();
+        }
+        let program_offset = if full_screen { self.program.offset(height).round() as f32 } else { 0.0 };
+        let step = if full_screen { 0.0 } else { step };
         let limit = if alternate { 0.0 } else { history as f64 * cell.height as f64 };
         let wanted = self.scroll + step;
         self.scroll = wanted.clamp(0.0, limit);
@@ -629,7 +802,7 @@ impl Terminal {
             if line.0 < -(history as i32) {
                 continue;
             }
-            let y = rect.y + row as f32 * cell.height + fraction;
+            let y = rect.y + row as f32 * cell.height + fraction + program_offset;
             if let Some(retained) = self.keys.get(&line.0).and_then(|key| painter.rows.get(*key)) {
                 painter.scene.retained(retained, rect.x, y);
                 continue;
@@ -680,6 +853,13 @@ impl Terminal {
         self.resolved = resolved;
         painter.scene.set_clip(None);
         self.drawn = scroll;
+        drop(term);
+        if program_send != 0 {
+            self.send_program_lines(program_send, mode);
+        }
+        if program_next {
+            return Next::Soon;
+        }
         match self.smoother.next_visible_change(display, period, self.scroll) {
             None => Next::Idle,
             Some(at) if at <= display + 1.5 * period => Next::Soon,
@@ -786,5 +966,29 @@ impl RowKey {
 
     fn finish(&self) -> u64 {
         self.0 ^ (self.0 >> 29)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::row_shift;
+
+    #[test]
+    fn a_program_scrolling_is_seen_in_its_rows() {
+        // Rows 1..=8 of text and a status line that does not move.
+        let old: Vec<u64> = vec![11, 12, 13, 14, 15, 16, 17, 18, 99];
+        // One line towards earlier content: everything moved down a row, a new row came in at the top.
+        let down: Vec<u64> = vec![10, 11, 12, 13, 14, 15, 16, 17, 99];
+        assert_eq!(row_shift(&old, &down, 1), Some(1));
+        // Two lines towards later content.
+        let up: Vec<u64> = vec![13, 14, 15, 16, 17, 18, 19, 20, 99];
+        assert_eq!(row_shift(&old, &up, -2), Some(-2));
+        // Movement nobody asked for, or in the other direction, is not counted.
+        assert_eq!(row_shift(&old, &down, 0), None);
+        assert_eq!(row_shift(&old, &down, -1), None);
+        // A screen that changed without moving.
+        let changed: Vec<u64> = vec![41, 42, 43, 44, 45, 46, 47, 48, 99];
+        assert_eq!(row_shift(&old, &changed, 1), None);
+        assert_eq!(row_shift(&old, &old, 1), None);
     }
 }

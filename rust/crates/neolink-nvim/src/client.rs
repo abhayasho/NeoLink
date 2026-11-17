@@ -71,6 +71,8 @@ pub struct State {
     pub last_reply: Option<serde_json::Value>,
     /// Where each buffer's window is: `(top line, lines in the buffer)` by path (`neolink_view`).
     pub views: std::collections::HashMap<String, (u64, u64)>,
+    /// Views announced but not yet drawn, with when they were announced.
+    pub pending_views: std::collections::HashMap<String, ((u64, u64), std::time::Instant)>,
     /// Requests whose reply has been read (for tests and the benchmark).
     pub replies: u64,
     /// Files with unsaved changes, as Neovim reports them when they change (`neolink_modified`).
@@ -152,8 +154,8 @@ local function view()
   pcall(vim.rpcnotify, channel, 'neolink_view', vim.api.nvim_buf_get_name(0), vim.fn.line('w0'), vim.api.nvim_buf_line_count(0))
 end
 vim.api.nvim_create_autocmd({'WinScrolled', 'BufWinEnter', 'TextChanged', 'TextChangedI', 'VimResized'}, {callback = view})
--- A front end that slides the text by pixels hides up to two rows at an edge; the cursor stays clear of them.
-if vim.o.scrolloff < 2 then vim.o.scrolloff = 2 end
+-- A front end that slides the text by pixels hides up to four rows at an edge; the cursor stays clear of them.
+if vim.o.scrolloff < 4 then vim.o.scrolloff = 4 end
 -- Diagnostics and language servers change without a command from the app: send the state then too
 -- (once per 80 ms at most), so counts and the server indicator follow.
 local pending = false
@@ -198,7 +200,7 @@ impl Client {
             stdin: Mutex::new(stdin),
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
-            state: Mutex::new(State { left: Vec::new(), screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, views: Default::default(), replies: 0, modified: Default::default() }),
+            state: Mutex::new(State { left: Vec::new(), screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, views: Default::default(), pending_views: Default::default(), replies: 0, modified: Default::default() }),
             exited: AtomicBool::new(false),
             on_change: Box::new(on_change),
         });
@@ -456,7 +458,14 @@ impl Inner {
                     if model.apply(&params) == 0 {
                         return false;
                     }
-                    self.state.lock().unwrap().screen = model.screen().clone();
+                    let mut state = self.state.lock().unwrap();
+                    state.screen = model.screen().clone();
+                    // A view announced before this redraw describes this screen (Neovim sends the
+                    // notice from WinScrolled, ahead of the rows), so both become visible together.
+                    let pending: Vec<_> = state.pending_views.drain().collect();
+                    for (path, (view, _)) in pending {
+                        state.views.insert(path, view);
+                    }
                     true
                 }
                 "neolink_selection" => {
@@ -474,7 +483,8 @@ impl Inner {
                     let path = params.first().and_then(Value::as_str).unwrap_or("").to_string();
                     let top = params.get(1).and_then(Value::as_u64).unwrap_or(1).max(1);
                     let total = params.get(2).and_then(Value::as_u64).unwrap_or(1).max(1);
-                    self.state.lock().unwrap().views.insert(path, (top, total)) != Some((top, total))
+                    self.state.lock().unwrap().pending_views.insert(path, ((top, total), std::time::Instant::now()));
+                    true
                 }
                 "neolink_state" => {
                     // The editor's state changed on its own (diagnostics, language servers).
