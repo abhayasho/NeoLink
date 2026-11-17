@@ -38,6 +38,31 @@ pub struct Row {
     pub kind: RowKind,
 }
 
+/// Preserve the visible row and its fractional offset when asynchronous listings change the tree.
+/// If the anchor disappears, prefer its surviving ancestor (collapse), then a nearby surviving row.
+/// The caller clamps to the new viewport limit after layout; no directory I/O is needed here.
+pub fn reanchored_scroll(previous: &[Row], next: &[Row], scroll: f64, row_height: f64) -> f64 {
+    if previous.is_empty() || next.is_empty() || row_height <= 0.0 || !scroll.is_finite() {
+        return 0.0;
+    }
+    let index = ((scroll.max(0.0) / row_height).floor() as usize).min(previous.len() - 1);
+    let positions: HashMap<_, _> = next.iter().enumerate().map(|(index, row)| (row.path.as_path(), index)).collect();
+    if let Some(&new_index) = positions.get(previous[index].path.as_path()) {
+        return (scroll + (new_index as f64 - index as f64) * row_height).max(0.0);
+    }
+    for ancestor in previous[index].path.ancestors().skip(1) {
+        if let Some(&new_index) = positions.get(ancestor) {
+            return new_index as f64 * row_height + scroll.rem_euclid(row_height);
+        }
+    }
+    for old_index in (index + 1..previous.len()).chain((0..index).rev()) {
+        if let Some(&new_index) = positions.get(previous[old_index].path.as_path()) {
+            return (scroll + (new_index as f64 - old_index as f64) * row_height).max(0.0);
+        }
+    }
+    0.0
+}
+
 pub struct Tree {
     root: PathBuf,
     expanded: HashSet<PathBuf>,
@@ -277,5 +302,29 @@ mod tests {
         assert!(tree.was_truncated());
         tree.collapse_all();
         assert!(tree.is_expanded(Path::new("/p")), "the root stays open");
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+    fn rows(paths: &[&str]) -> Vec<Row> {
+        paths.iter().map(|path| Row { path: PathBuf::from(path), label: path.to_string(), depth: 0, kind: RowKind::File }).collect()
+    }
+    #[test]
+    fn inserted_rows_preserve_the_visible_file_and_fractional_offset() {
+        let old = rows(&["a", "b", "c"]);
+        let next = rows(&["new", "a", "b", "c"]);
+        assert_eq!(reanchored_scroll(&old, &next, 26.75, 24.0), 50.75);
+        assert_eq!(reanchored_scroll(&next, &old, 50.75, 24.0), 26.75);
+        assert_eq!(reanchored_scroll(&old, &old, 26.75, 24.0), 26.75);
+    }
+    #[test]
+    fn collapse_uses_a_surviving_parent_and_deleted_file_uses_neighbour() {
+        let old = rows(&["a", "folder", "folder/b", "folder/c", "z"]);
+        assert_eq!(reanchored_scroll(&old, &rows(&["a", "folder", "z"]), 50.75, 24.0), 26.75);
+        assert_eq!(reanchored_scroll(&rows(&["a", "b", "c"]), &rows(&["a", "c"]), 26.75, 24.0), 2.75);
+        assert_eq!(reanchored_scroll(&old, &[], 50.75, 24.0), 0.0);
+        assert_eq!(reanchored_scroll(&old, &rows(&["other"]), 50.75, 24.0), 0.0);
     }
 }

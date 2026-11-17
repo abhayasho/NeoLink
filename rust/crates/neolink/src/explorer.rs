@@ -437,7 +437,9 @@ impl Explorer {
             let rows = self.tree.rows();
             let rows = if self.folder_list { rows } else { self.with_deleted(rows) };
             let rows = self.sorted(rows);
-            self.rows = self.filtered(rows);
+            let rows = self.filtered(rows);
+            self.scroll = neolink_core::tree::reanchored_scroll(&self.rows, &rows, self.scroll, self.row_height as f64);
+            self.rows = rows;
             self.revision += 1;
             self.request_listings();
         }
