@@ -365,7 +365,7 @@ its first scenarios: editor typing 24.6 ms, terminal typing 22.7 ms. No paired S
 
 - 2026-11-17 (later): remembered screens for instant document switches (tested against real Neovim), live
   unsaved marker and close warning, Windows path spelling fixed after the first Windows run of the editor tests,
-  explorer refresh and Git decorations. 71 tests; CI green on both systems for `821875e`.
+  explorer refresh and Git decorations. 68 tests; CI green on both systems for `821875e`.
 - 2026-11-17: branch pushed with the user's go-ahead; first CI run green on macOS and Windows. Milestone 2 begun:
   Neovim crate (RPC framing, grid model, embedded client with input held across switches, 6 real-Neovim tests),
   editor pane and document tabs, explorer tree and sidebar. 63 tests.
