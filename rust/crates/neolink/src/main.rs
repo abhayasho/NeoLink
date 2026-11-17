@@ -1,10 +1,12 @@
 mod bench;
 mod capture;
+mod chrome;
 mod clock;
 mod editor;
 mod explorer;
 mod frame;
 mod gpu;
+mod icons;
 mod input;
 mod present;
 mod render;
@@ -27,7 +29,8 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 use workspace::Workspace;
 
-const DEFAULT_FONT_POINTS: f32 = 12.0;
+/// The Swift app's default text size (`TextSizePreferences`).
+const DEFAULT_FONT_POINTS: f32 = 13.0;
 
 #[derive(Debug, Clone)]
 enum UserEvent {
@@ -237,7 +240,18 @@ impl App {
     }
 
     fn start(&mut self, event_loop: &ActiveEventLoop) {
-        let attributes = Window::default_attributes().with_title("NeoLink").with_inner_size(LogicalSize::new(1200.0, 820.0));
+        // As the Swift app's window: 1280 x 800, at least 900 x 560, dark.
+        let attributes = Window::default_attributes()
+            .with_title("NeoLink")
+            .with_inner_size(LogicalSize::new(1280.0, 800.0))
+            .with_min_inner_size(LogicalSize::new(900.0, 560.0))
+            .with_theme(Some(winit::window::Theme::Dark));
+        #[cfg(target_os = "macos")]
+        let attributes = {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            // A hidden title over a transparent title bar, in the sidebar's colour.
+            attributes.with_title_hidden(true).with_titlebar_transparent(true)
+        };
         let window = Arc::new(event_loop.create_window(attributes).expect("a window"));
         let gpu = gpu::Gpu::new().expect("a GPU");
         #[cfg(target_os = "macos")]

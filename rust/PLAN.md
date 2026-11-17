@@ -351,6 +351,27 @@ remembered screens** (21 and 22 of 26 switches used one); 21.2 / 20.1 ms, p95 30
 off, same binary, alternating runs (Swift: about 16 ms with its cached images, 31-36 ms without). A third run (`with-explorer.json.gz`) fell in the composited state for
 its first scenarios: editor typing 24.6 ms, terminal typing 22.7 ms. No paired Swift run was made for the editor.
 
+## 6b. Look and feature parity (the standing requirement)
+
+The Rust app has to look exactly like the Swift app and have exactly the same features. The Swift sources are the
+specification for layout, sizes, fonts, colours and icons, not only for the feature list.
+
+Matched so far, from the SwiftUI code (capture: `docs/milestone-2-look-capture.png`; not yet compared side by side
+with a screenshot of the Swift app): window size and transparent title bar; 34 pt header with project name and the
+seven tools; explorer pane (EXPLORER / LOCAL / close, navigation bar, filter field, 24 pt rows with chevron, SF
+Symbol or two-letter file icon, Git colours and letter badges, footer); tab strip (width rule, icon, close button,
+unsaved dot, accent line, new-tab button); terminal status bar; editor toolbar and footer; window footer; 13 pt
+default text. Icons are the same SF Symbols, rasterised on macOS; Windows has stand-in glyphs.
+
+Known differences still open:
+- Header tools other than the explorer toggle only say that they are not available; the project menu, Agent
+  launcher, connections sidebar and agent panel do not exist.
+- The filter field, the explorer's new/options menus, "Follow terminal", the Code menu, text-size menu, Run and
+  the toolbar's Save button are drawn but do nothing.
+- Rounded corners (filter field, buttons) are square; the terminal font is Menlo, not SF Mono; the status bar shows
+  the project folder, not the shell's directory; tab titles of duplicate file names carry no parent folder; the
+  tab strip does not scroll; panes cannot be resized by dragging; no native menus or context menus.
+
 ## 7. Open items after milestone 1
 
 - CPU while scrolling (section 5): try presenting on a raw Metal command buffer shared with rendering, or cut

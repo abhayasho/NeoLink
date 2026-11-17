@@ -1,12 +1,14 @@
 //! The window's content: a strip of tabs over the active pane. Panes stay alive when they are not shown;
 //! switching is drawing a different pane into the same surface.
 
+use crate::chrome::{faded, Ui};
 use crate::editor::Editor;
+use crate::icons::IconWeight;
 use crate::explorer::Explorer;
 use crate::frame::{Built, Content, FrameContext, FrameMarks, Next, Painter, Shared};
-use crate::render::{Rect, Scene};
+use crate::render::Rect;
 use crate::term::{ScrollPhase, Terminal};
-use crate::text::{CellMetrics, TextSystem};
+use crate::text::CellMetrics;
 use crate::theme;
 use std::sync::{Arc, Weak};
 
@@ -67,11 +69,25 @@ pub struct Workspace {
     applied_font: (f32, f32),
     scale: f32,
     period: f64,
-    /// The pane's grid, from the last layout.
+    /// The terminal pane's grid, from the last layout.
     grid: (usize, usize),
+    /// The editor's grid: its pane has a toolbar above and a footer below instead of a status bar.
+    editor_grid: (usize, usize),
     pane: Rect,
+    editor_pane: Rect,
+    header: Rect,
+    footer: Rect,
+    center: Rect,
+    status_bar: Rect,
+    toolbar: Rect,
+    editor_footer: Rect,
     strip: Rect,
     tab_rects: Vec<Rect>,
+    close_rects: Vec<Rect>,
+    plus_rect: Rect,
+    /// Clickable parts of the header: `(where, what)`.
+    header_buttons: Vec<(Rect, &'static str)>,
+    hover_close: Option<usize>,
     pub focused: bool,
     selection: u64,
     marks: FrameMarks,
@@ -105,9 +121,21 @@ impl Workspace {
             scale,
             period,
             grid: (80, 24),
+            editor_grid: (80, 24),
             pane: Rect::default(),
+            editor_pane: Rect::default(),
+            header: Rect::default(),
+            footer: Rect::default(),
+            center: Rect::default(),
+            status_bar: Rect::default(),
+            toolbar: Rect::default(),
+            editor_footer: Rect::default(),
             strip: Rect::default(),
             tab_rects: Vec::new(),
+            close_rects: Vec::new(),
+            plus_rect: Rect::default(),
+            header_buttons: Vec::new(),
+            hover_close: None,
             focused: true,
             selection: 0,
             marks: FrameMarks::default(),
@@ -123,20 +151,38 @@ impl Workspace {
         self.on_empty = Some(callback);
     }
 
+    /// Lays the window out as the Swift app does (`ContentView`, `TabbedTerminalView`, `CodeWorkspaceView`;
+    /// sizes in points): a 34 pt header, the explorer pane, the tab strip over the pane, and a 22 pt
+    /// footer. A terminal pane has 8 pt of padding at its left and top and a 28 pt status bar below; the
+    /// editor has a 30 pt toolbar above and a 22 pt footer below.
     fn layout(&mut self, size: (u32, u32)) -> bool {
         let scale = self.scale;
-        let strip_height = (30.0 * scale).round();
-        let padding_x = (6.0 * scale).round();
-        let padding_top = (4.0 * scale).round();
-        let sidebar_width = if self.explorer.visible { (crate::explorer::WIDTH_POINTS * scale).round().min(size.0 as f32 * 0.5) } else { 0.0 };
-        self.sidebar = Rect::new(0.0, 0.0, sidebar_width, size.1 as f32);
-        self.strip = Rect::new(sidebar_width, 0.0, size.0 as f32 - sidebar_width, strip_height);
-        self.pane = Rect::new(sidebar_width + padding_x, strip_height + padding_top, (size.0 as f32 - sidebar_width - 2.0 * padding_x).max(1.0), (size.1 as f32 - strip_height - padding_top).max(1.0));
-        let grid = (((self.pane.width / self.cell.width).floor() as usize).max(2), ((self.pane.height / self.cell.height).floor() as usize).max(1));
-        let changed = grid != self.grid;
+        let px = |points: f32| (points * scale).round();
+        let (width, height) = (size.0 as f32, size.1 as f32);
+        let line = px(1.0).max(1.0);
+        self.header = Rect::new(0.0, 0.0, width, px(34.0));
+        self.footer = Rect::new(0.0, height - px(22.0), width, px(22.0));
+        let top = self.header.bottom() + line;
+        let bottom = self.footer.y - line;
+        let explorer_width = if self.explorer.visible { px(crate::explorer::WIDTH_POINTS).min(width * 0.5) } else { 0.0 };
+        self.sidebar = Rect::new(0.0, top, explorer_width, (bottom - top).max(1.0));
+        let center_x = if explorer_width > 0.0 { explorer_width + line } else { 0.0 };
+        self.center = Rect::new(center_x, top, (width - center_x).max(1.0), (bottom - top).max(1.0));
+        self.strip = Rect::new(center_x, top, self.center.width, px(34.0));
+        let below = self.strip.bottom() + line;
+        self.status_bar = Rect::new(center_x, self.center.bottom() - px(28.0), self.center.width, px(28.0));
+        let terminal = Rect::new(center_x + px(8.0), below + px(8.0), (self.center.width - px(8.0)).max(1.0), (self.status_bar.y - below - px(8.0)).max(1.0));
+        let grid = (((terminal.width / self.cell.width).floor() as usize).max(2), ((terminal.height / self.cell.height).floor() as usize).max(1));
+        // A pane is a whole number of cells tall, so a scrolled row is clipped at a row boundary.
+        self.pane = Rect::new(terminal.x, terminal.y, terminal.width, grid.1 as f32 * self.cell.height);
+        self.toolbar = Rect::new(center_x, below, self.center.width, px(30.0));
+        self.editor_footer = Rect::new(center_x, self.center.bottom() - px(22.0), self.center.width, px(22.0));
+        let editor = Rect::new(center_x, self.toolbar.bottom(), self.center.width, (self.editor_footer.y - self.toolbar.bottom()).max(1.0));
+        let editor_grid = (((editor.width / self.cell.width).floor() as usize).max(20), ((editor.height / self.cell.height).floor() as usize).max(4));
+        self.editor_pane = Rect::new(editor.x, editor.y, editor.width, editor_grid.1 as f32 * self.cell.height);
+        let changed = grid != self.grid || editor_grid != self.editor_grid;
         self.grid = grid;
-        // The pane is a whole number of cells tall, so a scrolled row is clipped at a row boundary.
-        self.pane.height = grid.1 as f32 * self.cell.height;
+        self.editor_grid = editor_grid;
         changed
     }
 
@@ -223,7 +269,7 @@ impl Workspace {
             return true;
         }
         let Some(shared) = self.shared.upgrade() else { return false };
-        match Editor::start(&shared, self.grid.0, self.grid.1) {
+        match Editor::start(&shared, self.editor_grid.0, self.editor_grid.1) {
             Ok(editor) => {
                 self.editor = Some(editor);
                 true
@@ -339,9 +385,10 @@ impl Workspace {
         }
     }
 
+    /// The editor cell under the pointer.
     fn pointer_cell(&self) -> (usize, usize) {
-        let row = ((self.pointer.1 - self.pane.y) / self.cell.height).floor().clamp(0.0, self.grid.1.saturating_sub(1) as f32) as usize;
-        let column = ((self.pointer.0 - self.pane.x) / self.cell.width).floor().clamp(0.0, self.grid.0.saturating_sub(1) as f32) as usize;
+        let row = ((self.pointer.1 - self.editor_pane.y) / self.cell.height).floor().clamp(0.0, self.editor_grid.1.saturating_sub(1) as f32) as usize;
+        let column = ((self.pointer.0 - self.editor_pane.x) / self.cell.width).floor().clamp(0.0, self.editor_grid.0.saturating_sub(1) as f32) as usize;
         (row, column)
     }
 
@@ -374,9 +421,39 @@ impl Workspace {
 
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        if let Some((_, action)) = self.header_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
+            match action {
+                "files" => self.toggle_explorer(),
+                // Quick Open, Find in Files, Source Control, connections, the agent panel and the
+                // agent launcher do not exist in this build yet (PLAN.md).
+                _ => self.notice = Some(format!("{} is not available in this build yet.", match action {
+                    "quick-open" => "Quick Open",
+                    "find" => "Find in Files",
+                    "git" => "Source Control",
+                    "connections" => "The connections sidebar",
+                    "agent-panel" => "The agent panel",
+                    "agent" => "The agent launcher",
+                    "project" => "The project menu",
+                    _ => "This",
+                })),
+            }
+            return true;
+        }
         if self.explorer.contains(x, y) {
-            if let Some(file) = self.explorer.click(x, y) {
-                self.open_document(&file);
+            match self.explorer.click(x, y) {
+                crate::explorer::Clicked::File(file) => self.open_document(&file),
+                crate::explorer::Clicked::Close => self.toggle_explorer(),
+                crate::explorer::Clicked::Nothing => {}
+            }
+            return true;
+        }
+        if let Some(index) = self.close_rects.iter().position(|rect| rect.contains(x, y)) {
+            self.close_tab(index);
+            return true;
+        }
+        if self.plus_rect.contains(x, y) {
+            if let Some(shared) = self.shared.upgrade() {
+                let _ = self.new_tab(&shared);
             }
             return true;
         }
@@ -384,7 +461,7 @@ impl Workspace {
             self.select(index);
             return true;
         }
-        if self.pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
+        if self.editor_pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
             let (row, column) = self.pointer_cell();
             if let Some(editor) = &self.editor {
                 editor.mouse("press", row, column);
@@ -395,7 +472,7 @@ impl Workspace {
     }
 
     pub fn release(&mut self, x: f32, y: f32) {
-        if self.pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
+        if self.editor_pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
             let (row, column) = self.pointer_cell();
             if let Some(editor) = &self.editor {
                 editor.mouse("release", row, column);
@@ -407,8 +484,10 @@ impl Workspace {
     pub fn pointer(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
         let hover = self.tab_rects.iter().position(|rect| rect.contains(x, y));
-        let mut changed = hover != self.hover;
+        let hover_close = self.close_rects.iter().position(|rect| rect.contains(x, y));
+        let mut changed = hover != self.hover || hover_close != self.hover_close;
         self.hover = hover;
+        self.hover_close = hover_close;
         changed |= self.explorer.pointer(x, y);
         changed
     }
@@ -448,69 +527,197 @@ impl Workspace {
         self.selection
     }
 
-    /// A message for the user (an editor error) along the bottom of the pane. Any key dismisses it.
+    /// A message for the user (an editor error) along the bottom of the centre. Any key dismisses it.
     fn draw_notice(&mut self, painter: &mut Painter) {
         let Some(notice) = self.notice.clone() else { return };
-        let scale = self.scale;
-        let height = (26.0 * scale).round();
-        let rect = Rect::new(self.strip.x, self.pane.bottom() - height, self.strip.width, height);
-        painter.scene.fill_rect(rect, theme::rgb(0x382626));
-        let font_pixels = (12.0 * scale).round();
-        let line = painter.text.line(painter.queue, &notice, font_pixels, false, false);
-        let baseline = (rect.y + rect.height * 0.5 + font_pixels * 0.36).round();
-        painter.scene.set_clip(Some(rect));
-        for glyph in &line.glyphs {
-            painter.scene.glyph(glyph.sprite, rect.x + (10.0 * scale).round() + glyph.x, baseline + glyph.y, theme::rgb(0xE1B4B4));
-        }
-        painter.scene.set_clip(None);
+        let mut ui = Ui { painter, scale: self.scale };
+        let height = ui.px(26.0);
+        let rect = Rect::new(self.center.x, self.center.bottom() - height - ui.px(28.0), self.center.width, height);
+        ui.fill(rect, theme::rgb(0x382626));
+        ui.painter.scene.set_clip(Some(rect));
+        ui.text(&notice, rect.x + ui.px(12.0), rect.y + rect.height * 0.5, 11.0, 400, false, theme::rgb(0xE1B4B4));
+        ui.painter.scene.set_clip(None);
     }
 
     pub fn dismiss_notice(&mut self) -> bool {
         self.notice.take().is_some()
     }
 
-    fn draw_strip(&mut self, scene: &mut Scene, text: &mut TextSystem, queue: &wgpu::Queue) {
-        let scale = self.scale;
-        scene.fill_rect(self.strip, theme::SIDEBAR_BACKGROUND);
+    /// The header (`ContentView.workspaceHeader`): project name at the left, tools at the right.
+    fn draw_header(&mut self, painter: &mut Painter) {
+        let mut ui = Ui { painter, scale: self.scale };
+        let rect = self.header;
+        ui.fill(rect, theme::SIDEBAR_BACKGROUND);
+        let middle = rect.y + rect.height * 0.5;
+        self.header_buttons.clear();
+        let mut x = rect.x + ui.px(10.0);
+        let icon_width = ui.icon("folder.badge.gearshape", 13.0, IconWeight::Regular, x + ui.px(9.0), middle, theme::ACCENT).max(ui.px(18.0));
+        self.header_buttons.push((Rect::new(x, rect.y, icon_width, rect.height), "project"));
+        x += icon_width + ui.px(10.0);
+        let name = self.explorer.root().file_name().and_then(|name| name.to_str()).unwrap_or("Workspace").to_string();
+        ui.text(&name, x, middle, 12.0, 500, false, theme::TEXT_PRIMARY);
+        // Right to left: agent panel, files, connections, source control, find, quick open, Agent.
+        let button = ui.px(28.0);
+        let gap = ui.px(10.0);
+        let mut right = rect.right() - ui.px(10.0);
+        let explorer_shown = self.explorer.visible;
+        for (symbol, action, lit) in [
+            ("sidebar.right", "agent-panel", false),
+            ("folder", "files", explorer_shown),
+            ("sidebar.left", "connections", false),
+            ("arrow.triangle.branch", "git", false),
+            ("magnifyingglass", "find", false),
+            ("doc.text.magnifyingglass", "quick-open", false),
+        ] {
+            let area = Rect::new(right - button, middle - button * 0.5, button, button);
+            ui.icon(symbol, 12.0, IconWeight::Medium, area.x + button * 0.5, middle, if lit { theme::ACCENT } else { theme::TEXT_SECONDARY });
+            self.header_buttons.push((area, action));
+            right -= button + gap;
+        }
+        let label = ui.text_right("Agent", right, middle, 11.0, 500, false, theme::TEXT_PRIMARY);
+        let sparkle = ui.icon("sparkles", 11.0, IconWeight::Medium, right - label - ui.px(11.0), middle, theme::TEXT_PRIMARY);
+        self.header_buttons.push((Rect::new(right - label - ui.px(11.0) - sparkle, rect.y, label + sparkle + ui.px(16.0), rect.height), "agent"));
+        ui.painter.scene.fill(rect.x, rect.bottom(), rect.width, ui.px(1.0).max(1.0), theme::SEPARATOR);
+    }
+
+    /// The tab strip (`TabbedTerminalView.tabStrip`, `WorkspaceTabButton`, `TabPresentation`).
+    fn draw_strip(&mut self, painter: &mut Painter) {
+        let mut ui = Ui { painter, scale: self.scale };
+        let strip = self.strip;
+        ui.fill(strip, theme::EDITOR_BACKGROUND);
         self.tab_rects.clear();
-        let count = self.tabs.len().max(1) as f32;
-        let width = ((220.0 * scale).min(self.strip.width / count)).floor();
-        let font_pixels = (12.0 * scale).round();
-        for (index, tab) in self.tabs.iter().enumerate() {
-            let rect = Rect::new(self.strip.x + index as f32 * width, 0.0, width, self.strip.height);
+        self.close_rects.clear();
+        let middle = strip.y + strip.height * 0.5;
+        let line = ui.px(1.0).max(1.0);
+        let mut x = strip.x;
+        let plus_width = ui.px(44.0);
+        ui.painter.scene.set_clip(Some(Rect::new(strip.x, strip.y, (strip.width - plus_width).max(1.0), strip.height)));
+        let tabs: Vec<(String, bool, bool)> = self
+            .tabs
+            .iter()
+            .map(|tab| match &tab.pane {
+                Pane::Terminal(terminal) => (terminal.title(), false, false),
+                Pane::Document { path, title } => (title.clone(), true, self.editor.as_ref().is_some_and(|editor| editor.is_modified(path))),
+            })
+            .collect();
+        for (index, (title, is_document, modified)) in tabs.iter().enumerate() {
+            // Width from the title alone: 96 pt of chrome, between 120 and 320 pt.
+            let fitted = ui.fit_middle(title, ui.px(320.0 - 96.0), 12.0, 400, false);
+            let width = (ui.measure(&fitted, 12.0, 400, false) + ui.px(96.0)).clamp(ui.px(120.0), ui.px(320.0));
+            let rect = Rect::new(x, strip.y, width, strip.height);
             self.tab_rects.push(rect);
-            let active = index == self.shown;
-            if active {
-                scene.fill_rect(rect, theme::EDITOR_BACKGROUND);
-            } else if self.hover == Some(index) {
-                scene.fill_rect(rect, theme::HOVER);
+            let selected = index == self.shown;
+            let hovered = self.hover == Some(index);
+            if !selected && hovered {
+                ui.fill(rect, theme::HOVER);
             }
-            scene.fill(rect.right() - 1.0, 0.0, 1.0, rect.height, theme::SEPARATOR);
-            let title = match &tab.pane {
-                Pane::Terminal(terminal) => terminal.title(),
-                Pane::Document { path, title } => {
-                    if self.editor.as_ref().is_some_and(|editor| editor.is_modified(path)) {
-                        format!("{title} \u{2022}")
-                    } else {
-                        title.clone()
-                    }
-                }
-            };
-            let line = text.line(queue, &title, font_pixels, false, false);
-            let inset = (12.0 * scale).round();
-            scene.set_clip(Some(Rect::new(rect.x + inset, rect.y, rect.width - 2.0 * inset, rect.height)));
-            let baseline = (rect.height * 0.5 + font_pixels * 0.36).round();
-            let color = if active { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY };
-            for glyph in &line.glyphs {
-                scene.glyph(glyph.sprite, rect.x + inset + glyph.x, baseline + glyph.y, color);
+            let icon = if *is_document { if title.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" } } else { "terminal" };
+            ui.icon(icon, 12.0, IconWeight::Regular, rect.x + ui.px(11.0 + 7.0), middle, if selected { theme::ACCENT } else { theme::TEXT_SECONDARY });
+            ui.text(&fitted, rect.x + ui.px(11.0 + 14.0 + 8.0), middle, 12.0, 400, false, if selected { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY });
+            let close = Rect::new(rect.right() - ui.px(3.0 + 27.0), middle - ui.px(15.0), ui.px(27.0), ui.px(30.0));
+            if *modified {
+                let dot = ui.px(6.0);
+                ui.painter.scene.fill(close.x - dot, middle - dot * 0.5, dot, dot, theme::ACCENT);
             }
-            scene.set_clip(None);
+            let strong = selected || hovered;
+            ui.icon("xmark", 9.0, IconWeight::Semibold, close.x + close.width * 0.5, middle, faded(theme::TEXT_SECONDARY, if strong { 1.0 } else { 0.55 }));
+            self.close_rects.push(close);
+            ui.painter.scene.fill(rect.right() - line, rect.y, line, rect.height, theme::SEPARATOR);
+            if selected {
+                ui.painter.scene.fill(rect.x, rect.bottom() - line, rect.width, line, theme::ACCENT);
+            }
+            x += width;
         }
-        scene.fill(self.strip.x, self.strip.height - 1.0, self.strip.width, 1.0, theme::SEPARATOR);
-        if let Some(rect) = self.tab_rects.get(self.shown).copied() {
-            // The active tab is open toward its pane.
-            scene.fill(rect.x, rect.bottom() - 1.0, rect.width - 1.0, 1.0, theme::EDITOR_BACKGROUND);
+        ui.painter.scene.set_clip(None);
+        // New local terminal.
+        self.plus_rect = Rect::new((x + ui.px(5.0)).min(strip.right() - ui.px(39.0)), middle - ui.px(15.0), ui.px(34.0), ui.px(30.0));
+        ui.icon("plus", 12.0, IconWeight::Semibold, self.plus_rect.x + self.plus_rect.width * 0.5, middle, theme::TEXT_SECONDARY);
+        ui.painter.scene.fill(strip.x, strip.bottom(), strip.width, line, theme::SEPARATOR);
+    }
+
+    /// The bar under a terminal (`TerminalStatusBar`).
+    fn draw_status_bar(&mut self, painter: &mut Painter, running: bool) {
+        let mut ui = Ui { painter, scale: self.scale };
+        let rect = self.status_bar;
+        let line = ui.px(1.0).max(1.0);
+        ui.painter.scene.fill(rect.x, rect.y, rect.width, line, theme::SEPARATOR);
+        let middle = rect.y + line + (rect.height - line) * 0.5;
+        let dot = ui.px(5.0);
+        let x = rect.x + ui.px(12.0);
+        ui.painter.scene.fill(x, middle - dot * 0.5, dot, dot, if running { theme::ACCENT } else { theme::TEXT_SECONDARY });
+        ui.text(if running { "Local shell" } else { "Session ended" }, x + dot + ui.px(7.0), middle, 10.0, 500, false, theme::TEXT_SECONDARY);
+        // The shell's directory is not reported to the app yet: the project folder stands in for it.
+        let home = home_directory().unwrap_or_default();
+        let root = self.explorer.root();
+        let directory = match root.strip_prefix(&home) {
+            Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => root.display().to_string(),
+        };
+        let right = rect.right() - ui.px(12.0);
+        let fitted = ui.fit_middle(&directory, rect.width * 0.5, 10.0, 400, true);
+        let width = ui.text_right(&fitted, right, middle, 10.0, 400, true, theme::TEXT_SECONDARY);
+        ui.icon("folder", 10.0, IconWeight::Regular, right - width - ui.px(7.0 + 6.0), middle, theme::TEXT_SECONDARY);
+    }
+
+    /// The editor's toolbar and footer (`CodeToolbar`, `CodeWorkspaceView`).
+    fn draw_editor_chrome(&mut self, painter: &mut Painter, path: &str) {
+        let (filetype, diagnostics, mode, modified) = match &self.editor {
+            Some(editor) => (editor.filetype(path), editor.diagnostics(path), editor.mode_label(), editor.is_modified(path)),
+            None => (String::new(), 0, "Insert", false),
+        };
+        let points = self.font_points;
+        let mut ui = Ui { painter, scale: self.scale };
+        let bar = self.toolbar;
+        ui.fill(bar, theme::EDITOR_BACKGROUND);
+        let middle = bar.y + bar.height * 0.5;
+        let mut language: String = if filetype.is_empty() { "Text".into() } else { filetype };
+        if let Some(first) = language.get_mut(0..1) {
+            first.make_ascii_uppercase();
         }
+        ui.text(&language, bar.x + ui.px(12.0), middle, 11.0, 500, false, theme::TEXT_SECONDARY);
+        let gap = ui.px(8.0);
+        let mut right = bar.right() - ui.px(12.0);
+        let save = ui.icon("square.and.arrow.down", 11.0, IconWeight::Medium, right - ui.px(7.0), middle, faded(theme::TEXT_SECONDARY, if modified { 1.0 } else { 0.45 }));
+        right -= save.max(ui.px(14.0)) + gap;
+        let run = ui.icon("play.fill", 11.0, IconWeight::Medium, right - ui.px(6.0), middle, faded(theme::TEXT_SECONDARY, 0.45));
+        right -= run.max(ui.px(12.0)) + gap;
+        right -= ui.text_right(&format!("{} pt", points as i32), right, middle, 11.0, 500, false, theme::TEXT_SECONDARY) + gap;
+        let code = ui.text_right("Code", right, middle, 11.0, 500, false, theme::TEXT_SECONDARY);
+        let braces = ui.icon("curlybraces", 11.0, IconWeight::Medium, right - code - ui.px(10.0), middle, theme::TEXT_SECONDARY);
+        right -= code + braces + ui.px(6.0) + gap;
+        let count = ui.text_right(&diagnostics.to_string(), right, middle, 11.0, 500, false, theme::TEXT_SECONDARY);
+        ui.icon("exclamationmark.circle", 11.0, IconWeight::Medium, right - count - ui.px(10.0), middle, theme::TEXT_SECONDARY);
+        let footer = self.editor_footer;
+        ui.fill(footer, theme::EDITOR_BACKGROUND);
+        let middle = footer.y + footer.height * 0.5;
+        ui.text(&format!("Neovim \u{b7} {mode}"), footer.x + ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+        let hints = if cfg!(target_os = "macos") { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   \u{2318}S  Save" } else { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   Ctrl+Shift+S  Save" };
+        ui.text_right(hints, footer.right() - ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+    }
+
+    /// The window's footer (`WorkspaceFooter`).
+    fn draw_footer(&mut self, painter: &mut Painter) {
+        let document = self.tabs.get(self.shown).and_then(|tab| match &tab.pane {
+            Pane::Document { title, .. } => Some(title.clone()),
+            Pane::Terminal(_) => None,
+        });
+        let count = self.tabs.len();
+        let mut ui = Ui { painter, scale: self.scale };
+        let rect = self.footer;
+        let line = ui.px(1.0).max(1.0);
+        ui.painter.scene.fill(rect.x, rect.y - line, rect.width, line, theme::SEPARATOR);
+        ui.fill(rect, theme::SIDEBAR_BACKGROUND);
+        let middle = rect.y + rect.height * 0.5;
+        let x = rect.x + ui.px(14.0);
+        let icon = ui.icon(if document.is_some() { "doc.text" } else { "terminal" }, 10.0, IconWeight::Medium, x + ui.px(6.0), middle, theme::TEXT_SECONDARY);
+        ui.text(document.as_deref().unwrap_or("NeoLink"), x + icon.max(ui.px(12.0)) + ui.px(7.0), middle, 10.0, 500, false, theme::TEXT_SECONDARY);
+        let mut right = rect.right() - ui.px(14.0);
+        let hint = if cfg!(target_os = "macos") { "\u{2318}T  New tab" } else { "Ctrl+Shift+T  New tab" };
+        right -= ui.text_right(hint, right, middle, 10.0, 500, false, theme::TEXT_SECONDARY) + ui.px(7.0);
+        ui.painter.scene.fill(right - line, middle - ui.px(5.0), line, ui.px(10.0), theme::SEPARATOR);
+        right -= line + ui.px(7.0);
+        ui.text_right(&format!("{count} {}", if count == 1 { "tab" } else { "tabs" }), right, middle, 10.0, 500, false, theme::TEXT_SECONDARY);
     }
 }
 
@@ -576,7 +783,7 @@ impl Content for Workspace {
             }
         }
         if let Some(editor) = &mut self.editor {
-            editor.resize(self.grid.0, self.grid.1);
+            editor.resize(self.editor_grid.0, self.editor_grid.1);
         }
         // Programs that ended take their tabs with them.
         let before = self.tabs.len();
@@ -616,25 +823,36 @@ impl Content for Workspace {
         } else {
             self.seen_replies = self.editor.as_ref().map(Editor::replies).unwrap_or(0);
         }
-        self.draw_strip(painter.scene, painter.text, painter.queue);
+        self.draw_header(painter);
+        self.draw_strip(painter);
         let (pane, focused, period) = (self.pane, self.focused, frame.period);
+        let editor_pane = self.editor_pane;
+        let mut chrome: Option<Option<String>> = None;
         let mut output = 0;
         let next = match self.tabs.get_mut(self.shown).map(|tab| &mut tab.pane) {
             Some(Pane::Terminal(terminal)) => {
                 let next = terminal.build(painter, pane, focused, frame.display, period);
                 output = terminal.output_generation();
+                chrome = Some(None);
                 next
             }
             Some(Pane::Document { path, .. }) => {
                 if let Some(editor) = &mut self.editor {
-                    editor.build(painter, pane, focused, path);
+                    editor.build(painter, editor_pane, focused, path);
                     output = editor.drawn_generation();
                 }
+                chrome = Some(Some(path.clone()));
                 Next::Idle
             }
             None => Next::Idle,
         };
+        match chrome {
+            Some(None) => self.draw_status_bar(painter, true),
+            Some(Some(path)) => self.draw_editor_chrome(painter, &path),
+            None => {}
+        }
         self.draw_notice(painter);
+        self.draw_footer(painter);
         let mut next = next;
         if self.explorer.visible {
             let active_file = self.tabs.get(self.shown).and_then(Tab::document).map(str::to_string);
@@ -653,6 +871,10 @@ impl Content for Workspace {
         let mut signature = Signature::new();
         signature.add(frame.size.0 as u64).add(frame.size.1 as u64).add(self.cell.width.to_bits() as u64).add(self.cell.height.to_bits() as u64);
         signature.add(self.shown as u64).add(self.shown_selection).add(self.focused as u64).add(self.hover.map_or(u64::MAX, |index| index as u64));
+        signature.add(self.hover_close.map_or(u64::MAX, |index| index as u64)).add(self.font_points.to_bits() as u64);
+        if let Some(editor) = &self.editor {
+            signature.text(editor.mode_label());
+        }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
         for (index, tab) in self.tabs.iter().enumerate() {

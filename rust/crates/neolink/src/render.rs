@@ -204,6 +204,17 @@ impl Scene {
         self.push(Instance::glyph(sprite, x, baseline, color));
     }
 
+    /// A mask sprite with its top left corner at `(x, y)` (icons).
+    pub fn sprite(&mut self, sprite: Sprite, x: f32, y: f32, color: [u8; 4]) {
+        self.push(Instance {
+            position: [x.round(), y.round()],
+            size: [sprite.width as f32, sprite.height as f32],
+            uv: [sprite.atlas_x as f32, sprite.atlas_y as f32],
+            color,
+            kind: 1,
+        });
+    }
+
     /// Draws a retained row with its origin at `(x, y)`.
     pub fn retained(&mut self, row: (u32, u32), x: f32, y: f32) {
         if row.1 == 0 {

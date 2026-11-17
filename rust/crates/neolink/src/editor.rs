@@ -187,6 +187,37 @@ impl Editor {
         })
     }
 
+    /// Neovim's filetype for `path`, from its last report (empty until one arrived).
+    pub fn filetype(&self, path: &str) -> String {
+        self.buffer_field(path, "filetype").and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default()
+    }
+
+    /// Diagnostics Neovim reported for `path`.
+    pub fn diagnostics(&self, path: &str) -> u64 {
+        self.buffer_field(path, "diagnostics").and_then(|value| value.as_u64()).unwrap_or(0)
+    }
+
+    fn buffer_field(&self, path: &str, field: &str) -> Option<serde_json::Value> {
+        self.client.with_state(|state| {
+            let buffers = state.last_reply.as_ref()?["state"]["buffers"].as_array()?;
+            buffers.iter().find(|buffer| buffer["path"].as_str() == Some(path)).map(|buffer| buffer[field].clone())
+        })
+    }
+
+    /// The mode as the Swift app words it.
+    pub fn mode_label(&self) -> &'static str {
+        self.client.with_state(|state| {
+            let name = state.screen.modes.get(state.screen.mode).map(|mode| mode.name.as_str()).unwrap_or("insert");
+            if name.starts_with("insert") {
+                "Insert"
+            } else if name == "normal" {
+                "Normal"
+            } else {
+                "Visual / Command"
+            }
+        })
+    }
+
     /// How many of Neovim's replies have been read.
     pub fn replies(&self) -> u64 {
         self.client.with_state(|state| state.replies)

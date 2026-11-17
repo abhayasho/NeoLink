@@ -158,7 +158,15 @@ struct LineKey {
     monospace: bool,
 }
 
+/// An icon ready to draw: its sprite, or the stand-in glyphs where the system has no such symbol.
+#[derive(Clone)]
+pub enum Icon {
+    Symbol(Sprite),
+    Glyphs(std::sync::Arc<ShapedLine>),
+}
+
 pub struct TextSystem {
+    icons: HashMap<(String, u32, crate::icons::IconWeight), Option<Sprite>>,
     clusters: HashMap<(String, bool, bool), std::sync::Arc<[CellGlyph]>>,
     lines: HashMap<LineKey, std::sync::Arc<ShapedLine>>,
     ui_family: String,
@@ -210,10 +218,37 @@ fn interface_family(fonts: &FontSystem) -> String {
 }
 
 impl TextSystem {
+    /// The icon `name` (an SF Symbol name) at `points` for a display of `scale` pixels per point.
+    pub fn icon(&mut self, queue: &wgpu::Queue, name: &str, points: f32, weight: crate::icons::IconWeight, scale: f32) -> Icon {
+        let pixels = points * scale;
+        let key = (name.to_string(), pixels.to_bits(), weight);
+        let sprite = match self.icons.get(&key) {
+            Some(sprite) => *sprite,
+            None => {
+                let sprite = crate::icons::rasterize(name, points, weight, scale).and_then(|bitmap| {
+                    let (x, y) = self.atlas.upload(queue, SpriteKind::Mask, bitmap.width, bitmap.height, &bitmap.coverage)?;
+                    Some(Sprite { kind: SpriteKind::Mask, atlas_x: x as u16, atlas_y: y as u16, width: bitmap.width as u16, height: bitmap.height as u16, left: 0, top: 0 })
+                });
+                self.icons.insert(key, sprite);
+                sprite
+            }
+        };
+        match sprite {
+            Some(sprite) => Icon::Symbol(sprite),
+            None => Icon::Glyphs(self.line(queue, crate::icons::fallback_glyph(name), pixels.round(), false, false)),
+        }
+    }
+
     /// One line of text in the interface font (or the monospace font), `font_pixels` tall, laid out from
     /// x = 0 with glyph positions in whole pixels vertically and quarter pixels horizontally.
     pub fn line(&mut self, queue: &wgpu::Queue, text: &str, font_pixels: f32, bold: bool, monospace: bool) -> std::sync::Arc<ShapedLine> {
-        let key = LineKey { text: text.to_string(), size_bits: font_pixels.to_bits(), bold, monospace };
+        self.styled_line(queue, text, font_pixels, if bold { 600 } else { 400 }, monospace)
+    }
+
+    /// Like [`line`](Self::line) with a numeric font weight (400 regular, 500 medium, 600 semibold, 700 bold).
+    pub fn styled_line(&mut self, queue: &wgpu::Queue, text: &str, font_pixels: f32, weight: u16, monospace: bool) -> std::sync::Arc<ShapedLine> {
+        let bold = weight >= 600;
+        let key = LineKey { text: text.to_string(), size_bits: font_pixels.to_bits() ^ ((weight as u32) << 20).rotate_left(7), bold, monospace };
         if let Some(line) = self.lines.get(&key) {
             return line.clone();
         }
@@ -221,10 +256,7 @@ impl TextSystem {
             self.lines.clear();
         }
         let family = if monospace { self.family.clone() } else { self.ui_family.clone() };
-        let mut attrs = Attrs::new().family(Family::Name(&family));
-        if bold {
-            attrs = attrs.weight(Weight::SEMIBOLD);
-        }
+        let attrs = Attrs::new().family(Family::Name(&family)).weight(Weight(weight));
         let mut buffer = Buffer::new_empty(Metrics::new(font_pixels, (font_pixels * 1.3).ceil()));
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fonts, false);
@@ -253,6 +285,7 @@ impl TextSystem {
         let scratch = Buffer::new_empty(Metrics::new(16.0, 20.0));
         let ui_family = interface_family(&fonts);
         let mut system = TextSystem {
+            icons: HashMap::new(),
             clusters: HashMap::new(),
             lines: HashMap::new(),
             ui_family,
@@ -296,6 +329,7 @@ impl TextSystem {
         self.cells.clear();
         self.clusters.clear();
         self.lines.clear();
+        self.icons.clear();
     }
 
     fn sprite(&mut self, queue: &wgpu::Queue, key: CacheKey) -> Option<Sprite> {
