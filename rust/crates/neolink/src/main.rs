@@ -762,6 +762,10 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
             }
+            WindowEvent::DroppedFile(path) => {
+                self.with_workspace(|workspace, _| workspace.drop_file(&path));
+                shared.invalidate();
+            }
             WindowEvent::CursorLeft { .. } => {
                 if self.with_workspace(|workspace, _| workspace.pointer(-1.0, -1.0)) == Some(true) {
                     shared.invalidate();

@@ -145,6 +145,18 @@ vim.api.nvim_create_autocmd({'BufModifiedSet', 'BufWritePost', 'BufReadPost', 'B
     pcall(vim.rpcnotify, channel, 'neolink_modified', name, modified)
   end
 end})
+-- Diagnostics and language servers change without a command from the app: send the state then too
+-- (once per 80 ms at most), so counts and the server indicator follow.
+local pending = false
+vim.api.nvim_create_autocmd({'DiagnosticChanged', 'LspAttach', 'LspDetach'}, {callback = function()
+  if pending then return end
+  pending = true
+  vim.defer_fn(function()
+    pending = false
+    local ok, snapshot = pcall(NeoLink.snapshot)
+    if ok then pcall(vim.rpcnotify, channel, 'neolink_state', vim.json.encode(snapshot)) end
+  end, 80)
+end})
 return true
 "#;
 
@@ -447,6 +459,18 @@ impl Inner {
                         state.selection = Some((token, path, generation));
                     }
                     self.release(Some(token), None);
+                    true
+                }
+                "neolink_state" => {
+                    // The editor's state changed on its own (diagnostics, language servers).
+                    if let Some(snapshot) = params.first().and_then(Value::as_str).and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok()) {
+                        let mut state = self.state.lock().unwrap();
+                        match &mut state.last_reply {
+                            Some(reply) if reply.is_object() => reply["state"] = snapshot,
+                            _ => state.last_reply = Some(serde_json::json!({ "state": snapshot })),
+                        }
+                        state.replies += 1;
+                    }
                     true
                 }
                 "neolink_modified" => {

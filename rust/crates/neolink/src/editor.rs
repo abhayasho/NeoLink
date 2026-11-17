@@ -197,6 +197,19 @@ impl Editor {
         self.buffer_field(path, "diagnostics").and_then(|value| value.as_u64()).unwrap_or(0)
     }
 
+    /// The language servers attached to `path`'s buffer, as Neovim names them ("" if none).
+    pub fn servers(&self, path: &str) -> String {
+        self.buffer_field(path, "servers").and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default()
+    }
+
+    /// Diagnostics of every open buffer: `(path, count, errors)`.
+    pub fn all_diagnostics(&self) -> Vec<(String, u64, u64)> {
+        self.client.with_state(|state| {
+            let Some(buffers) = state.last_reply.as_ref().and_then(|reply| reply["state"]["buffers"].as_array()) else { return Vec::new() };
+            buffers.iter().filter_map(|buffer| Some((buffer["path"].as_str()?.to_string(), buffer["diagnostics"].as_u64().unwrap_or(0), buffer["errors"].as_u64().unwrap_or(0)))).filter(|entry| entry.1 > 0).collect()
+        })
+    }
+
     fn buffer_field(&self, path: &str, field: &str) -> Option<serde_json::Value> {
         self.client.with_state(|state| {
             let buffers = state.last_reply.as_ref()?["state"]["buffers"].as_array()?;

@@ -143,6 +143,8 @@ pub struct Workspace {
     pressed_in: u8,
     /// The shown terminal's working directory as the status bar spells it.
     shown_directory: String,
+    /// The language servers of the shown document.
+    shown_servers: String,
     last_press: (f64, f32, f32, u8),
     /// A file or folder copied in the explorer ("Copy", then "Paste Here").
     copied: Option<std::path::PathBuf>,
@@ -228,6 +230,7 @@ impl Workspace {
             tip_changed: false,
             pressed_in: 0,
             shown_directory: String::new(),
+            shown_servers: String::new(),
             last_press: (0.0, 0.0, 0.0, 0),
             copied: None,
             explorer_points: crate::explorer::WIDTH_POINTS,
@@ -1315,6 +1318,7 @@ impl Workspace {
                         "diagnostics" => "Show diagnostics",
                         "size" => "Text size",
                         "code" => "Code actions",
+                        "servers" => return Some(format!("Code intelligence: {}", self.shown_servers)),
                         _ => return None,
                     }
                     .to_string(),
@@ -1621,7 +1625,7 @@ impl Workspace {
                             Item::entry("Unfold All", Action::Editor("unfoldAll")),
                             Item::entry("Toggle Inlay Hints", Action::Editor("inlayHints")),
                             Item::Separator,
-                            Item::note("No language server for this file"),
+                            Item::note(&if self.shown_servers.is_empty() { "No language server for this file".to_string() } else { format!("Language servers: {}", self.shown_servers) }),
                         ]));
                     }
                     _ => {}
@@ -1714,6 +1718,23 @@ impl Workspace {
             return true;
         }
         false
+    }
+
+    /// A file dragged in from another program and dropped at the pointer: over the explorer it is
+    /// copied into the folder under it (never replacing anything), elsewhere it is opened.
+    pub fn drop_file(&mut self, path: &std::path::Path) {
+        let (x, y) = self.pointer;
+        if self.explorer.contains(x, y) {
+            let target = self.explorer.drop_target(x, y);
+            match neolink_core::files::copy_into(path, &target) {
+                Ok(_) => self.explorer.refresh(),
+                Err(error) => self.notice = Some(error),
+            }
+        } else if path.is_dir() {
+            self.set_project(neolink_core::paths::canonical(path));
+        } else {
+            self.open_document(path);
+        }
     }
 
     /// Copies the selection of the terminal that has the keyboard. Returns `false` if the keyboard is
@@ -2045,10 +2066,11 @@ impl Workspace {
 
     /// The editor's toolbar and footer (`CodeToolbar`, `CodeWorkspaceView`).
     fn draw_editor_chrome(&mut self, painter: &mut Painter, path: &str) {
-        let (filetype, diagnostics, mode, modified) = match &self.editor {
-            Some(editor) => (editor.filetype(path), editor.diagnostics(path), editor.mode_label(), editor.is_modified(path)),
-            None => (String::new(), 0, "Insert", false),
+        let (filetype, diagnostics, mode, modified, servers) = match &self.editor {
+            Some(editor) => (editor.filetype(path), editor.diagnostics(path), editor.mode_label(), editor.is_modified(path), editor.servers(path)),
+            None => (String::new(), 0, "Insert", false, String::new()),
         };
+        self.shown_servers = servers.clone();
         let points = self.font_points;
         let runnable = matches!(std::path::Path::new(path).extension().and_then(|extension| extension.to_str()).unwrap_or(""), "py" | "js" | "mjs" | "swift" | "sh" | "rb" | "lua" | "go");
         let mut ui = Ui { painter, scale: self.scale };
@@ -2080,6 +2102,12 @@ impl Workspace {
         let count = ui.text_right(&diagnostics.to_string(), right, middle, 11.0, 500, false, theme::TEXT_SECONDARY);
         let mark = ui.icon("exclamationmark.circle", 11.0, IconWeight::Medium, right - count - ui.px(10.0), middle, theme::TEXT_SECONDARY);
         buttons.push((area(right - count - mark - ui.px(6.0), right), "diagnostics"));
+        right -= count + mark + ui.px(6.0) + gap;
+        if !servers.is_empty() {
+            // Code intelligence is attached to this file.
+            let bolt = ui.icon("bolt.fill", 10.0, IconWeight::Medium, right - ui.px(5.0), middle, theme::ACCENT).max(ui.px(10.0));
+            buttons.push((area(right - bolt, right), "servers"));
+        }
         let footer = self.editor_footer;
         ui.fill(footer, theme::EDITOR_BACKGROUND);
         let middle = footer.y + footer.height * 0.5;
@@ -2244,6 +2272,9 @@ impl Content for Workspace {
                 Ok(rest) => format!("~/{}", rest.display()),
                 Err(_) => directory.display().to_string(),
             };
+        }
+        if let Some(editor) = &self.editor {
+            self.explorer.set_diagnostics(editor.all_diagnostics().into_iter().map(|(path, count, errors)| (std::path::PathBuf::from(path), count, errors)).collect());
         }
         // An agent finished a turn: files and Git state may have changed.
         if self.agent.take_finished_turn() {

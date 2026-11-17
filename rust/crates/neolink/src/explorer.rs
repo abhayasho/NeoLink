@@ -114,6 +114,8 @@ pub struct Explorer {
     /// The tree shows the shown terminal's working directory instead of the project.
     pub follow_terminal: bool,
     follow_rect: Rect,
+    /// Diagnostics of open files: `(path, count, errors)`.
+    diagnostics: Vec<(PathBuf, u64, u64)>,
     /// The pane as last drawn, and what it was drawn from: an unchanged pane is replayed.
     drawn: Option<(u64, Vec<(Option<Rect>, Vec<crate::render::Instance>)>)>,
     git: Decorations,
@@ -200,6 +202,7 @@ impl Explorer {
             focused: false,
             follow_terminal: false,
             follow_rect: Rect::default(),
+            diagnostics: Vec::new(),
             drawn: None,
             git: Decorations::default(),
             git_loaded: Arc::new(Mutex::new(None)),
@@ -467,6 +470,24 @@ impl Explorer {
         }
     }
 
+    /// Diagnostics to count on files and the folders above them.
+    pub fn set_diagnostics(&mut self, diagnostics: Vec<(PathBuf, u64, u64)>) {
+        if diagnostics != self.diagnostics {
+            self.diagnostics = diagnostics;
+            self.revision += 1;
+        }
+    }
+
+    /// The folder a dropped file goes to: the folder row under `(x, y)`, the folder of a file row, or
+    /// the tree's root.
+    pub fn drop_target(&self, x: f32, y: f32) -> PathBuf {
+        match self.row_under(x, y) {
+            Some((path, true)) => path,
+            Some((path, false)) => path.parent().map(Path::to_path_buf).unwrap_or_else(|| self.tree.root().to_path_buf()),
+            None => self.tree.root().to_path_buf(),
+        }
+    }
+
     /// The row under `(x, y)`: its path and whether it is a folder.
     pub fn row_under(&self, x: f32, y: f32) -> Option<(PathBuf, bool)> {
         let row = self.rows.get(self.row_at(x, y)?)?;
@@ -684,6 +705,18 @@ impl Explorer {
                     let _ = is_folder;
                     right -= ui.text_right(status.letter(), right, row_middle, 10.0, 500, true, status_color(status)) + ui.px(7.0);
                 }
+            }
+            // Diagnostics of this file, or of everything open beneath this folder.
+            let (mut found, mut errors) = (0u64, 0u64);
+            for (path, count, error_count) in &self.diagnostics {
+                if *path == row.path || (is_folder && path.starts_with(&row.path)) {
+                    found += count;
+                    errors += error_count;
+                }
+            }
+            if found > 0 {
+                let color = if errors > 0 { theme::rgb(0xCC9595) } else { theme::rgb(0xC6B28E) };
+                right -= ui.text_right(&found.to_string(), right, row_middle, 10.0, 500, true, color) + ui.px(7.0);
             }
             let name_x = x + ui.px(37.0);
             let label = ui.fit_middle(&row.label, (right - name_x).max(1.0), 12.0, 400, false);
