@@ -124,6 +124,9 @@ pub struct Explorer {
     /// Folder List order (the Swift app's `FileSortOrder`, by index).
     pub sort: usize,
     name_rect: Rect,
+    /// Watches the shown folder for changes made by other programs; set when something changed.
+    watcher: Option<notify::RecommendedWatcher>,
+    changed_on_disk: Arc<std::sync::atomic::AtomicBool>,
     /// Rows that stand for files deleted from the working tree.
     missing: std::collections::HashSet<PathBuf>,
     /// Diagnostics of open files: `(path, count, errors)`.
@@ -215,6 +218,8 @@ impl Explorer {
             follow_terminal: false,
             follow_rect: Rect::default(),
             missing: Default::default(),
+            watcher: None,
+            changed_on_disk: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             folder_list: false,
             project_tree: None,
             sort: 0,
@@ -250,6 +255,46 @@ impl Explorer {
     pub fn attach(&mut self, shared: &Arc<Shared>) {
         self.shared = Arc::downgrade(shared);
         self.request_git();
+        self.watch();
+    }
+
+    /// Watches the shown folder (recursively; FSEvents on macOS, ReadDirectoryChangesW on Windows).
+    /// Bursts of changes (a build, a checkout) are coalesced: the tree and Git are read again once
+    /// things have been quiet for 150 ms.
+    fn watch(&mut self) {
+        use notify::{RecursiveMode, Watcher};
+        self.watcher = None;
+        let root = self.tree.root().to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel::<()>();
+        let git = root.join(".git");
+        let handler = move |event: notify::Result<notify::Event>| {
+            let Ok(event) = event else { return };
+            // Inside .git only what changes the status matters (the index, HEAD, branches).
+            let relevant = event.paths.iter().any(|path| match path.strip_prefix(&git) {
+                Ok(inside) => inside.starts_with("index") || inside.starts_with("HEAD") || inside.starts_with("refs"),
+                Err(_) => true,
+            });
+            if relevant {
+                let _ = sender.send(());
+            }
+        };
+        let Ok(mut watcher) = notify::recommended_watcher(handler) else { return };
+        if watcher.watch(&root, RecursiveMode::Recursive).is_err() {
+            return;
+        }
+        self.watcher = Some(watcher);
+        let (flag, shared) = (self.changed_on_disk.clone(), self.shared.clone());
+        let _ = std::thread::Builder::new().name("explorer watch".into()).spawn(move || {
+            while receiver.recv().is_ok() {
+                // Wait for quiet.
+                while receiver.recv_timeout(std::time::Duration::from_millis(150)).is_ok() {}
+                flag.store(true, std::sync::atomic::Ordering::Release);
+                match shared.upgrade() {
+                    Some(shared) => shared.invalidate(),
+                    None => return,
+                }
+            }
+        });
     }
 
     /// The project's folder (also in Folder List mode, where another folder may be shown).
@@ -295,6 +340,9 @@ impl Explorer {
         list.compact = false;
         self.tree = list;
         self.requested.clear();
+        if self.watcher.is_some() {
+            self.watch();
+        }
         self.filter.clear();
         self.scroll = 0.0;
         self.smoother.cancel();
@@ -367,6 +415,11 @@ impl Explorer {
     }
 
     fn refresh_rows(&mut self) {
+        // Other programs changed files: read the open folders and Git again (not while scrolling,
+        // where it would wait for the gesture to end).
+        if !self.smoother.is_active() && self.changed_on_disk.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            self.refresh();
+        }
         if let Some(decorations) = self.git_loaded.lock().take() {
             if decorations != self.git {
                 self.git = decorations;
