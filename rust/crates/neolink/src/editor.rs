@@ -187,6 +187,11 @@ impl Editor {
         })
     }
 
+    /// How many of Neovim's replies have been read.
+    pub fn replies(&self) -> u64 {
+        self.client.with_state(|state| state.replies)
+    }
+
     /// Whether `path` has unsaved changes.
     pub fn is_modified(&self, path: &str) -> bool {
         self.client.with_state(|state| state.modified.contains(path))

@@ -185,13 +185,13 @@ exercised by the in-app benchmark or the capture, not by a person at the keyboar
 | Shell | IME / marked text; accessibility | not started | - |
 | Shell | Window resize (smooth live resize), display changes | partial | resize relays out the grid; live-resize smoothness not measured |
 | Harness | Synthetic input with timestamps, busy main thread, key-to-display, evenness, idle CPU, per-thread CPU | done | macOS |
-| Explorer | Lazy project tree, compact folders, reveal active file, filter | partial | tree, compaction, reveal, active-file highlight, pixel scrolling: macOS capture and unit tests; no filter, no refresh on file changes, no keyboard navigation |
-| Explorer | Git decorations and ignore dimming, diagnostics counters, icons | not started | - |
+| Explorer | Lazy project tree, compact folders, reveal active file, filter | partial | tree, compaction, reveal, active-file highlight, pixel scrolling, refresh on save and window activation: macOS capture and unit tests; no filter, no keyboard navigation, no watcher for outside changes |
+| Explorer | Git decorations and ignore dimming, diagnostics counters, icons | partial | status letters and colours, folder summaries, ignored entries dimmed (parser unit-tested, macOS capture); no deleted placeholders, diagnostics counters or icons |
 | Explorer | File actions (create, rename, trash, copy path, open terminal here, drag/drop copy) | not started | - |
 | Explorer | Folder List mode with sorts; Follow Terminal | not started | - |
 | Editor | Shared embedded Neovim, `ext_linegrid` client, `Resources/Editor/neolink.lua` unchanged | done | macOS: real-Neovim tests, capture, `editor-type` |
-| Editor | Tabs, open/save/close with dirty prompts, external-change conflict check | partial | open, save, refused save after an outside change: tested; close discards without a prompt; modified marker updates only after a command |
-| Editor | Correct-buffer guarantee on switch (`neolink_selection` ordering), snapshot cache rules | partial | display and input guarantees tested against real Neovim (40 alternations; 10 rapid switches with typing); the cached-image shortcut is not ported, so a switch waits for Neovim (17-24 ms) |
+| Editor | Tabs, open/save/close with dirty prompts, external-change conflict check | partial | open, save, refused save after an outside change, live unsaved marker: tested; closing an unsaved document warns in a banner and closes on the second request (not a Save / Don't Save / Cancel dialog, and not exercised by a person) |
+| Editor | Correct-buffer guarantee on switch (`neolink_selection` ordering), snapshot cache rules | done | macOS and Windows CI against real Neovim: 40 alternations, 10 rapid switches with typing, remembered screens equal to Neovim's redraw, a touched hidden buffer loses its screen. The diagnostics-flag rule is not checked (nothing in this app toggles it) |
 | Editor | Smooth vertical scroll, pixel-smooth horizontal scroll, axis lock | not started | the wheel scrolls the editor by whole lines; axis lock logic exists in `neolink-core` with tests |
 | Editor | LSP/Tree-sitter limits (2 MiB, 128 MiB), Run file, REPLs, folding menu | partial | the limits live in `neolink.lua` and apply; Tree-sitter highlighting seen in the capture; LSP not exercised; no Run, REPL or menus |
 | Editor | Native text fallback without `nvim`; PDF viewer tabs | not started | - |
@@ -338,10 +338,17 @@ themselves if `nvim` is missing, so check the run's log rather than its colour.
   background threads; Cmd-B hides it; a folder on the command line is the project.
 - Captures: `docs/milestone-2-editor-capture.png`, `docs/milestone-2-explorer-capture.png`.
 
-Measured (full screen, direct state, synthetic input, two runs; `docs/milestone-2/`): editor typing key to display
-p50 5.3 / 7.3 ms, p95 8.1 / 9.3 ms (the Swift app's best documented figures: 12-19 ms); switching between two
-documents, request to confirmed buffer on the display, p50 17.5 / 23.8 ms, worst 25.8 / 36.3 ms (Swift: about 16 ms
-with its cached images, 31-36 ms without). A third run (`with-explorer.json.gz`) fell in the composited state for
+- **Remembered screens.** When Neovim leaves a buffer it says so after a redraw; the client keeps that screen (eight
+  buffers at most) and drops it when the hidden buffer is touched. A document selected again is shown from it at once
+  if Neovim left it in plain insert mode, grid and styles are unchanged and the file on disk has the same size,
+  time and inode; Neovim's screen replaces it on confirmation and input is held until then
+  (`NEOLINK_EDITOR_CACHE=0` turns it off).
+
+Measured (full screen, direct state, synthetic input, two runs each; `docs/milestone-2/`): editor typing key to
+display p50 5.3 / 7.3 ms, p95 8.1 / 9.3 ms (the Swift app's best documented figures: 12-19 ms). Switching between
+two documents, request to the right buffer on the display: **p50 5.4 / 5.6 ms, p95 13.8 / 13.4 ms, worst 22 ms with
+remembered screens** (21 and 22 of 26 switches used one); 21.2 / 20.1 ms, p95 30-32 ms, worst 34-37 ms with them
+off, same binary, alternating runs (Swift: about 16 ms with its cached images, 31-36 ms without). A third run (`with-explorer.json.gz`) fell in the composited state for
 its first scenarios: editor typing 24.6 ms, terminal typing 22.7 ms. No paired Swift run was made for the editor.
 
 ## 7. Open items after milestone 1
@@ -356,6 +363,9 @@ its first scenarios: editor typing 24.6 ms, terminal typing 22.7 ms. No paired S
 
 ## 8. Log
 
+- 2026-11-17 (later): remembered screens for instant document switches (tested against real Neovim), live
+  unsaved marker and close warning, Windows path spelling fixed after the first Windows run of the editor tests,
+  explorer refresh and Git decorations. 71 tests; CI green on both systems for `821875e`.
 - 2026-11-17: branch pushed with the user's go-ahead; first CI run green on macOS and Windows. Milestone 2 begun:
   Neovim crate (RPC framing, grid model, embedded client with input held across switches, 6 real-Neovim tests),
   editor pane and document tabs, explorer tree and sidebar. 63 tests.

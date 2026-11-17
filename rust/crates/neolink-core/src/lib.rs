@@ -4,6 +4,7 @@
 //! monotonic timeline, so every rule can be tested exactly.
 
 pub mod analysis;
+pub mod git;
 pub mod pacer;
 pub mod paths;
 pub mod profile;

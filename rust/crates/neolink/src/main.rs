@@ -439,7 +439,13 @@ impl ApplicationHandler<UserEvent> for App {
                 shared.invalidate();
             }
             WindowEvent::Focused(focused) => {
-                self.with_workspace(|workspace, _| workspace.focused = focused);
+                self.with_workspace(|workspace, _| {
+                    workspace.focused = focused;
+                    if focused {
+                        // Other programs may have changed files while this window was in the background.
+                        workspace.refresh_explorer();
+                    }
+                });
                 shared.invalidate();
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),

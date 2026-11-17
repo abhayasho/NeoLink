@@ -57,6 +57,9 @@ pub struct Workspace {
     notice: Option<String>,
     /// The document whose unsaved changes the user has just been warned about.
     close_warned: Option<String>,
+    /// A save was sent: refresh the explorer once Neovim has answered it.
+    refresh_explorer_soon: bool,
+    seen_replies: u64,
     pointer: (f32, f32),
     next_id: u64,
     pub cell: CellMetrics,
@@ -92,6 +95,8 @@ impl Workspace {
             sidebar: Rect::default(),
             notice: None,
             close_warned: None,
+            refresh_explorer_soon: false,
+            seen_replies: 0,
             pointer: (-1.0, -1.0),
             next_id: 1,
             cell,
@@ -309,7 +314,13 @@ impl Workspace {
     pub fn save_active(&mut self) {
         if let (Some(path), Some(editor)) = (self.active_document(), &self.editor) {
             editor.command("save", &path);
+            self.refresh_explorer_soon = true;
         }
+    }
+
+    /// The window became active again, or files may have changed: read the open folders and Git again.
+    pub fn refresh_explorer(&mut self) {
+        self.explorer.refresh();
     }
 
     pub fn editor_action(&mut self, action: &str) {
@@ -594,6 +605,16 @@ impl Content for Workspace {
         self.shown = self.shown.min(self.tabs.len().saturating_sub(1));
         if let Some(error) = self.editor.as_ref().and_then(Editor::last_error) {
             self.notice = Some(error);
+        }
+        if self.refresh_explorer_soon {
+            let replies = self.editor.as_ref().map(Editor::replies).unwrap_or(0);
+            if replies != self.seen_replies {
+                self.seen_replies = replies;
+                self.refresh_explorer_soon = false;
+                self.explorer.refresh();
+            }
+        } else {
+            self.seen_replies = self.editor.as_ref().map(Editor::replies).unwrap_or(0);
         }
         self.draw_strip(painter.scene, painter.text, painter.queue);
         let (pane, focused, period) = (self.pane, self.focused, frame.period);

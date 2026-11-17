@@ -5,6 +5,7 @@ use crate::frame::{Next, Painter, Shared};
 use crate::render::Rect;
 use crate::term::ScrollPhase;
 use crate::theme;
+use neolink_core::git::{Decorations, Status};
 use neolink_core::scroll::{ScrollSmoother, Smoothing};
 use neolink_core::tree::{Entry, Row, RowKind, Tree};
 use parking_lot::Mutex;
@@ -34,6 +35,44 @@ pub struct Explorer {
     header_height: f32,
     /// Changes whenever the rows do.
     revision: u64,
+    git: Decorations,
+    git_loaded: Arc<Mutex<Option<Decorations>>>,
+    git_running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Runs the bounded status query of docs/EXPLORER.md. `None` when git is missing, the folder is not a
+/// repository, or the query fails.
+fn git_decorations(root: &Path) -> Option<Decorations> {
+    let run = |arguments: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(arguments)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+    };
+    let top = run(&["rev-parse", "--show-toplevel"])?;
+    let top = PathBuf::from(String::from_utf8(top.stdout).ok()?.trim_end());
+    let status = run(&["status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=normal"])?;
+    if status.stdout.len() > 8 * 1024 * 1024 {
+        return None;
+    }
+    let top = neolink_core::paths::canonical(&top);
+    Some(Decorations::new(&top, &neolink_core::git::parse_porcelain(&status.stdout)))
+}
+
+fn status_color(status: Status) -> theme::Rgba {
+    match status {
+        Status::Added | Status::Untracked => theme::rgb(0xA4B29B),
+        Status::Modified => theme::rgb(0xA8CCDF),
+        Status::Deleted | Status::Conflict => theme::rgb(0xCC9595),
+        Status::Renamed => theme::rgb(0xCDA18A),
+        Status::Ignored => theme::rgb(0x5E5E5E),
+    }
 }
 
 fn read_directory(directory: &Path) -> Vec<Entry> {
@@ -66,11 +105,35 @@ impl Explorer {
             row_height: 48.0,
             header_height: 60.0,
             revision: 0,
+            git: Decorations::default(),
+            git_loaded: Arc::new(Mutex::new(None)),
+            git_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Asks git for the project's status on a background thread (one query at a time).
+    fn request_git(&mut self) {
+        use std::sync::atomic::Ordering;
+        if self.git_running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (root, loaded, running, shared) = (self.tree.root().to_path_buf(), self.git_loaded.clone(), self.git_running.clone(), self.shared.clone());
+        let spawned = std::thread::Builder::new().name("explorer git".into()).spawn(move || {
+            let decorations = git_decorations(&root).unwrap_or_default();
+            *loaded.lock() = Some(decorations);
+            running.store(false, Ordering::Release);
+            if let Some(shared) = shared.upgrade() {
+                shared.invalidate();
+            }
+        });
+        if spawned.is_err() {
+            self.git_running.store(false, Ordering::Release);
         }
     }
 
     pub fn attach(&mut self, shared: &Arc<Shared>) {
         self.shared = Arc::downgrade(shared);
+        self.request_git();
     }
 
     pub fn root(&self) -> &Path {
@@ -102,6 +165,12 @@ impl Explorer {
     }
 
     fn refresh_rows(&mut self) {
+        if let Some(decorations) = self.git_loaded.lock().take() {
+            if decorations != self.git {
+                self.git = decorations;
+                self.revision += 1;
+            }
+        }
         let arrived: Vec<_> = std::mem::take(&mut *self.loaded.lock());
         for (directory, entries) in arrived {
             self.requested.remove(&directory);
@@ -116,14 +185,24 @@ impl Explorer {
         }
     }
 
-    /// Forgets what is known about open folders and reads them again (after file operations, or when
-    /// the window is activated).
+    /// Reads the open folders and the Git status again (after a save, or when the window is activated).
+    /// What is shown stays until the new listings arrive.
     pub fn refresh(&mut self) {
-        let open: Vec<PathBuf> = std::iter::once(self.tree.root().to_path_buf()).chain(self.rows.iter().filter(|row| matches!(row.kind, RowKind::Folder { expanded: true, .. })).map(|row| row.path.clone())).collect();
+        let open: Vec<PathBuf> = std::iter::once(self.tree.root().to_path_buf()).chain(self.rows.iter().filter(|row| matches!(row.kind, RowKind::Folder { expanded: true, loading: false })).map(|row| row.path.clone())).collect();
         for directory in open {
-            self.tree.invalidate(&directory);
+            if !self.requested.insert(directory.clone()) {
+                continue;
+            }
+            let (loaded, shared) = (self.loaded.clone(), self.shared.clone());
+            let _ = std::thread::Builder::new().name("explorer".into()).spawn(move || {
+                let entries = read_directory(&directory);
+                loaded.lock().push((directory, entries));
+                if let Some(shared) = shared.upgrade() {
+                    shared.invalidate();
+                }
+            });
         }
-        self.stale = true;
+        self.request_git();
     }
 
     /// Opens the folders above `path` so its row exists.
@@ -210,11 +289,24 @@ impl Explorer {
             }
             let x = rect.x + (10.0 * scale).round() + row.depth as f32 * indent;
             let baseline = (y + self.row_height * 0.5 + font_pixels * 0.36).round();
-            let (marker, color) = match row.kind {
+            let (marker, mut color) = match row.kind {
                 RowKind::Folder { expanded: true, .. } => ("\u{25be}", theme::TEXT_PRIMARY),
                 RowKind::Folder { expanded: false, .. } => ("\u{25b8}", theme::TEXT_PRIMARY),
                 RowKind::File => ("", if is_active { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY }),
             };
+            let status = self.git.status(&row.path);
+            if let Some(status) = status {
+                color = status_color(status);
+                // A letter for files, a dot for folders that hold changes.
+                let badge = if matches!(row.kind, RowKind::File) { status.letter() } else if status == Status::Ignored { "" } else { "\u{2022}" };
+                if !badge.is_empty() {
+                    let shaped = painter.text.line(painter.queue, badge, (11.0 * scale).round(), true, false);
+                    let badge_x = rect.right() - (16.0 * scale).round() - shaped.width * 0.5;
+                    for glyph in &shaped.glyphs {
+                        scene.glyph(glyph.sprite, badge_x + glyph.x, baseline + glyph.y, color);
+                    }
+                }
+            }
             if !marker.is_empty() {
                 let shaped = painter.text.line(painter.queue, marker, font_pixels, false, true);
                 for glyph in &shaped.glyphs {
