@@ -508,6 +508,9 @@ impl Runner {
         report.insert("switches".into(), json!(selections.len()));
         report.insert("switchesWithoutDisplayedFrame".into(), json!(missing));
         report.insert("switchToDisplayMs".into(), summary(&latency));
+        let (speculated, waited) = with_workspace(&self.shared, |workspace| workspace.editor_cache_report()).unwrap_or((0, 0));
+        report.insert("selectionsShownFromRememberedScreen".into(), json!(speculated));
+        report.insert("selectionsThatWaitedForNeovim".into(), json!(waited));
         Value::Object(report)
     }
 

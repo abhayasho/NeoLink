@@ -8,7 +8,7 @@ use crate::frame::{Painter, Shared};
 use crate::render::{Instance, Rect};
 use crate::text::CellMetrics;
 use crate::theme::{self, Rgba};
-use neolink_nvim::client::Client;
+use neolink_nvim::client::{Client, FileSignature};
 use neolink_nvim::grid::{Cell, CursorShape, Screen, Text, Underline};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +21,12 @@ pub struct Editor {
     requested: Option<(u64, String)>,
     /// What was on screen when that selection was requested.
     frozen: Option<Screen>,
+    /// The requested buffer's screen as Neovim left it, when every rule says it is still what Neovim
+    /// will draw: shown at once, replaced by Neovim's own screen when the selection is confirmed.
+    speculative: Option<Screen>,
+    /// Selections answered from a remembered screen, and selections that had to wait (benchmark).
+    pub speculated: u64,
+    pub waited: u64,
     /// Pixels of wheel input not yet turned into whole lines.
     wheel: f64,
     scratch: Vec<Instance>,
@@ -81,7 +87,7 @@ impl Editor {
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { client, grid: (columns.max(20), rows.max(4)), next_token: 1, requested: None, frozen: None, wheel: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { client, grid: (columns.max(20), rows.max(4)), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {
@@ -97,8 +103,31 @@ impl Editor {
         }
         let token = self.next_token;
         self.next_token += 1;
-        // Until Neovim confirms, the pane keeps showing this.
-        self.frozen = Some(self.client.screen());
+        // Until Neovim confirms, the pane keeps showing this...
+        let current = self.client.screen();
+        // ...unless the buffer's screen from its last visit is provably still right (docs/NATIVE_GRID.md):
+        // nothing touched it while hidden, Neovim left it in plain insert mode (where `open` returns),
+        // the grid and the styles are the same, and the file on disk is the one it was read from.
+        self.speculative = if std::env::var("NEOLINK_EDITOR_CACHE").as_deref() == Ok("0") {
+            None
+        } else {
+            self.client.take_left(path).filter(|left| {
+                left.plain_insert
+                    && left.screen.columns == current.columns
+                    && left.screen.rows.len() == current.rows.len()
+                    && (left.screen.columns, left.screen.rows.len()) == self.grid
+                    && left.screen.style_epoch == current.style_epoch
+                    && left.file.is_some()
+                    && left.file == FileSignature::of(path)
+            })
+            .map(|left| left.screen)
+        };
+        if self.speculative.is_some() {
+            self.speculated += 1;
+        } else {
+            self.waited += 1;
+        }
+        self.frozen = Some(current);
         let _ = self.client.open(path, None, token);
         self.requested = Some((token, path.to_string()));
         token
@@ -108,6 +137,11 @@ impl Editor {
     pub fn shows(&self, path: &str) -> bool {
         let Some((token, requested)) = &self.requested else { return false };
         requested == path && self.client.with_state(|state| state.selection.as_ref().map(|selection| selection.0)) == Some(*token)
+    }
+
+    /// Whether the pane can show `path` now: Neovim confirmed it, or its remembered screen is valid.
+    pub fn can_show(&self, path: &str) -> bool {
+        self.shows(path) || (self.speculative.is_some() && self.requested.as_ref().is_some_and(|requested| requested.1 == path))
     }
 
     /// The buffer Neovim last confirmed.
@@ -189,12 +223,16 @@ impl Editor {
         self.drawn_generation
     }
 
-    /// Draws the screen into `rect`: the live one when `live`, otherwise the one kept from before the
-    /// pending selection.
-    pub fn build(&mut self, painter: &mut Painter, rect: Rect, focused: bool, live: bool) {
-        let screen = if live {
+    /// Draws `path`'s screen into `rect`: Neovim's own once the selection is confirmed, the remembered
+    /// one before that if it is valid, otherwise what was on screen before the pending selection.
+    pub fn build(&mut self, painter: &mut Painter, rect: Rect, focused: bool, path: &str) {
+        let requested_here = self.requested.as_ref().is_some_and(|requested| requested.1 == path);
+        let screen = if self.shows(path) {
             self.frozen = None;
+            self.speculative = None;
             self.client.screen()
+        } else if let (true, Some(screen)) = (requested_here, &self.speculative) {
+            screen.clone()
         } else {
             match &self.frozen {
                 Some(screen) => screen.clone(),

@@ -24,8 +24,44 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// A file's identity on disk: unchanged means nobody rewrote it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileSignature {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: u64,
+}
+
+impl FileSignature {
+    pub fn of(path: &str) -> Option<FileSignature> {
+        let metadata = std::fs::metadata(path).ok()?;
+        #[cfg(unix)]
+        let inode = std::os::unix::fs::MetadataExt::ino(&metadata);
+        #[cfg(not(unix))]
+        let inode = 0;
+        Some(FileSignature { length: metadata.len(), modified: metadata.modified().ok(), inode })
+    }
+}
+
+/// The screen of a buffer at the moment Neovim left it (`neolink_leave`, sent after a redraw, so the
+/// screen read before the notice is exactly that buffer's).
+#[derive(Clone, Debug)]
+pub struct Left {
+    pub screen: Screen,
+    /// Neovim was in insert mode with no popup menu: the state `open` returns to.
+    pub plain_insert: bool,
+    pub diagnostics: bool,
+    pub file: Option<FileSignature>,
+}
+
+/// Buffers remembered at most.
+pub const LEFT_LIMIT: usize = 8;
+
 /// What the reader thread has learned, shared with whoever draws.
 pub struct State {
+    /// Screens of buffers that were left and not touched since, newest last. An entry is taken when
+    /// its buffer is selected again, so it is never older than the buffer's last visit.
+    pub left: Vec<(String, Left)>,
     pub screen: Screen,
     /// The newest selection Neovim confirmed: `(token, path, screen generation at that moment)`.
     pub selection: Option<(u64, String, u64)>,
@@ -141,7 +177,7 @@ impl Client {
             stdin: Mutex::new(stdin),
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
-            state: Mutex::new(State { screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, replies: 0, modified: Default::default() }),
+            state: Mutex::new(State { left: Vec::new(), screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, replies: 0, modified: Default::default() }),
             exited: AtomicBool::new(false),
             on_change: Box::new(on_change),
         });
@@ -317,6 +353,14 @@ impl Client {
         }
     }
 
+    /// Takes the screen remembered for `path` when it was last left, if nothing has touched the buffer
+    /// since. The caller still has to check that it fits (size, styles, the file on disk).
+    pub fn take_left(&self, path: &str) -> Option<Left> {
+        let mut state = self.inner.state.lock().unwrap();
+        let index = state.left.iter().position(|entry| entry.0 == path)?;
+        Some(state.left.remove(index).1)
+    }
+
     /// Reads the shared state.
     pub fn with_state<R>(&self, body: impl FnOnce(&mut State) -> R) -> R {
         body(&mut self.inner.state.lock().unwrap())
@@ -415,9 +459,38 @@ impl Inner {
                         state.modified.remove(&path)
                     }
                 }
-                "neolink_touch" => {
+                "neolink_leave" => {
                     let path = params.first().and_then(Value::as_str).unwrap_or("").to_string();
-                    self.state.lock().unwrap().touched.push(path);
+                    let mode = params.get(1).and_then(Value::as_str).unwrap_or("");
+                    let popup = params.get(2).and_then(Value::as_bool).unwrap_or(true);
+                    let diagnostics = params.get(3).and_then(Value::as_bool).unwrap_or(true);
+                    if path.is_empty() {
+                        return false;
+                    }
+                    let file = FileSignature::of(&path);
+                    let mut state = self.state.lock().unwrap();
+                    let left = Left { screen: state.screen.clone(), plain_insert: mode == "i" && !popup, diagnostics, file };
+                    state.left.retain(|entry| entry.0 != path);
+                    state.left.push((path, left));
+                    if state.left.len() > LEFT_LIMIT {
+                        state.left.remove(0);
+                    }
+                    false
+                }
+                "neolink_touch" => {
+                    // A hidden buffer changed (or, with an empty path, something that affects every
+                    // screen did): what was remembered of it is no longer what Neovim would draw.
+                    let path = params.first().and_then(Value::as_str).unwrap_or("").to_string();
+                    let mut state = self.state.lock().unwrap();
+                    if path.is_empty() {
+                        state.left.clear();
+                    } else {
+                        state.left.retain(|entry| entry.0 != path);
+                    }
+                    state.touched.push(path);
+                    if state.touched.len() > 256 {
+                        state.touched.remove(0);
+                    }
                     false
                 }
                 _ => false,

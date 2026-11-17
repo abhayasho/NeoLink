@@ -1,7 +1,8 @@
 //! Against a real Neovim (skipped when `nvim` is not installed): the editor configuration loads, a UI
 //! attaches, buffers open, and the screen shown after a selection notice is that buffer's.
 
-use neolink_nvim::client::Client;
+use neolink_nvim::client::{Client, FileSignature};
+use rmpv::Value;
 use serde_json::json;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -156,4 +157,81 @@ fn resizing_republishes_the_whole_screen_at_the_new_size() {
         });
     }
     assert!(screen_text(&client).contains("0123456789012345678901234567890123456789"));
+}
+
+fn select(client: &Client, path: &str, token: u64) {
+    let _reply = client.open(path, None, token).unwrap();
+    wait_for(client, "the selection notice", |client| client.with_state(|state| state.selection.as_ref().map(|selection| selection.0)) == Some(token));
+}
+
+fn rows(client: &Client) -> Vec<String> {
+    let screen = client.screen();
+    (0..screen.rows.len()).map(|row| screen.row_text(row)).collect()
+}
+
+#[test]
+fn a_remembered_screen_is_exactly_what_neovim_redraws() {
+    let Some(nvim) = nvim() else { return };
+    let scratch = Scratch::new("remember");
+    let a = scratch.file("a.txt", &(1..=300).map(|n| format!("alpha {n}\n")).collect::<String>());
+    let b = scratch.file("b.txt", &(1..=300).map(|n| format!("bravo {n}\n")).collect::<String>());
+    let client = Client::spawn(&nvim, &config(), 70, 24, || {}).expect("neovim starts");
+    select(&client, &a, 1);
+    assert!(client.take_left(&a).is_none(), "a buffer that is on screen has no remembered screen");
+    let mut token = 1;
+    // Leave the buffer at the top, after cursor moves, after paging, and at its end.
+    for keys in ["", "<Down><Down><Right>", "<PageDown><PageDown>", "<C-End>", "typed text<CR>"] {
+        if !keys.is_empty() {
+            client.input(keys).unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        token += 1;
+        select(&client, &b, token);
+        let left = client.take_left(&a).expect("the screen of the buffer that was left");
+        assert!(left.plain_insert, "left in insert mode without a popup menu");
+        let remembered: Vec<String> = (0..left.screen.rows.len()).map(|row| left.screen.row_text(row)).collect();
+        assert!(remembered.iter().any(|row| row.contains("alpha")) && !remembered.iter().any(|row| row.contains("bravo")));
+        token += 1;
+        select(&client, &a, token);
+        // Let Neovim finish anything it draws after the notice.
+        std::thread::sleep(Duration::from_millis(100));
+        let confirmed = client.screen();
+        assert_eq!(rows(&client), remembered, "after {keys:?}: Neovim redrew something different from what was remembered");
+        assert_eq!(confirmed.cursor, left.screen.cursor, "after {keys:?}: the cursor moved");
+        assert_eq!(confirmed.cursor_shape(), left.screen.cursor_shape());
+    }
+}
+
+#[test]
+fn a_hidden_buffer_that_changes_loses_its_remembered_screen() {
+    let Some(nvim) = nvim() else { return };
+    let scratch = Scratch::new("touch");
+    let a = scratch.file("a.txt", "alpha\n");
+    let b = scratch.file("b.txt", "bravo\n");
+    let client = Client::spawn(&nvim, &config(), 60, 20, || {}).expect("neovim starts");
+    select(&client, &a, 1);
+    select(&client, &b, 2);
+    wait_for(&client, "the remembered screen", |client| client.with_state(|state| state.left.iter().any(|entry| entry.0 == a)));
+    // Something edits the hidden buffer (a language server, an agent through the editor).
+    client
+        .call("nvim_exec_lua", vec![Value::from("local path = ...; for _, buf in ipairs(vim.api.nvim_list_bufs()) do if vim.api.nvim_buf_get_name(buf) == path then vim.api.nvim_buf_set_lines(buf, 0, 0, false, {'changed while hidden'}) end end return true"), Value::Array(vec![Value::from(a.as_str())])], Duration::from_secs(10))
+        .unwrap();
+    wait_for(&client, "the touch notice", |client| client.with_state(|state| state.touched.iter().any(|path| path == &a)));
+    assert!(client.take_left(&a).is_none(), "the remembered screen survived a change to its buffer");
+
+    // Leaving a buffer in normal mode is remembered as such: `open` returns to insert mode, so that
+    // screen (block cursor) is not what will be drawn.
+    select(&client, &a, 3);
+    client.input("<Esc>").unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    select(&client, &b, 4);
+    let left = client.take_left(&a).expect("remembered");
+    assert!(!left.plain_insert);
+
+    // A file rewritten on disk no longer has the signature it was remembered with.
+    let before = FileSignature::of(&b).unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    std::fs::write(&b, "rewritten by something else\n").unwrap();
+    assert_ne!(FileSignature::of(&b).unwrap(), before);
+    assert!(FileSignature::of(&scratch.0.join("missing.txt").to_string_lossy()).is_none());
 }

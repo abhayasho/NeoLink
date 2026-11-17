@@ -419,6 +419,11 @@ impl Workspace {
         }
     }
 
+    /// `(document selections shown from a remembered screen, selections that waited for Neovim)`.
+    pub fn editor_cache_report(&self) -> (u64, u64) {
+        self.editor.as_ref().map(|editor| (editor.speculated, editor.waited)).unwrap_or((0, 0))
+    }
+
     pub fn smoothing_report(&self) -> (usize, usize, f64) {
         self.tabs.get(self.active).and_then(Tab::terminal).map(Terminal::smoothing_report).unwrap_or((0, 0, 0.0))
     }
@@ -579,7 +584,7 @@ impl Content for Workspace {
         }
         // Which pane to show: the active one, unless it is a document Neovim has not confirmed yet.
         let ready = match self.tabs.get(self.active).map(|tab| &tab.pane) {
-            Some(Pane::Document { path, .. }) => self.editor.as_ref().is_some_and(|editor| editor.shows(path)),
+            Some(Pane::Document { path, .. }) => self.editor.as_ref().is_some_and(|editor| editor.can_show(path)),
             _ => true,
         };
         if ready {
@@ -592,7 +597,6 @@ impl Content for Workspace {
         }
         self.draw_strip(painter.scene, painter.text, painter.queue);
         let (pane, focused, period) = (self.pane, self.focused, frame.period);
-        let live = self.shown == self.active;
         let mut output = 0;
         let next = match self.tabs.get_mut(self.shown).map(|tab| &mut tab.pane) {
             Some(Pane::Terminal(terminal)) => {
@@ -600,9 +604,9 @@ impl Content for Workspace {
                 output = terminal.output_generation();
                 next
             }
-            Some(Pane::Document { .. }) => {
+            Some(Pane::Document { path, .. }) => {
                 if let Some(editor) = &mut self.editor {
-                    editor.build(painter, pane, focused, live);
+                    editor.build(painter, pane, focused, path);
                     output = editor.drawn_generation();
                 }
                 Next::Idle
