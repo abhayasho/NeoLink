@@ -598,6 +598,11 @@ impl Workspace {
         match Terminal::spawn_program(&shared, self.grid.0, self.grid.1, self.cell, home_directory(), id, Some(("ssh".to_string(), arguments))) {
             Ok(mut terminal) => {
                 terminal.fallback_title = connection.name.clone();
+                if let Some(password) = crate::connections::saved_password(connection) {
+                    // OpenSSH's prompts for this user and host (password and keyboard-interactive).
+                    let prompts = vec![format!("{}@{}'s password:", connection.username, connection.host), format!("({}@{}) Password:", connection.username, connection.host)];
+                    terminal.auto_password = Some((prompts, password, crate::clock::now() + 60.0));
+                }
                 let address = format!("{}:{}", connection.address(), connection.port);
                 self.remotes.entry(address.clone()).or_insert_with(|| crate::remote::RemoteBrowser::new(connection.clone(), self.shared.clone()));
                 terminal.remote = Some(address);
@@ -1703,7 +1708,7 @@ impl Workspace {
                     }
                 }
                 "edit" => self.connections.edit(Some(&id)),
-                "remove" => self.connections.remove(&id),
+                "remove" => self.connections.remove_with_password(&id),
                 _ => {}
             },
             Action::AgentSession(id) => self.agent.select(id),
@@ -2743,6 +2748,9 @@ impl Content for Workspace {
         self.draw_closing(painter);
         self.draw_recent(painter);
         self.connections.draw_sheet(painter, frame.scale, self.window);
+        if let Some(error) = self.connections.take_error() {
+            self.notice = Some(error);
+        }
         if let Some(mut launcher) = self.launcher.take() {
             let mut ui = Ui { painter, scale: self.scale };
             launcher.draw(&mut ui, self.window);

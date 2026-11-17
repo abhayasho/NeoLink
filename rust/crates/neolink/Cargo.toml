@@ -24,6 +24,7 @@ arboard = { version = "3", default-features = false }
 png = "0.18"
 trash = "5"
 rfd = { version = "0.15", default-features = false }
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

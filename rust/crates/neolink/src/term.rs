@@ -153,6 +153,8 @@ pub struct Terminal {
     pub fallback_title: String,
     /// `user@host:port` if this is an SSH session.
     pub remote: Option<String>,
+    /// A saved password to type when the terminal shows one of these prompts, until the deadline.
+    pub auto_password: Option<(Vec<String>, String, f64)>,
     /// The shell's process, to ask the system for its working directory.
     child: Option<u32>,
     master: Option<i32>,
@@ -315,6 +317,7 @@ impl Terminal {
             keys_state: None,
             fallback_title: "shell".to_string(),
             remote: None,
+            auto_password: None,
             child,
             master,
             directory: start_directory,
@@ -688,6 +691,21 @@ impl Terminal {
         }
         self.last_history = history;
         let step = self.smoother.advance(display, period);
+        // A saved password goes in when this connection's own prompt is at the cursor, once.
+        let mut password_now: Option<String> = None;
+        if let Some((prompts, _, deadline)) = &self.auto_password {
+            if crate::clock::now() > *deadline {
+                self.auto_password = None;
+            } else {
+                let cursor = grid.cursor.point;
+                let row = &grid[cursor.line];
+                let text: String = (0..cursor.column.0.min(columns)).map(|column| row[Column(column)].c).collect();
+                let text = text.trim_end();
+                if prompts.iter().any(|prompt| text.ends_with(prompt.as_str())) {
+                    password_now = self.auto_password.take().map(|(_, password, _)| password);
+                }
+            }
+        }
         let mode = *term.mode();
         let full_screen = mode.contains(TermMode::ALT_SCREEN) || mode.intersects(TermMode::MOUSE_MODE);
         let height = cell.height as f64;
@@ -854,6 +872,10 @@ impl Terminal {
         painter.scene.set_clip(None);
         self.drawn = scroll;
         drop(term);
+        if let Some(mut password) = password_now {
+            password.push('\r');
+            self.notifier.notify(password.into_bytes());
+        }
         if program_send != 0 {
             self.send_program_lines(program_send, mode);
         }

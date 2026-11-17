@@ -63,6 +63,30 @@ fn save(connections: &[Connection], others: &[Value]) {
     }
 }
 
+/// Passwords live where the Swift app keeps them: the macOS Keychain (Windows: Credential Manager),
+/// service `NeoLink-SFTP`, account `host:port:user`, so a password saved by either app works in both.
+fn password_entry(connection: &Connection) -> Option<keyring::Entry> {
+    if std::env::var_os("NEOLINK_BENCHMARK").is_some() && std::env::var_os("NEOLINK_SESSIONS_FILE").is_none() {
+        return None;
+    }
+    keyring::Entry::new("NeoLink-SFTP", &format!("{}:{}:{}", connection.host, connection.port, connection.username)).ok()
+}
+
+pub fn saved_password(connection: &Connection) -> Option<String> {
+    password_entry(connection)?.get_password().ok().filter(|password| !password.is_empty())
+}
+
+fn store_password(connection: &Connection, password: &str) -> Result<(), String> {
+    let entry = password_entry(connection).ok_or("The password store is not available.")?;
+    entry.set_password(password).map_err(|error| format!("The password was not saved: {error}"))
+}
+
+fn forget_password(connection: &Connection) {
+    if let Some(entry) = password_entry(connection) {
+        let _ = entry.delete_credential();
+    }
+}
+
 pub fn user_name() -> String {
     std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "user".into())
 }
@@ -110,6 +134,7 @@ enum Field {
     Host,
     User,
     Port,
+    Password,
 }
 
 /// The "New connection" / "Edit connection" sheet.
@@ -119,6 +144,11 @@ struct Sheet {
     host: String,
     user: String,
     port: String,
+    /// A new password to save; empty keeps (or leaves without) the saved one.
+    password: String,
+    /// The connection already has a saved password, and whether to forget it.
+    saved: bool,
+    forget: bool,
     focus: Field,
     buttons: Vec<(Rect, &'static str)>,
 }
@@ -138,16 +168,22 @@ pub struct Connections {
     logo: Option<PathBuf>,
     revision: u64,
     counter: u64,
+    /// A message for the sheet (a password that could not be saved).
+    error: Option<String>,
 }
 
 impl Connections {
     pub fn new() -> Connections {
         let (connections, others) = load();
-        Connections { visible: false, connections, others, search: String::new(), search_focused: false, sheet: None, rect: Rect::default(), buttons: Vec::new(), rows: Vec::new(), scroll: 0.0, host: host_name(), logo: logo_path(), revision: 0, counter: 0 }
+        Connections { visible: false, connections, others, search: String::new(), search_focused: false, sheet: None, rect: Rect::default(), buttons: Vec::new(), rows: Vec::new(), scroll: 0.0, host: host_name(), logo: logo_path(), revision: 0, counter: 0, error: None }
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
         self.visible && self.rect.contains(x, y)
+    }
+
+    pub fn take_error(&mut self) -> Option<String> {
+        self.error.take()
     }
 
     pub fn sheet_is_open(&self) -> bool {
@@ -162,8 +198,11 @@ impl Connections {
     pub fn edit(&mut self, id: Option<&str>) {
         let existing = id.and_then(|id| self.find(id));
         self.sheet = Some(match existing {
-            Some(connection) => Sheet { id: Some(connection.id), name: connection.name, host: connection.host, user: connection.username, port: connection.port.to_string(), focus: Field::Name, buttons: Vec::new() },
-            None => Sheet { id: None, name: String::new(), host: String::new(), user: user_name(), port: "22".into(), focus: Field::Name, buttons: Vec::new() },
+            Some(connection) => {
+                let saved = saved_password(&connection).is_some();
+                Sheet { id: Some(connection.id), name: connection.name, host: connection.host, user: connection.username, port: connection.port.to_string(), password: String::new(), saved, forget: false, focus: Field::Name, buttons: Vec::new() }
+            }
+            None => Sheet { id: None, name: String::new(), host: String::new(), user: user_name(), port: "22".into(), password: String::new(), saved: false, forget: false, focus: Field::Name, buttons: Vec::new() },
         });
         self.revision += 1;
     }
@@ -188,12 +227,36 @@ impl Connections {
             port: sheet.port.parse().unwrap_or(22),
             username: sheet.user.trim().to_string(),
         };
+        // A password saved for the old address goes with it, unless a new one was typed.
+        let previous = self.connections.iter().find(|existing| existing.id == connection.id).cloned();
+        let moved_password = previous.as_ref().filter(|previous| (previous.host.as_str(), previous.port, previous.username.as_str()) != (connection.host.as_str(), connection.port, connection.username.as_str())).and_then(|previous| {
+            let password = saved_password(previous);
+            forget_password(previous);
+            password
+        });
+        if sheet.forget {
+            forget_password(&connection);
+        }
+        let password = if sheet.password.is_empty() { moved_password.filter(|_| !sheet.forget) } else { Some(sheet.password.clone()) };
+        if let Some(password) = password {
+            if let Err(error) = store_password(&connection, &password) {
+                self.error = Some(error);
+            }
+        }
         match self.connections.iter_mut().find(|existing| existing.id == connection.id) {
             Some(existing) => *existing = connection,
             None => self.connections.push(connection),
         }
         save(&self.connections, &self.others);
         self.revision += 1;
+    }
+
+    /// Removes a connection and its saved password.
+    pub fn remove_with_password(&mut self, id: &str) {
+        if let Some(connection) = self.find(id) {
+            forget_password(&connection);
+        }
+        self.remove(id);
     }
 
     /// A key for the sheet or the search field. Returns `true` if it was used.
@@ -205,6 +268,7 @@ impl Connections {
                 Field::Host => &mut sheet.host,
                 Field::User => &mut sheet.user,
                 Field::Port => &mut sheet.port,
+                Field::Password => &mut sheet.password,
             };
             match key {
                 Key::Named(NamedKey::Escape) => self.sheet = None,
@@ -217,7 +281,8 @@ impl Connections {
                         Field::Name => Field::Host,
                         Field::Host => Field::User,
                         Field::User => Field::Port,
-                        Field::Port => Field::Name,
+                        Field::Port => Field::Password,
+                        Field::Password => Field::Name,
                     }
                 }
                 _ => {
@@ -259,6 +324,11 @@ impl Connections {
             "host" => sheet.focus = Field::Host,
             "user" => sheet.focus = Field::User,
             "port" => sheet.focus = Field::Port,
+            "password" => sheet.focus = Field::Password,
+            "forget" => {
+                sheet.forget = !sheet.forget;
+                sheet.password.clear();
+            }
             "cancel" => self.sheet = None,
             "save" => self.save_sheet(),
             _ => {}
@@ -443,7 +513,7 @@ impl Connections {
         ui.fill(Rect::new(0.0, 0.0, window.0, window.1), [0, 0, 0, 90]);
         let (width, pad, gap) = (ui.px(420.0), ui.px(28.0), ui.px(20.0));
         let port_error = !sheet.port.is_empty() && !sheet.port.parse::<u32>().is_ok_and(|port| (1..=65535).contains(&port));
-        let height = pad + ui.px(44.0) + gap + 3.0 * (ui.px(14.0 + 7.0 + 22.0) + gap) + if port_error { ui.px(14.0) + gap } else { 0.0 } + ui.px(1.0) + gap + ui.px(22.0) + pad;
+        let height = pad + ui.px(44.0) + gap + 4.0 * (ui.px(14.0 + 7.0 + 22.0) + gap) + if sheet.saved { ui.px(18.0) } else { 0.0 } + if port_error { ui.px(14.0) + gap } else { 0.0 } + ui.px(1.0) + gap + ui.px(22.0) + pad;
         let frame = Rect::new(((window.0 - width) * 0.5).round(), ((window.1 - height) * 0.35).round().max(ui.px(20.0)), width, height);
         ui.shadow(frame, 10.0);
         ui.rounded(frame, 10.0, theme::SIDEBAR_BACKGROUND);
@@ -488,6 +558,18 @@ impl Connections {
         if port_error {
             ui.text("Enter a port between 1 and 65535.", left, y + ui.px(7.0), 11.0, 400, false, theme::rgb(0xC6B28E));
             y += ui.px(14.0) + gap;
+        }
+        // The password is never shown: one dot per character.
+        let dots = "\u{2022}".repeat(sheet.password.chars().count());
+        let placeholder = if sheet.saved && !sheet.forget { "Saved \u{b7} type to replace" } else { "Optional" };
+        let title = if cfg!(windows) { "Password (kept in Windows Credential Manager)" } else { "Password (kept in the Keychain)" };
+        field(&mut ui, &mut sheet, title, placeholder, dots, Field::Password, "password", left, right - left, y);
+        y += block;
+        if sheet.saved {
+            let label = if sheet.forget { "\u{2713} Forget the saved password" } else { "Forget the saved password" };
+            let width = ui.text(label, left, y - gap + ui.px(9.0), 11.0, 400, false, if sheet.forget { theme::rgb(0xCC9595) } else { theme::ACCENT });
+            sheet.buttons.push((Rect::new(left, y - gap, width, ui.px(18.0)), "forget"));
+            y += ui.px(18.0);
         }
         ui.painter.scene.fill(left, y, right - left, line, theme::SEPARATOR);
         y += line + gap;
