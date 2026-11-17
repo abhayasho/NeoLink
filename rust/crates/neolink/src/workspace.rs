@@ -402,6 +402,14 @@ impl Workspace {
     /// Opens `path` in the editor, in its existing tab if it has one.
     pub fn open_document(&mut self, path: &std::path::Path) {
         let path = neolink_core::paths::canonical(path);
+        // PDFs have no tab of their own in this build (the Swift app shows them with PDFKit): the
+        // system's viewer opens them, rather than the editor showing their bytes.
+        if path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("pdf")) {
+            let (program, arguments): (&str, Vec<&std::ffi::OsStr>) = if cfg!(target_os = "macos") { ("open", vec![path.as_os_str()]) } else if cfg!(windows) { ("cmd", vec![std::ffi::OsStr::new("/C"), std::ffi::OsStr::new("start"), std::ffi::OsStr::new(""), path.as_os_str()]) } else { ("xdg-open", vec![path.as_os_str()]) };
+            let _ = std::process::Command::new(program).args(arguments).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+            self.notice = Some("PDF tabs are not in this build yet; the file was opened in the default viewer.".into());
+            return;
+        }
         let Some(path) = path.to_str().map(str::to_string) else { return };
         if let Some(index) = self.tabs.iter().position(|tab| tab.document() == Some(path.as_str())) {
             self.select(index);
