@@ -4,3 +4,6 @@
 pub mod client;
 pub mod grid;
 pub mod rpc;
+
+/// The MessagePack values requests and notifications carry.
+pub use rmpv;

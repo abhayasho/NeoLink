@@ -523,6 +523,25 @@ impl Runner {
         match scenario {
             "editor-type" => self.editor_typing(),
             "editor-tabs" => self.editor_tabs(),
+            "editor-scroll" | "editor-crawl" | "editor-flick" => {
+                // A long file, scrolled down from its top with the terminal's profiles.
+                let path = std::env::temp_dir().join(format!("neolink-bench-{}-long.rs", std::process::id()));
+                let text: String = (0..6000).map(|index| format!("    let value_{index} = compute(input_{index}, {index}); // line {index} of the scrolling benchmark\n")).collect();
+                if std::fs::write(&path, text).is_err() {
+                    return json!({"error": "no file to scroll"});
+                }
+                (self.post)(Injected::OpenDocument { path: path.to_string_lossy().into_owned(), sent: clock::now() });
+                self.wait_for_selection(10.0);
+                sleep(1.0);
+                let profile = match scenario {
+                    "editor-crawl" => ScrollProfile::crawl(5.0, false),
+                    "editor-flick" => ScrollProfile::flick(false),
+                    _ => ScrollProfile::steady(720.0, 2.5, false),
+                };
+                let report = self.scroll(&profile);
+                let _ = std::fs::remove_file(&path);
+                report
+            }
             "idle" => self.idle(),
             "terminal-type" => {
                 self.select_shell();
@@ -566,6 +585,17 @@ impl Runner {
                         // Typed where the keyboard is; "^" is Return.
                         (self.post)(Injected::Text { bytes: text.replace('^', "\r").into_bytes(), sent: clock::now(), measure: false });
                         sleep(0.5);
+                        continue;
+                    }
+                    if let Some(points) = step.strip_prefix("scroll:").and_then(|points| points.parse::<f64>().ok()) {
+                        // A short gesture of this many points at the pointer, in 12 reports.
+                        for index in 0..12 {
+                            let phase = if index == 0 { ScrollPhase::Began } else { ScrollPhase::Changed };
+                            (self.post)(Injected::Scroll { time: clock::now(), delta_x: 0.0, delta_y: points / 12.0, phase });
+                            sleep(0.016);
+                        }
+                        (self.post)(Injected::Scroll { time: clock::now(), delta_x: 0.0, delta_y: 0.0, phase: ScrollPhase::Ended });
+                        sleep(0.6);
                         continue;
                     }
                     if let Some(keys) = step.strip_prefix("keys:") {

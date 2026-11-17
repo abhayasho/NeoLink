@@ -27,11 +27,38 @@ pub struct Editor {
     /// Selections answered from a remembered screen, and selections that had to wait (benchmark).
     pub speculated: u64,
     pub waited: u64,
-    /// Pixels of wheel input not yet turned into whole lines.
+    /// Pixels of wheel input not yet turned into whole lines (line scrolling).
     wheel: f64,
+    /// Pixel scrolling: the view's top in pixels from the top of the buffer, which buffer that is for,
+    /// the top line last asked of Neovim, and when the wheel last moved.
+    smooth: bool,
+    position: f64,
+    position_path: String,
+    commanded_top: u64,
+    last_wheel: f64,
+    /// The shift the last frame drew the text with, and the rows it showed.
+    drawn_shift: f32,
+    /// Wheel input received, in device pixels (for the benchmark).
+    pub received: f64,
+    /// The view's top as the last frame drew it, in device pixels from the top of the buffer.
+    pub drawn_position: f64,
     scratch: Vec<Instance>,
     /// Generation of the screen the last frame drew.
     drawn_generation: u64,
+}
+
+/// Rows Neovim draws beyond what the pane shows, for pixel scrolling.
+const EXTRA_ROWS: usize = 2;
+
+/// Scrolls the window so `...` is its top line, as Ctrl-E and Ctrl-Y do: the cursor comes along when it
+/// would leave the window (setting the top line alone is undone by Neovim to keep the cursor in view).
+const SCROLL_TO: &str = r#"
+local lines = ... - vim.fn.line('w0')
+if lines > 0 then vim.cmd('normal! ' .. lines .. '') elseif lines < 0 then vim.cmd('normal! ' .. -lines .. '') end
+"#;
+
+fn rmpv_string(text: &str) -> neolink_nvim::rmpv::Value {
+    neolink_nvim::rmpv::Value::from(text)
 }
 
 fn executable(name: &str) -> Option<PathBuf> {
@@ -81,13 +108,16 @@ impl Editor {
         let nvim = executable("nvim").ok_or("Neovim (nvim) is not installed or not on the PATH.")?;
         let config = configuration().ok_or("The editor configuration (Resources/Editor/neolink.lua) was not found.")?;
         let wake = Arc::downgrade(shared);
-        let client = Client::spawn(&nvim, &config, columns.max(20), rows.max(4), move || {
+        // Pixel scrolling (`NEOLINK_EDITOR_SMOOTH=0` scrolls by lines): Neovim draws two rows more.
+        let smooth = std::env::var("NEOLINK_EDITOR_SMOOTH").as_deref() != Ok("0");
+        let rows = rows.max(4) + if smooth { EXTRA_ROWS } else { 0 };
+        let client = Client::spawn(&nvim, &config, columns.max(20), rows, move || {
             if let Some(shared) = wake.upgrade() {
                 shared.invalidate();
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { client, grid: (columns.max(20), rows.max(4)), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_shift: 0.0, received: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {
@@ -149,8 +179,10 @@ impl Editor {
         self.client.with_state(|state| state.selection.as_ref().map(|selection| selection.1.clone()))
     }
 
+    /// `rows`: the rows the pane shows. With pixel scrolling Neovim draws two more, which are the slack
+    /// the text slides through.
     pub fn resize(&mut self, columns: usize, rows: usize) {
-        let grid = (columns.max(20), rows.max(4));
+        let grid = (columns.max(20), rows.max(4) + if self.smooth { EXTRA_ROWS } else { 0 });
         if grid != self.grid {
             self.grid = grid;
             let _ = self.client.resize(grid.0, grid.1);
@@ -241,8 +273,53 @@ impl Editor {
         self.client.with_state(|state| state.modified.contains(path))
     }
 
-    /// A wheel report of `delta` device pixels at grid cell `(row, column)`: whole lines go to Neovim.
-    pub fn scroll(&mut self, delta: f64, cell: CellMetrics, row: usize, column: usize) {
+    /// The grid row under a point `y` pixels below the top of the pane.
+    pub fn row_at(&self, y: f32, cell: CellMetrics) -> usize {
+        let rows = self.grid.1.saturating_sub(1);
+        if !self.smooth {
+            return ((y / cell.height).floor().max(0.0) as usize).min(rows);
+        }
+        let visible = self.grid.1 - 1 - EXTRA_ROWS;
+        if y >= visible as f32 * cell.height {
+            // The status line stays at the bottom.
+            return rows;
+        }
+        (((y + self.drawn_shift) / cell.height).floor().max(0.0) as usize).min(rows.saturating_sub(1))
+    }
+
+    /// Where `path`'s window is in its buffer: `(top line, lines)`.
+    fn view(&self, path: &str) -> (u64, u64) {
+        self.client.with_state(|state| state.views.get(path).copied()).unwrap_or((1, u64::MAX / 4))
+    }
+
+    /// A wheel report of `delta` device pixels at grid cell `(row, column)`. With pixel scrolling the
+    /// view's position moves by exactly that and Neovim is asked for the lines around it; otherwise whole
+    /// lines go to Neovim.
+    pub fn scroll(&mut self, delta: f64, cell: CellMetrics, row: usize, column: usize, path: &str) {
+        self.received += delta;
+        if std::env::var_os("NEOLINK_DEBUG_SCROLL").is_some() {
+            eprintln!("editor scroll delta {delta:.1} smooth {} shows {} view {:?} position {:.1}", self.smooth, self.shows(path), self.view(path), self.position);
+        }
+        if self.smooth && self.shows(path) {
+            let height = cell.height as f64;
+            let (top, total) = self.view(path);
+            let visible = (self.grid.1 - 1 - EXTRA_ROWS) as u64;
+            if self.position_path != path || (top != self.commanded_top && crate::clock::now() - self.last_wheel > 0.3) {
+                // Neovim moved the view itself since the last gesture: start from where it is.
+                self.position = (top - 1) as f64 * height + if top == 1 { 0.0 } else { height };
+                self.position_path = path.to_string();
+            }
+            let limit = total.saturating_sub(visible) as f64 * height;
+            self.position = (self.position - delta).clamp(0.0, limit.max(0.0));
+            // Neovim's top line is kept one line above the view's, so a line of slack lies either side.
+            let target = ((self.position / height).floor() as u64).saturating_sub(1).min(total.saturating_sub(visible + EXTRA_ROWS as u64)) + 1;
+            if target != self.commanded_top || top != target {
+                self.commanded_top = target;
+                let _ = self.client.notify("nvim_exec_lua", vec![rmpv_string(SCROLL_TO), neolink_nvim::rmpv::Value::Array(vec![neolink_nvim::rmpv::Value::from(target)])]);
+            }
+            self.last_wheel = crate::clock::now();
+            return;
+        }
         self.wheel += delta;
         let lines = (self.wheel / cell.height as f64).trunc();
         if lines == 0.0 {
@@ -296,11 +373,52 @@ impl Editor {
             painter.scene.fill_rect(rect, default_background);
         }
         let shape = screen.cursor_shape();
+        // Pixel scrolling: the text rows are drawn shifted up by between zero and two lines (the two
+        // extra rows Neovim draws), the status line stays at the bottom.
+        let text_rows = screen.rows.len().saturating_sub(1);
+        let visible = text_rows.saturating_sub(EXTRA_ROWS);
+        let shift = if self.smooth && screen.rows.len() == self.grid.1 && visible > 0 {
+            let height = cell.height as f64;
+            let (top, total) = self.view(path);
+            let scrolling = crate::clock::now() - self.last_wheel < 0.3;
+            if self.position_path != path || (!scrolling && top != self.commanded_top) {
+                self.position = (top - 1) as f64 * height + if top == 1 { 0.0 } else { height };
+                self.position_path = path.to_string();
+                self.commanded_top = top;
+            }
+            self.position = self.position.clamp(0.0, (total.saturating_sub(visible as u64) as f64 * height).max(0.0));
+            let mut shift = self.position - (top - 1) as f64 * height;
+            if !scrolling {
+                // At rest the cursor's line is wholly in view.
+                let cursor_top = screen.cursor.0 as f64 * height;
+                if screen.cursor.0 < text_rows && cursor_top < shift {
+                    self.position -= shift - cursor_top;
+                } else if screen.cursor.0 < text_rows && cursor_top + height > shift + visible as f64 * height {
+                    self.position += cursor_top + height - shift - visible as f64 * height;
+                }
+                shift = self.position - (top - 1) as f64 * height;
+            }
+            (shift.clamp(0.0, EXTRA_ROWS as f64 * height) as f32).round()
+        } else {
+            0.0
+        };
+        self.drawn_shift = shift;
+        // What this frame shows, as a position in the buffer (the benchmark compares it with the input).
+        self.drawn_position = (self.view(path).0 - 1) as f64 * cell.height as f64 + shift as f64;
+        let smooth = self.smooth && screen.rows.len() == self.grid.1 && visible > 0;
+        let text_clip = Rect::new(rect.x, rect.y, rect.width, if smooth { visible as f32 * cell.height } else { rect.height });
+        painter.scene.set_clip(Some(text_clip));
         let mut scratch = std::mem::take(&mut self.scratch);
         for (index, row) in screen.rows.iter().enumerate() {
-            let y = rect.y + index as f32 * cell.height;
-            if y >= rect.bottom() {
-                break;
+            let y = if smooth && index == text_rows {
+                // The status line.
+                painter.scene.set_clip(Some(rect));
+                rect.y + visible as f32 * cell.height
+            } else {
+                rect.y + index as f32 * cell.height - shift
+            };
+            if y >= rect.bottom() || y + cell.height <= rect.y {
+                continue;
             }
             let cursor_column = (screen.cursor.0 == index && !screen.busy).then_some(screen.cursor.1);
             let mut key = RowKey::new(screen.style_epoch ^ (row.len() as u64) << 32);

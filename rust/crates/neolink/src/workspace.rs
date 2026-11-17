@@ -827,18 +827,21 @@ impl Workspace {
 
     /// The editor cell under the pointer.
     fn pointer_cell(&self) -> (usize, usize) {
-        let row = ((self.pointer.1 - self.editor_pane.y) / self.cell.height).floor().clamp(0.0, self.editor_grid.1.saturating_sub(1) as f32) as usize;
+        let row = match &self.editor {
+            Some(editor) => editor.row_at(self.pointer.1 - self.editor_pane.y, self.cell),
+            None => 0,
+        };
         let column = ((self.pointer.0 - self.editor_pane.x) / self.cell.width).floor().clamp(0.0, self.editor_grid.0.saturating_sub(1) as f32) as usize;
         (row, column)
     }
 
-    /// A scroll event in device pixels over the pane.
+    /// A scroll event over whatever is under the pointer; the deltas are device pixels.
     pub fn scroll(&mut self, time: f64, _delta_x: f64, delta_y: f64, phase: ScrollPhase) {
         if let Some(git) = &mut self.git {
-            git.scroll(self.pointer.0, self.pointer.1, _delta_x as f32 * self.scale, delta_y as f32 * self.scale);
+            git.scroll(self.pointer.0, self.pointer.1, _delta_x as f32, delta_y as f32);
             return;
         }
-        if self.scroll_search((delta_y as f32) * self.scale) {
+        if self.scroll_search(delta_y as f32) {
             return;
         }
         let (cell, period) = (self.cell, self.period);
@@ -846,7 +849,7 @@ impl Workspace {
         if self.strip.contains(self.pointer.0, self.pointer.1) {
             // Either axis moves the tabs sideways.
             let delta = if _delta_x.abs() > delta_y.abs() { _delta_x } else { delta_y };
-            self.strip_scroll -= delta as f32 * self.scale;
+            self.strip_scroll -= delta as f32;
             return;
         }
         if self.dock.contains(self.pointer.0, self.pointer.1) {
@@ -856,7 +859,7 @@ impl Workspace {
             return;
         }
         if self.agent.contains(self.pointer.0, self.pointer.1) {
-            if self.agent.scroll_conversation(delta_y as f32 * self.scale) {
+            if self.agent.scroll_conversation(delta_y as f32) {
                 return;
             }
             if let Some(terminal) = self.agent.terminal() {
@@ -870,11 +873,12 @@ impl Workspace {
         }
         if self.active_is_document() {
             let (row, column) = self.pointer_cell();
+            let path = self.active_document().unwrap_or_default();
             if let Some(editor) = &mut self.editor {
                 if phase == ScrollPhase::Began {
                     editor.end_scroll_gesture();
                 }
-                editor.scroll(delta_y, cell, row, column);
+                editor.scroll(delta_y, cell, row, column, &path);
             }
         } else if let Some(terminal) = self.active() {
             terminal.scroll_input(time, delta_y, phase, cell, period);
@@ -903,6 +907,9 @@ impl Workspace {
         }
         if let (Some(part), Some(closing)) = (name.strip_prefix("closing:"), &self.closing) {
             return closing.buttons.iter().find(|(_, what)| *what == part).map(|(rect, _)| middle(*rect));
+        }
+        if name == "editor" {
+            return Some(middle(self.editor_pane));
         }
         if let Some(part) = name.strip_prefix("launcher:") {
             return self.launcher.as_ref()?.control_rect(part).map(middle);
@@ -1876,7 +1883,11 @@ impl Workspace {
     pub fn scroll_lines(&self) -> (f64, f64) {
         match self.tabs.get(self.shown).and_then(Tab::terminal) {
             Some(terminal) => (terminal.scroll() / self.cell.height as f64, terminal.received / self.cell.height as f64),
-            None => (0.0, 0.0),
+            // A document: fingers moving down show earlier lines, so the position counts downwards.
+            None => match (&self.editor, self.active_is_document()) {
+                (Some(editor), true) => (-editor.drawn_position / self.cell.height as f64, editor.received / self.cell.height as f64),
+                _ => (0.0, 0.0),
+            },
         }
     }
 
@@ -2389,7 +2400,8 @@ impl Content for Workspace {
         signature.add(self.hover_close.map_or(u64::MAX, |index| index as u64)).add(self.font_points.to_bits() as u64);
         signature.add(self.tabs.get(self.shown).and_then(Tab::terminal).map_or(0, Terminal::look)).text(&self.shown_directory);
         if let Some(editor) = &self.editor {
-            signature.text(editor.mode_label());
+            // A scroll within one line changes no cell, only where the text is drawn.
+            signature.text(editor.mode_label()).add(editor.drawn_position.to_bits());
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());

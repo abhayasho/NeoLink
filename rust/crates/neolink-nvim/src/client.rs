@@ -69,6 +69,8 @@ pub struct State {
     pub touched: Vec<String>,
     /// The last reply of `NeoLink.dispatch`, decoded (`ok`, `error`, `state`).
     pub last_reply: Option<serde_json::Value>,
+    /// Where each buffer's window is: `(top line, lines in the buffer)` by path (`neolink_view`).
+    pub views: std::collections::HashMap<String, (u64, u64)>,
     /// Requests whose reply has been read (for tests and the benchmark).
     pub replies: u64,
     /// Files with unsaved changes, as Neovim reports them when they change (`neolink_modified`).
@@ -145,6 +147,13 @@ vim.api.nvim_create_autocmd({'BufModifiedSet', 'BufWritePost', 'BufReadPost', 'B
     pcall(vim.rpcnotify, channel, 'neolink_modified', name, modified)
   end
 end})
+-- Where the window is in its buffer, for pixel scrolling: the top line, the number of lines, the path.
+local function view()
+  pcall(vim.rpcnotify, channel, 'neolink_view', vim.api.nvim_buf_get_name(0), vim.fn.line('w0'), vim.api.nvim_buf_line_count(0))
+end
+vim.api.nvim_create_autocmd({'WinScrolled', 'BufWinEnter', 'TextChanged', 'TextChangedI', 'VimResized'}, {callback = view})
+-- A front end that slides the text by pixels hides up to two rows at an edge; the cursor stays clear of them.
+if vim.o.scrolloff < 2 then vim.o.scrolloff = 2 end
 -- Diagnostics and language servers change without a command from the app: send the state then too
 -- (once per 80 ms at most), so counts and the server indicator follow.
 local pending = false
@@ -189,7 +198,7 @@ impl Client {
             stdin: Mutex::new(stdin),
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
-            state: Mutex::new(State { left: Vec::new(), screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, replies: 0, modified: Default::default() }),
+            state: Mutex::new(State { left: Vec::new(), screen: model.screen().clone(), selection: None, touched: Vec::new(), last_reply: None, views: Default::default(), replies: 0, modified: Default::default() }),
             exited: AtomicBool::new(false),
             on_change: Box::new(on_change),
         });
@@ -460,6 +469,12 @@ impl Inner {
                     }
                     self.release(Some(token), None);
                     true
+                }
+                "neolink_view" => {
+                    let path = params.first().and_then(Value::as_str).unwrap_or("").to_string();
+                    let top = params.get(1).and_then(Value::as_u64).unwrap_or(1).max(1);
+                    let total = params.get(2).and_then(Value::as_u64).unwrap_or(1).max(1);
+                    self.state.lock().unwrap().views.insert(path, (top, total)) != Some((top, total))
                 }
                 "neolink_state" => {
                     // The editor's state changed on its own (diagnostics, language servers).

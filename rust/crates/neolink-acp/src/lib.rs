@@ -173,7 +173,7 @@ pub fn parse_mcp(text: &str) -> Result<Vec<Value>, String> {
     let mut servers = Vec::new();
     for entry in &entries {
         let name = entry["name"].as_str().filter(|name| !name.is_empty() && names.insert(name.to_string()));
-        let command = entry["command"].as_str().filter(|command| Path::new(command).is_absolute() && !command.contains('\0'));
+        let command = entry["command"].as_str().filter(|command| (command.starts_with('/') || Path::new(command).is_absolute()) && !command.contains('\0'));
         let arguments = entry["args"].as_array().filter(|arguments| arguments.iter().all(|argument| argument.as_str().is_some_and(|text| !text.contains('\0'))));
         let (Some(name), Some(command), Some(arguments)) = (name, command, arguments) else {
             return Err("Each MCP server needs a unique name, an absolute command path, and an args array.".into());
