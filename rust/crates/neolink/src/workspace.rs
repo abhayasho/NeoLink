@@ -172,6 +172,8 @@ pub struct Workspace {
     marks: FrameMarks,
     /// Called (on the render thread) when the last tab's program has exited.
     on_empty: Option<Box<dyn Fn() + Send>>,
+    /// Quitting was asked for and waits on the "Save changes?" answers.
+    quitting: bool,
     hover: Option<usize>,
     /// Signature of the last frame built.
     signature: u64,
@@ -256,6 +258,7 @@ impl Workspace {
             selection: 0,
             marks: FrameMarks::default(),
             on_empty: None,
+            quitting: false,
             hover: None,
             signature: 0,
         };
@@ -1578,8 +1581,44 @@ impl Workspace {
                 self.force_close(index);
             }
             "discard" => self.force_close(index),
-            _ => {}
+            _ => {
+                // Cancel also cancels quitting.
+                self.quitting = false;
+                return;
+            }
         }
+        if self.quitting && self.request_quit() {
+            if let Some(callback) = &self.on_empty {
+                callback();
+            }
+        }
+    }
+
+    /// Asks to quit. Returns `true` if nothing is unsaved; otherwise the first unsaved document asks
+    /// what to do with it, and the app quits after the last answer (`TabsController.confirmClose`).
+    pub fn request_quit(&mut self) -> bool {
+        let unsaved = match &self.editor {
+            Some(editor) => self.tabs.iter().filter_map(|tab| tab.document()).find(|path| editor.is_modified(path)).map(str::to_string),
+            None => None,
+        };
+        match unsaved {
+            Some(path) => {
+                self.quitting = true;
+                self.menu = None;
+                if let Some(index) = self.tabs.iter().position(|tab| tab.document() == Some(path.as_str())) {
+                    self.select(index);
+                }
+                self.closing = Some(Closing { path, buttons: Vec::new() });
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// Whether a press at `(x, y)` is on empty header space, which drags the window.
+    pub fn wants_window_drag(&self, x: f32, y: f32) -> bool {
+        let modal = self.menu.is_some() || self.creation.is_some() || self.search.is_some() || self.git.is_some() || self.closing.is_some() || self.launcher.is_some() || self.recent_sheet.is_some() || self.connections.sheet_is_open();
+        !modal && self.header.contains(x, y) && !self.header_buttons.iter().any(|(rect, _)| rect.contains(x, y))
     }
 
     fn perform(&mut self, action: Action) {

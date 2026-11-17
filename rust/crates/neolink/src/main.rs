@@ -170,6 +170,15 @@ impl App {
         self.invalidate();
     }
 
+    /// Quits, unless a document has unsaved changes: then it asks first.
+    fn quit(&self, event_loop: &ActiveEventLoop) {
+        if self.with_workspace(|workspace, _| workspace.request_quit()) != Some(false) {
+            event_loop.exit();
+        } else {
+            self.invalidate();
+        }
+    }
+
     /// Shows the system's file panel if the workspace asked for one (without holding the workspace).
     fn answer_folder_request(&mut self) {
         let Some(kind) = self.with_workspace(|workspace, _| workspace.take_folder_request()).flatten() else { return };
@@ -292,7 +301,7 @@ impl App {
         let (shifted, controlled) = if cfg!(target_os = "macos") { (modifiers.shift_key(), modifiers.control_key()) } else { (modifiers.alt_key(), false) };
         match characters.to_lowercase().as_str() {
             "t" => self.new_tab(),
-            "w" if shifted => event_loop.exit(),
+            "w" if shifted => self.quit(event_loop),
             "n" if shifted => {
                 self.with_workspace(|workspace, _| workspace.new_connection());
                 self.invalidate();
@@ -320,7 +329,7 @@ impl App {
                 }
                 self.invalidate();
             }
-            "q" => event_loop.exit(),
+            "q" => self.quit(event_loop),
             "]" | "}" if shifted => {
                 self.with_workspace(|workspace, _| workspace.step_tab(1));
                 self.invalidate();
@@ -703,7 +712,7 @@ impl ApplicationHandler<UserEvent> for App {
             shared.note_input();
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => self.quit(event_loop),
             WindowEvent::Resized(size) => {
                 shared.state.lock().size = (size.width, size.height);
                 shared.invalidate();
@@ -810,6 +819,13 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
                 let pointer = self.pointer;
+                // Empty header space drags the window, as the title bar above it does.
+                if self.with_workspace(|workspace, _| workspace.wants_window_drag(pointer.0, pointer.1)) == Some(true) {
+                    if let Some(window) = &self.window {
+                        let _ = window.drag_window();
+                    }
+                    return;
+                }
                 if self.with_workspace(|workspace, _| workspace.click(pointer.0, pointer.1)) == Some(true) {
                     shared.invalidate();
                 }

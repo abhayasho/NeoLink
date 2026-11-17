@@ -51,6 +51,22 @@ jobs:
         run: cargo build --workspace --release --locked
       - name: Tests
         run: cargo test --workspace --locked
+      # The macOS bundle (its own bundle identifier; ad-hoc signed). Built to prove packaging works;
+      # nobody has launched this artifact.
+      - name: Package the macOS app
+        if: runner.os == 'macOS'
+        run: |
+          scripts/build-app.sh
+          test -x target/NeoLink.app/Contents/MacOS/NeoLink
+          test -f target/NeoLink.app/Contents/Resources/Editor/neolink.lua
+          ditto -c -k --keepParent target/NeoLink.app target/NeoLink-macos.zip
+      - name: Upload the macOS app
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: neolink-macos-app-unverified
+          path: rust/target/NeoLink-macos.zip
+          if-no-files-found: error
       - name: Upload the Windows build
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
