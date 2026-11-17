@@ -214,6 +214,11 @@ impl App {
             }
             return false;
         }
+        // Command-Return sends the prompt of an agent conversation.
+        if matches!(key, Key::Named(NamedKey::Enter)) && self.with_workspace(|workspace, _| workspace.submit_prompt()) == Some(true) {
+            self.invalidate();
+            return true;
+        }
         let Key::Character(characters) = key else { return false };
         // The Swift app's Shift and Control variants of a Command shortcut. Elsewhere the command chord
         // is Control+Shift, so Alt marks the Shift variant and there is no Control variant.

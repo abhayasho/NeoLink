@@ -46,10 +46,355 @@ pub fn executable(name: &str) -> Option<String> {
     directories.iter().filter(|directory| directory.is_absolute()).flat_map(|directory| names.iter().map(move |name| directory.join(name))).find(|candidate| is_executable(candidate)).map(|path| path.to_string_lossy().into_owned())
 }
 
+enum Kind {
+    Terminal(Terminal),
+    Conversation(Box<Conversation>),
+}
+
 struct Session {
     id: u64,
     title: String,
-    terminal: Terminal,
+    kind: Kind,
+}
+
+/// A native (ACP) conversation as the panel shows it (`ACPConversationView`).
+struct Conversation {
+    session: neolink_acp::Session,
+    draft: String,
+    include_file: bool,
+    plan_open: bool,
+    open_tools: std::collections::HashSet<String>,
+    /// Pixels scrolled up from the end; 0 follows new text.
+    from_end: f32,
+    /// Wrapped lines by (text, width, points, monospace), so only changed text is laid out again.
+    wrapped: std::collections::HashMap<(u64, u32, u32, bool), std::rc::Rc<Vec<String>>>,
+    buttons: Vec<(Rect, String)>,
+    list: Rect,
+    composer: Rect,
+    seen_turns: u64,
+}
+
+// The wrapped-line cache is only touched while the workspace is locked.
+unsafe impl Send for Conversation {}
+
+/// Breaks `text` at spaces (and inside words too long for a line) so no line is wider than `width`.
+/// Word widths are measured one by one, so text that grows only costs its new words.
+fn wrap_text(ui: &mut Ui, text: &str, width: f32, points: f32, monospace: bool) -> Vec<String> {
+    let space = ui.measure(" ", points, 400, monospace).max(1.0);
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        // Indentation is kept (tool input is pretty-printed JSON).
+        let indent: String = paragraph.chars().take_while(|character| *character == ' ').take(24).collect();
+        let paragraph = &paragraph[paragraph.len() - paragraph.trim_start_matches(' ').len()..];
+        let mut line = indent.clone();
+        let mut used = indent.len() as f32 * space;
+        let mut first = true;
+        for word in paragraph.split(' ') {
+            let mut word = word.to_string();
+            let mut word_width = if word.is_empty() { 0.0 } else { ui.measure(&word, points, 400, monospace) };
+            // A word wider than a line is cut into pieces that fit.
+            while word_width > width && word.chars().count() > 1 {
+                if !first {
+                    lines.push(std::mem::take(&mut line));
+                    used = 0.0;
+                    first = true;
+                }
+                let count = ((word.chars().count() as f32 * width / word_width).floor() as usize).max(1);
+                let head: String = word.chars().take(count).collect();
+                word = word.chars().skip(count).collect();
+                lines.push(head);
+                word_width = if word.is_empty() { 0.0 } else { ui.measure(&word, points, 400, monospace) };
+            }
+            if !first && used + space + word_width > width {
+                lines.push(std::mem::take(&mut line));
+                used = 0.0;
+                first = true;
+            }
+            if !first {
+                line.push(' ');
+                used += space;
+            }
+            first = false;
+            line.push_str(&word);
+            used += word_width;
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+impl Conversation {
+    fn lines(&mut self, ui: &mut Ui, text: &str, width: f32, points: f32, monospace: bool) -> std::rc::Rc<Vec<String>> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut hasher);
+        let key = (hasher.finish(), width.to_bits(), points.to_bits(), monospace);
+        if let Some(lines) = self.wrapped.get(&key) {
+            return lines.clone();
+        }
+        if self.wrapped.len() > 600 {
+            self.wrapped.clear();
+        }
+        let lines = std::rc::Rc::new(wrap_text(ui, text, width, points, monospace));
+        self.wrapped.insert(key, lines.clone());
+        lines
+    }
+
+    fn key(&mut self, key: &Key, text: Option<&str>) {
+        match key {
+            Key::Named(NamedKey::Enter) => self.draft.push('\n'),
+            Key::Named(NamedKey::Backspace) => {
+                self.draft.pop();
+            }
+            _ => {
+                if let Some(text) = text.filter(|text| !text.chars().any(char::is_control)) {
+                    self.draft.push_str(text);
+                }
+            }
+        }
+    }
+
+    fn submit(&mut self, context: Option<&str>) {
+        let state = self.session.state();
+        if state.is_busy || !state.is_ready || self.draft.trim().is_empty() {
+            return;
+        }
+        if self.session.send(&self.draft, context.filter(|_| self.include_file)) {
+            self.draft.clear();
+            self.from_end = 0.0;
+        }
+    }
+
+    /// Draws the conversation in `rect`. `context`: the active document, if any.
+    fn draw(&mut self, ui: &mut Ui, rect: Rect, context: Option<&str>, focused: bool) {
+        let state = self.session.state();
+        let streaming = self.session.streaming_message();
+        self.buttons.clear();
+        let line = ui.px(1.0).max(1.0);
+        // Status row: status, mode, Source Control.
+        let top_middle = rect.y + ui.px(10.0 + 7.0);
+        let git = Rect::new(rect.right() - ui.px(10.0 + 18.0), top_middle - ui.px(9.0), ui.px(18.0), ui.px(18.0));
+        ui.icon("arrow.triangle.branch", 10.0, IconWeight::Regular, git.x + git.width * 0.5, top_middle, theme::TEXT_SECONDARY);
+        self.buttons.push((git, "git".into()));
+        let mut right = git.x - ui.px(8.0);
+        if !state.modes.is_empty() {
+            let name = state.modes.iter().find(|mode| mode.id == state.current_mode).map(|mode| mode.name.clone()).unwrap_or_else(|| "Mode".into());
+            let width = ui.text_right(&name, right - ui.px(10.0), top_middle, 10.0, 400, false, if state.is_busy { faded(theme::TEXT_SECONDARY, 0.6) } else { theme::TEXT_SECONDARY });
+            ui.icon("chevron.down", 7.0, IconWeight::Semibold, right - ui.px(4.0), top_middle, theme::TEXT_SECONDARY);
+            if !state.is_busy {
+                self.buttons.push((Rect::new(right - width - ui.px(12.0), top_middle - ui.px(9.0), width + ui.px(12.0), ui.px(18.0)), "modes".into()));
+            }
+            right -= width + ui.px(20.0);
+        }
+        let status = ui.fit_middle(&state.status, right - rect.x - ui.px(14.0), 10.0, 400, false);
+        ui.text(&status, rect.x + ui.px(10.0), top_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+        // Composer at the bottom.
+        let has_context = context.is_some();
+        let composer_height = ui.px(10.0 + 64.0 + 8.0 + if has_context { 14.0 + 8.0 } else { 0.0 } + 20.0 + 10.0);
+        let composer = Rect::new(rect.x, rect.bottom() - composer_height, rect.width, composer_height);
+        self.composer = composer;
+        ui.fill(composer, theme::ELEVATED);
+        ui.painter.scene.fill(rect.x, composer.y - line, rect.width, line, theme::SEPARATOR);
+        let editor = Rect::new(composer.x + ui.px(10.0), composer.y + ui.px(10.0), composer.width - ui.px(20.0), ui.px(64.0));
+        let row = ui.px(16.0);
+        let draft_lines = wrap_text(ui, &self.draft, editor.width - ui.px(10.0), 12.0, false);
+        ui.painter.scene.set_clip(Some(editor));
+        let overflow = (draft_lines.len() as f32 * row - editor.height).max(0.0);
+        let mut caret = (editor.x + ui.px(5.0), editor.y);
+        for (index, text) in draft_lines.iter().enumerate() {
+            let y = editor.y + index as f32 * row - overflow;
+            let width = if text.is_empty() { 0.0 } else { ui.text(text, editor.x + ui.px(5.0), y + row * 0.5, 12.0, 400, false, theme::TEXT_PRIMARY) };
+            caret = (editor.x + ui.px(5.0) + width + if text.is_empty() { 0.0 } else { line }, y);
+        }
+        if focused {
+            ui.painter.scene.fill(caret.0, caret.1 + ui.px(1.0), line.max(2.0), row - ui.px(2.0), theme::ACCENT);
+        }
+        ui.painter.scene.set_clip(None);
+        let mut y = editor.bottom() + ui.px(8.0);
+        if let Some(path) = context {
+            let name = Path::new(path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            let label = format!("Include path: {name}");
+            let box_rect = Rect::new(composer.x + ui.px(10.0), y + ui.px(1.0), ui.px(12.0), ui.px(12.0));
+            ui.rounded(box_rect, 3.0, if self.include_file { theme::ACCENT } else { theme::rgb(0x3A3A3A) });
+            if self.include_file {
+                ui.icon("checkmark", 8.0, IconWeight::Semibold, box_rect.x + box_rect.width * 0.5, box_rect.y + box_rect.height * 0.5, theme::EDITOR_BACKGROUND);
+            }
+            let label = ui.fit_middle(&label, composer.width - ui.px(40.0), 10.0, 400, false);
+            let width = ui.text(&label, box_rect.right() + ui.px(6.0), y + ui.px(7.0), 10.0, 400, false, theme::TEXT_PRIMARY);
+            self.buttons.push((Rect::new(box_rect.x, y, width + ui.px(20.0), ui.px(14.0)), "include".into()));
+            y += ui.px(14.0 + 8.0);
+        }
+        let row_middle = y + ui.px(10.0);
+        let (label, what, enabled) = if state.is_busy { ("Stop", "stop", state.is_ready) } else { ("Send", "send", state.is_ready && !self.draft.trim().is_empty()) };
+        let button_width = ui.measure(label, 11.0, 500, false) + ui.px(18.0);
+        let button = Rect::new(composer.right() - ui.px(10.0) - button_width, y, button_width, ui.px(20.0));
+        ui.rounded(button, 5.0, theme::rgb(0x3A3A3A));
+        ui.text(label, button.x + ui.px(9.0), row_middle, 11.0, 500, false, if enabled { theme::TEXT_PRIMARY } else { faded(theme::TEXT_SECONDARY, 0.6) });
+        if enabled {
+            self.buttons.push((button, what.into()));
+        }
+        let folder = self.session.directory().file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let note = ui.fit_middle(&format!("ACP \u{b7} {folder}"), button.x - composer.x - ui.px(24.0), 10.0, 400, false);
+        ui.text(&note, composer.x + ui.px(10.0), row_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+
+        // The conversation: laid out top to bottom, drawn from the end.
+        let list = Rect::new(rect.x, rect.y + ui.px(10.0 + 14.0 + 10.0), rect.width, composer.y - line - rect.y - ui.px(34.0));
+        self.list = list;
+        let (pad, gap) = (ui.px(12.0), ui.px(16.0));
+        let inner = (list.width - 2.0 * pad).max(ui.px(40.0));
+        let left = list.x + pad;
+        // Blocks: (height, draw).
+        enum Block {
+            Text { lines: std::rc::Rc<Vec<String>>, points: f32, monospace: bool, color: theme::Rgba, row: f32, weight: u16 },
+            Space(f32),
+            Disclosure { label: String, sub: Option<String>, open: bool, what: String },
+            Button { label: String, what: String, enabled: bool },
+            Card(f32),
+            Icon(&'static str, String),
+        }
+        let mut blocks: Vec<Block> = Vec::new();
+        let text_block = |this: &mut Conversation, ui: &mut Ui, text: &str, width: f32, points: f32, monospace: bool, color: theme::Rgba| Block::Text { lines: this.lines(ui, text, width, points, monospace), points, monospace, color, row: ui.px((points * 1.35).round()), weight: 400 };
+        if state.messages.is_empty() {
+            blocks.push(Block::Space(ui.px(16.0)));
+            blocks.push(text_block(self, ui, "Ask about your project or describe a change.", inner, 13.0, false, theme::TEXT_SECONDARY));
+            blocks.push(Block::Space(gap));
+        }
+        for message in &state.messages {
+            blocks.push(Block::Text { lines: std::rc::Rc::new(vec![message.role.clone()]), points: 10.0, monospace: false, color: theme::TEXT_SECONDARY, row: ui.px(13.0), weight: 600 });
+            blocks.push(Block::Space(ui.px(6.0)));
+            if Some(message.id) == streaming {
+                // While text streams in, each paragraph is wrapped on its own, so a chunk lays out only
+                // the last paragraph.
+                for paragraph in message.text.split("\n\n") {
+                    blocks.push(text_block(self, ui, paragraph, inner, 12.0, false, theme::TEXT_PRIMARY));
+                    blocks.push(Block::Space(ui.px(16.0)));
+                }
+                blocks.pop();
+            } else {
+                blocks.push(text_block(self, ui, &message.text, inner, 12.0, false, theme::TEXT_PRIMARY));
+            }
+            blocks.push(Block::Space(gap));
+        }
+        if !state.plan.is_empty() {
+            blocks.push(Block::Disclosure { label: "Plan".into(), sub: None, open: self.plan_open, what: "plan".into() });
+            if self.plan_open {
+                for entry in &state.plan {
+                    blocks.push(text_block(self, ui, entry, inner - ui.px(16.0), 11.0, false, theme::TEXT_PRIMARY));
+                }
+            }
+            blocks.push(Block::Space(gap));
+        }
+        for tool in &state.tools {
+            let open = self.open_tools.contains(&tool.id);
+            blocks.push(Block::Disclosure { label: tool.title.clone(), sub: Some(tool.status.clone()), open, what: format!("tool:{}", tool.id) });
+            if open {
+                blocks.push(text_block(self, ui, &tool.details, inner - ui.px(16.0), 10.0, true, theme::TEXT_PRIMARY));
+            }
+            blocks.push(Block::Space(gap));
+        }
+        if let Some(error) = &state.error {
+            blocks.push(text_block(self, ui, error, inner, 11.0, false, theme::rgb(0xC6B28E)));
+            blocks.push(Block::Space(gap));
+        }
+        if !state.is_ready {
+            for method in &state.auth_methods {
+                blocks.push(Block::Button { label: format!("Sign in \u{b7} {}", method.name), what: format!("auth:{}", method.id), enabled: !state.is_busy });
+                blocks.push(Block::Space(ui.px(8.0)));
+            }
+        }
+        if let Some(permission) = state.permissions.first() {
+            let card_inner = inner - ui.px(24.0);
+            let mut card: Vec<Block> = vec![Block::Space(ui.px(12.0)), Block::Icon("hand.raised", "Permission needed".into()), Block::Space(ui.px(8.0))];
+            card.push(text_block(self, ui, &permission.title, card_inner, 12.0, false, theme::TEXT_PRIMARY));
+            card.push(Block::Space(ui.px(8.0)));
+            // The details are shown in a 72-point box, from their start.
+            let details = self.lines(ui, &permission.details, card_inner, 10.0, true);
+            let shown: Vec<String> = details.iter().take(5).cloned().collect();
+            card.push(Block::Text { lines: std::rc::Rc::new(shown), points: 10.0, monospace: true, color: theme::TEXT_PRIMARY, row: ui.px(14.0), weight: 400 });
+            card.push(Block::Space(ui.px(8.0)));
+            for option in &permission.options {
+                card.push(Block::Button { label: option.name.clone(), what: format!("permit:{}:{}", permission.id, option.id), enabled: true });
+                card.push(Block::Space(ui.px(8.0)));
+            }
+            card.push(Block::Button { label: "Cancel request".into(), what: format!("deny:{}", permission.id), enabled: true });
+            card.push(Block::Space(ui.px(12.0)));
+            let height: f32 = card.iter().map(|block| block_height(ui, block)).sum();
+            blocks.push(Block::Card(height));
+            blocks.extend(card);
+        }
+        fn block_height(ui: &Ui, block: &Block) -> f32 {
+            match block {
+                Block::Text { lines, row, .. } => lines.len() as f32 * row,
+                Block::Space(height) => *height,
+                Block::Disclosure { sub, .. } => ui.px(if sub.is_some() { 34.0 } else { 18.0 }),
+                Block::Button { .. } => ui.px(22.0),
+                Block::Card(_) => 0.0,
+                Block::Icon(..) => ui.px(16.0),
+            }
+        }
+        let content: f32 = pad + blocks.iter().map(|block| block_height(ui, block)).sum::<f32>() + pad;
+        let limit = (content - list.height).max(0.0);
+        self.from_end = self.from_end.clamp(0.0, limit);
+        let mut y = list.y + pad - (limit - self.from_end).round();
+        ui.painter.scene.set_clip(Some(list));
+        let mut inset = 0.0f32;
+        let mut card_end = f32::MIN;
+        for block in &blocks {
+            let height = block_height(ui, block);
+            if y > card_end {
+                inset = 0.0;
+            }
+            let x = left + inset;
+            if y + height >= list.y && y <= list.bottom() || matches!(block, Block::Card(_)) {
+                match block {
+                    Block::Text { lines, points, monospace, color, row, weight } => {
+                        for (index, text) in lines.iter().enumerate() {
+                            let line_y = y + index as f32 * row;
+                            if !text.is_empty() && line_y + row >= list.y && line_y <= list.bottom() {
+                                ui.text(text, x, line_y + row * 0.5, *points, *weight, *monospace, *color);
+                            }
+                        }
+                    }
+                    Block::Space(_) => {}
+                    Block::Disclosure { label, sub, open, what } => {
+                        ui.icon(if *open { "chevron.down" } else { "chevron.right" }, 8.0, IconWeight::Semibold, x + ui.px(5.0), y + ui.px(9.0), theme::TEXT_SECONDARY);
+                        let label = ui.fit_middle(label, inner - ui.px(20.0), 11.0, 400, false);
+                        ui.text(&label, x + ui.px(16.0), y + ui.px(9.0), 11.0, 400, false, theme::TEXT_PRIMARY);
+                        if let Some(sub) = sub {
+                            ui.text(sub, x + ui.px(16.0), y + ui.px(18.0 + 3.0 + 6.0), 11.0, 400, false, theme::TEXT_SECONDARY);
+                        }
+                        self.buttons.push((Rect::new(list.x, y.max(list.y), list.width, (height - (list.y - y).max(0.0)).max(0.0)), what.clone()));
+                    }
+                    Block::Button { label, what, enabled } => {
+                        let width = (ui.measure(label, 12.0, 400, false) + ui.px(20.0)).min(inner - 2.0 * inset);
+                        let button = Rect::new(x, y, width, height);
+                        ui.rounded(button, 5.0, theme::rgb(0x3A3A3A));
+                        let label = ui.fit_middle(label, width - ui.px(16.0), 12.0, 400, false);
+                        ui.text(&label, button.x + ui.px(10.0), y + height * 0.5, 12.0, 400, false, if *enabled { theme::TEXT_PRIMARY } else { faded(theme::TEXT_SECONDARY, 0.6) });
+                        if *enabled && y >= list.y && y + height <= list.bottom() {
+                            self.buttons.push((button, what.clone()));
+                        }
+                    }
+                    Block::Card(card_height) => {
+                        ui.rounded(Rect::new(left, y, inner, *card_height), 6.0, theme::ELEVATED);
+                        inset = ui.px(12.0);
+                        card_end = y + card_height - 1.0;
+                    }
+                    Block::Icon(symbol, label) => {
+                        let icon = ui.icon(symbol, 11.0, IconWeight::Semibold, x + ui.px(7.0), y + ui.px(8.0), theme::TEXT_PRIMARY).max(ui.px(14.0));
+                        ui.text(label, x + icon + ui.px(5.0), y + ui.px(8.0), 11.0, 600, false, theme::TEXT_PRIMARY);
+                    }
+                }
+            }
+            y += height;
+        }
+        ui.painter.scene.set_clip(None);
+        if content > list.height {
+            let thumb = (list.height * list.height / content).max(ui.px(24.0));
+            let travel = (list.height - thumb) * (limit - self.from_end) / limit.max(1.0);
+            ui.rounded(Rect::new(list.right() - ui.px(6.0), list.y + travel, ui.px(4.0), thumb), 2.0, theme::white(0.16));
+        }
+    }
 }
 
 /// What the panel or launcher asks of the workspace.
@@ -63,6 +408,10 @@ pub enum Outcome {
     /// Connect a native (ACP) conversation.
     Connect { agent: CodingAgent, directory: PathBuf, mcp: String },
     ChooseFolder,
+    /// Open Source Control for the conversation's project.
+    ShowGit,
+    /// Send the prompt (the workspace supplies the context file).
+    Submit,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -482,7 +831,84 @@ impl AgentPanel {
     }
 
     pub fn terminal(&mut self) -> Option<&mut Terminal> {
-        self.sessions.get_mut(self.selected).map(|session| &mut session.terminal)
+        match self.sessions.get_mut(self.selected).map(|session| &mut session.kind) {
+            Some(Kind::Terminal(terminal)) => Some(terminal),
+            _ => None,
+        }
+    }
+
+    fn conversation(&mut self) -> Option<&mut Conversation> {
+        match self.sessions.get_mut(self.selected).map(|session| &mut session.kind) {
+            Some(Kind::Conversation(conversation)) => Some(conversation),
+            _ => None,
+        }
+    }
+
+    /// The shown session is a conversation whose prompt field has the keyboard.
+    pub fn composing(&self) -> bool {
+        self.visible && self.focused && matches!(self.sessions.get(self.selected).map(|session| &session.kind), Some(Kind::Conversation(_)))
+    }
+
+    /// A key for the prompt field.
+    pub fn key(&mut self, key: &Key, text: Option<&str>) {
+        if let Some(conversation) = self.conversation() {
+            conversation.key(key, text);
+        }
+    }
+
+    /// Command-Return in the prompt field: send.
+    pub fn submit(&mut self, context: Option<&str>) {
+        if let Some(conversation) = self.conversation() {
+            conversation.submit(context);
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: &str) {
+        if let Some(conversation) = self.conversation() {
+            conversation.session.set_mode(mode);
+        }
+    }
+
+    /// Scrolls the shown conversation by `delta` pixels. Returns `false` if a terminal is shown.
+    pub fn scroll_conversation(&mut self, delta: f32) -> bool {
+        match self.conversation() {
+            Some(conversation) => {
+                conversation.from_end += delta;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether a conversation finished a turn since the last call (saved files may have changed).
+    pub fn take_finished_turn(&mut self) -> bool {
+        let mut finished = false;
+        for session in &mut self.sessions {
+            if let Kind::Conversation(conversation) = &mut session.kind {
+                let turns = conversation.session.state().turns_finished;
+                finished |= turns != conversation.seen_turns;
+                conversation.seen_turns = turns;
+            }
+        }
+        finished
+    }
+
+    /// Starts a native conversation with `agent`.
+    pub fn connect(&mut self, shared: &Arc<Shared>, agent: &CodingAgent, directory: &Path, mcp: Vec<serde_json::Value>) {
+        let id = self.next_id;
+        self.next_id += 1;
+        let wake = Arc::downgrade(shared);
+        let session = neolink_acp::Session::new(agent.clone(), directory, mcp, move || {
+            if let Some(shared) = wake.upgrade() {
+                shared.invalidate();
+            }
+        });
+        session.connect(executable(&agent.executable).as_deref());
+        let conversation = Conversation { session, draft: String::new(), include_file: false, plan_open: false, open_tools: Default::default(), from_end: 0.0, wrapped: Default::default(), buttons: Vec::new(), list: Rect::default(), composer: Rect::default(), seen_turns: 0 };
+        self.sessions.push(Session { id, title: format!("{} \u{b7} ACP", agent.name), kind: Kind::Conversation(Box::new(conversation)) });
+        self.selected = self.sessions.len() - 1;
+        self.visible = true;
+        self.focused = true;
     }
 
     /// Starts `agent` in a shell in the panel.
@@ -492,7 +918,7 @@ impl AgentPanel {
         let mut terminal = Terminal::spawn(shared, self.grid.0.max(20), self.grid.1.max(5), cell, Some(directory.to_path_buf()), id)?;
         let resolved = executable(&agent.executable);
         terminal.write(agent.launch_command(&directory.to_string_lossy(), resolved.as_deref()).replace('\n', "\r").into_bytes());
-        self.sessions.push(Session { id, title: agent.name.clone(), terminal });
+        self.sessions.push(Session { id, title: agent.name.clone(), kind: Kind::Terminal(terminal) });
         self.selected = self.sessions.len() - 1;
         self.visible = true;
         self.focused = true;
@@ -507,8 +933,10 @@ impl AgentPanel {
 
     fn close_selected(&mut self) {
         if self.selected < self.sessions.len() {
-            let session = self.sessions.remove(self.selected);
-            session.terminal.shutdown();
+            match self.sessions.remove(self.selected).kind {
+                Kind::Terminal(terminal) => terminal.shutdown(),
+                Kind::Conversation(conversation) => conversation.session.close(),
+            }
             self.selected = self.selected.min(self.sessions.len().saturating_sub(1));
         }
         if self.sessions.is_empty() {
@@ -529,28 +957,80 @@ impl AgentPanel {
                 _ => Outcome::Nothing,
             };
         }
+        if let Some(conversation) = self.conversation() {
+            let pressed = conversation.buttons.iter().rev().find(|(rect, _)| rect.contains(x, y)).map(|(rect, what)| (*rect, what.clone()));
+            let in_composer = conversation.composer.contains(x, y);
+            let mut outcome = Outcome::Nothing;
+            if let Some((rect, what)) = pressed {
+                match what.as_str() {
+                    "git" => outcome = Outcome::ShowGit,
+                    "modes" => {
+                        let state = conversation.session.state();
+                        outcome = Outcome::Menu(Menu::new(rect, state.modes.iter().map(|mode| Item::toggle(&mode.name, Action::AgentMode(mode.id.clone()), mode.id == state.current_mode)).collect()));
+                    }
+                    "include" => conversation.include_file = !conversation.include_file,
+                    "send" => outcome = Outcome::Submit,
+                    "stop" => conversation.session.cancel(),
+                    "plan" => conversation.plan_open = !conversation.plan_open,
+                    other => {
+                        if let Some(tool) = other.strip_prefix("tool:") {
+                            if !conversation.open_tools.remove(tool) {
+                                conversation.open_tools.insert(tool.to_string());
+                            }
+                        } else if let Some(method) = other.strip_prefix("auth:") {
+                            conversation.session.authenticate(method);
+                        } else if let Some(rest) = other.strip_prefix("permit:") {
+                            if let Some((id, option)) = rest.split_once(':') {
+                                conversation.session.answer(id.parse().unwrap_or(0), Some(option));
+                            }
+                        } else if let Some(id) = other.strip_prefix("deny:") {
+                            conversation.session.answer(id.parse().unwrap_or(0), None);
+                        }
+                    }
+                }
+            }
+            self.focused = in_composer || self.focused;
+            return outcome;
+        }
         self.focused = self.terminal_rect.contains(x, y) && !self.sessions.is_empty();
         Outcome::Nothing
     }
 
     pub fn control_rect(&self, name: &str) -> Option<Rect> {
+        if let Some(Kind::Conversation(conversation)) = self.sessions.get(self.selected).map(|session| &session.kind) {
+            if name == "composer" {
+                return Some(conversation.composer);
+            }
+            // "permit" and "deny" stand for the first such button.
+            if let Some((rect, _)) = conversation.buttons.iter().find(|(_, what)| what == name || what.split(':').next() == Some(name)) {
+                return Some(*rect);
+            }
+        }
         self.buttons.iter().find(|(_, what)| *what == name).map(|(rect, _)| *rect)
     }
 
     pub fn signature(&self) -> u64 {
         let mut value = (self.visible as u64) | (self.focused as u64) << 1 | (self.selected as u64) << 8 | (self.sessions.len() as u64) << 24 | (self.width_points.to_bits() as u64) << 32;
-        if let Some(session) = self.sessions.get(self.selected) {
-            value ^= session.terminal.output_generation().wrapping_mul(0x9E3779B97F4A7C15) ^ session.terminal.scroll().to_bits();
+        match self.sessions.get(self.selected).map(|session| &session.kind) {
+            Some(Kind::Terminal(terminal)) => value ^= terminal.output_generation().wrapping_mul(0x9E3779B97F4A7C15) ^ terminal.scroll().to_bits(),
+            Some(Kind::Conversation(conversation)) => {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                (conversation.session.revision(), &conversation.draft, conversation.include_file, conversation.plan_open, conversation.open_tools.len(), conversation.from_end.to_bits()).hash(&mut hasher);
+                value ^= hasher.finish();
+            }
+            None => {}
         }
         value
     }
 
     /// Draws the panel in `rect`. Sessions whose program ended are removed.
-    pub fn build(&mut self, painter: &mut Painter, rect: Rect, scale: f32, cell: CellMetrics, window_focused: bool, display: f64, period: f64) -> Next {
+    #[allow(clippy::too_many_arguments)]
+    pub fn build(&mut self, painter: &mut Painter, rect: Rect, scale: f32, cell: CellMetrics, window_focused: bool, context: Option<&str>, display: f64, period: f64) -> Next {
         self.rect = rect;
         self.buttons.clear();
         let before = self.sessions.len();
-        self.sessions.retain(|session| !session.terminal.has_exited());
+        self.sessions.retain(|session| !matches!(&session.kind, Kind::Terminal(terminal) if terminal.has_exited()));
         if self.sessions.len() != before {
             self.selected = self.selected.min(self.sessions.len().saturating_sub(1));
         }
@@ -611,7 +1091,8 @@ impl AgentPanel {
         // Footer.
         let footer = Rect::new(rect.x, rect.bottom() - ui.px(22.0), rect.width, ui.px(22.0));
         let footer_middle = footer.y + footer.height * 0.5;
-        ui.text("Project terminal", rect.x + ui.px(10.0), footer_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+        let conversing = matches!(self.sessions[self.selected].kind, Kind::Conversation(_));
+        ui.text(if conversing { "Agent conversation" } else { "Project terminal" }, rect.x + ui.px(10.0), footer_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         let count = self.sessions.len();
         ui.text_right(&format!("{count} {}", if count == 1 { "session" } else { "sessions" }), rect.right() - ui.px(10.0), footer_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         // The terminal, a whole number of cells.
@@ -621,10 +1102,20 @@ impl AgentPanel {
         if grid != self.grid {
             self.grid = grid;
             for session in &mut self.sessions {
-                session.terminal.resize(grid.0, grid.1, cell);
+                if let Kind::Terminal(terminal) = &mut session.kind {
+                    terminal.resize(grid.0, grid.1, cell);
+                }
             }
         }
         let (terminal_rect, focused) = (self.terminal_rect, self.focused && window_focused);
-        self.sessions[self.selected].terminal.build(painter, terminal_rect, focused, display, period)
+        match &mut self.sessions[self.selected].kind {
+            Kind::Terminal(terminal) => terminal.build(painter, terminal_rect, focused, display, period),
+            Kind::Conversation(conversation) => {
+                let area = Rect::new(rect.x, row.bottom(), rect.width, footer.y - row.bottom());
+                let mut ui = Ui { painter, scale };
+                conversation.draw(&mut ui, area, context, focused);
+                Next::Idle
+            }
+        }
     }
 }

@@ -439,6 +439,16 @@ impl Workspace {
         self.active_is_document() && !(self.agent.focused && self.agent.visible)
     }
 
+    /// Sends the prompt of the shown conversation, with the active file as its context.
+    pub fn submit_prompt(&mut self) -> bool {
+        if !self.agent.composing() {
+            return false;
+        }
+        let context = self.active_document();
+        self.agent.submit(context.as_deref());
+        true
+    }
+
     pub fn toggle_agent_panel(&mut self) {
         self.agent.visible = !self.agent.visible;
         if !self.agent.visible {
@@ -508,10 +518,29 @@ impl Workspace {
                     }
                 }
             }
-            Outcome::Connect { .. } => {
-                if let Some(launcher) = &mut self.launcher {
-                    launcher.error = Some("Native (ACP) conversations are not available in this build yet. Use Terminal.".into());
+            Outcome::Connect { agent, directory, mcp } => {
+                let servers = match neolink_acp::parse_mcp(&mcp) {
+                    Ok(servers) => servers,
+                    Err(error) => {
+                        if let Some(launcher) = &mut self.launcher {
+                            launcher.error = Some(error);
+                        }
+                        return;
+                    }
+                };
+                if !directory.is_dir() {
+                    if let Some(launcher) = &mut self.launcher {
+                        launcher.error = Some("The project folder no longer exists.".into());
+                    }
+                    return;
                 }
+                let Some(shared) = self.shared.upgrade() else { return };
+                self.agent.connect(&shared, &agent, &neolink_core::paths::canonical(&directory), servers);
+                self.agent_outcome(None);
+            }
+            Outcome::ShowGit => self.open_git(),
+            Outcome::Submit => {
+                self.submit_prompt();
             }
         }
     }
@@ -582,6 +611,9 @@ impl Workspace {
         }
         let (cell, period) = (self.cell, self.period);
         if self.agent.contains(self.pointer.0, self.pointer.1) {
+            if self.agent.scroll_conversation(delta_y as f32 * self.scale) {
+                return;
+            }
             if let Some(terminal) = self.agent.terminal() {
                 terminal.scroll_input(time, delta_y, phase, cell, period);
             }
@@ -657,6 +689,10 @@ impl Workspace {
         if self.launcher.is_some() {
             let outcome = self.launcher.as_mut().and_then(|launcher| launcher.key(key, text));
             self.agent_outcome(outcome);
+            return true;
+        }
+        if self.agent.composing() && self.menu.is_none() && self.git.is_none() && self.search.is_none() && self.creation.is_none() && self.closing.is_none() {
+            self.agent.key(key, text);
             return true;
         }
         if self.closing.is_some() {
@@ -1065,6 +1101,7 @@ impl Workspace {
             Action::NewFolder => self.begin_create(true),
             Action::File(what, path, is_directory) => self.file_action(what, path, is_directory),
             Action::AgentSession(id) => self.agent.select(id),
+            Action::AgentMode(mode) => self.agent.set_mode(&mode),
             Action::GitCreateBranch | Action::GitSwitch(_) | Action::GitStash(_) => {
                 let unsaved = self.any_unsaved();
                 if let Some(git) = &mut self.git {
@@ -1652,6 +1689,10 @@ impl Content for Workspace {
         } else {
             self.seen_replies = self.editor.as_ref().map(Editor::replies).unwrap_or(0);
         }
+        // An agent finished a turn: files and Git state may have changed.
+        if self.agent.take_finished_turn() {
+            self.explorer.refresh();
+        }
         self.draw_header(painter);
         self.draw_strip(painter);
         let (pane, focused, period) = (self.pane, self.focused && !(self.agent.focused && self.agent.visible), frame.period);
@@ -1697,7 +1738,8 @@ impl Content for Workspace {
         }
         if self.agent.visible {
             let (rect, cell, window_focused) = (self.agent_rect, self.cell, self.focused);
-            let agent_next = self.agent.build(painter, rect, frame.scale, cell, window_focused, frame.display, period);
+            let context = self.active_document();
+            let agent_next = self.agent.build(painter, rect, frame.scale, cell, window_focused, context.as_deref(), frame.display, period);
             next = match (next, agent_next) {
                 (Next::Soon, _) | (_, Next::Soon) => Next::Soon,
                 (Next::At(a), Next::At(b)) => Next::At(a.min(b)),

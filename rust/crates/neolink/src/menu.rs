@@ -21,6 +21,8 @@ pub enum Action {
     File(&'static str, std::path::PathBuf, bool),
     /// Show this agent session in the panel.
     AgentSession(u64),
+    /// Switch the shown conversation's mode.
+    AgentMode(String),
     GitCreateBranch,
     GitSwitch(String),
     GitStash(Option<String>),
