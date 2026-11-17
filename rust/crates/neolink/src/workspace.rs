@@ -138,6 +138,12 @@ pub struct Workspace {
     tip: Option<(String, f64)>,
     tip_shown: bool,
     tip_changed: bool,
+    /// What the held mouse button was pressed in (1 the shown terminal, 2 the docked one, 3 the
+    /// editor), and the last press for counting double and triple clicks.
+    pressed_in: u8,
+    /// The shown terminal's working directory as the status bar spells it.
+    shown_directory: String,
+    last_press: (f64, f32, f32, u8),
     /// A file or folder copied in the explorer ("Copy", then "Paste Here").
     copied: Option<std::path::PathBuf>,
     /// The explorer's width in points, and whether its edge is being dragged.
@@ -220,6 +226,9 @@ impl Workspace {
             tip: None,
             tip_shown: false,
             tip_changed: false,
+            pressed_in: 0,
+            shown_directory: String::new(),
+            last_press: (0.0, 0.0, 0.0, 0),
             copied: None,
             explorer_points: crate::explorer::WIDTH_POINTS,
             dragging_divider: false,
@@ -1489,6 +1498,11 @@ impl Workspace {
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
         self.tip = None;
+        // Presses close together in time and place count up: word, then line.
+        let now = crate::clock::now();
+        let near = (x - self.last_press.1).abs() < 4.0 * self.scale && (y - self.last_press.2).abs() < 4.0 * self.scale;
+        let clicks = if now - self.last_press.0 < 0.4 && near { self.last_press.3 % 3 + 1 } else { 1 };
+        self.last_press = (now, x, y, clicks);
         if let Some(menu) = self.menu.take() {
             if let Some(action) = menu.action_at(x, y) {
                 self.perform(action);
@@ -1543,6 +1557,18 @@ impl Workspace {
         }
         if self.dock.over_edge(x, y, 3.0 * self.scale) {
             self.dragging_dock = true;
+            return true;
+        }
+        if self.dock.over_text(x, y) && self.menu.is_none() {
+            let cell = self.cell;
+            self.dock.focused = true;
+            self.agent.focused = false;
+            self.explorer.focused = false;
+            self.explorer.filter_focused = false;
+            if let Some(terminal) = self.dock.terminal() {
+                terminal.mouse_down(x, y, cell, clicks);
+                self.pressed_in = 2;
+            }
             return true;
         }
         if self.dock.contains(x, y) {
@@ -1676,14 +1702,62 @@ impl Workspace {
             if let Some(editor) = &self.editor {
                 editor.mouse("press", row, column);
             }
+            self.pressed_in = 3;
+            return true;
+        }
+        if self.pane.contains(x, y) && !self.active_is_document() && self.shown == self.active {
+            let cell = self.cell;
+            if let Some(terminal) = self.active() {
+                terminal.mouse_down(x, y, cell, clicks);
+                self.pressed_in = 1;
+            }
             return true;
         }
         false
     }
 
+    /// Copies the selection of the terminal that has the keyboard. Returns `false` if the keyboard is
+    /// in the editor (which copies by its own means).
+    pub fn copy(&mut self) -> bool {
+        if self.keys_go_to_editor() {
+            self.editor_action("copy");
+            return false;
+        }
+        if let Some(text) = self.keyboard_terminal().and_then(|terminal| terminal.selected_text()) {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(text);
+            }
+        }
+        true
+    }
+
+    pub fn select_all(&mut self) {
+        if self.keys_go_to_editor() {
+            self.editor_action("selectAll");
+        } else if let Some(terminal) = self.keyboard_terminal() {
+            terminal.select_all();
+        }
+    }
+
     pub fn release(&mut self, x: f32, y: f32) {
         if std::mem::take(&mut self.dragging_divider) | std::mem::take(&mut self.dragging_agent) | std::mem::take(&mut self.dragging_dock) {
             return;
+        }
+        let cell = self.cell;
+        match std::mem::take(&mut self.pressed_in) {
+            1 => {
+                if let Some(terminal) = self.active() {
+                    terminal.mouse_up(x, y, cell);
+                }
+                return;
+            }
+            2 => {
+                if let Some(terminal) = self.dock.terminal() {
+                    terminal.mouse_up(x, y, cell);
+                }
+                return;
+            }
+            _ => {}
         }
         if self.editor_pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
             let (row, column) = self.pointer_cell();
@@ -1704,6 +1778,30 @@ impl Workspace {
             if was_shown || self.tip.is_some() {
                 self.tip_changed = true;
             }
+        }
+        // A held button drags the selection (or, in the editor, Neovim's).
+        let cell = self.cell;
+        match self.pressed_in {
+            1 => {
+                if let Some(terminal) = self.active() {
+                    terminal.mouse_drag(x, y, cell);
+                }
+                return true;
+            }
+            2 => {
+                if let Some(terminal) = self.dock.terminal() {
+                    terminal.mouse_drag(x, y, cell);
+                }
+                return true;
+            }
+            3 => {
+                let (row, column) = self.pointer_cell();
+                if let Some(editor) = &self.editor {
+                    editor.mouse("drag", row, column);
+                }
+                return false;
+            }
+            _ => {}
         }
         if self.dragging_dock {
             use crate::dock::Side;
@@ -1938,14 +2036,7 @@ impl Workspace {
         let x = rect.x + ui.px(12.0);
         ui.painter.scene.fill(x, middle - dot * 0.5, dot, dot, if running { theme::ACCENT } else { theme::TEXT_SECONDARY });
         ui.text(if running { "Local shell" } else { "Session ended" }, x + dot + ui.px(7.0), middle, 10.0, 500, false, theme::TEXT_SECONDARY);
-        // The shell's directory is not reported to the app yet: the project folder stands in for it.
-        let home = home_directory().unwrap_or_default();
-        let root = self.explorer.root();
-        let directory = match root.strip_prefix(&home) {
-            Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-            Ok(rest) => format!("~/{}", rest.display()),
-            Err(_) => root.display().to_string(),
-        };
+        let directory = self.shown_directory.clone();
         let right = rect.right() - ui.px(12.0);
         let fitted = ui.fit_middle(&directory, rect.width * 0.5, 10.0, 400, true);
         let width = ui.text_right(&fitted, right, middle, 10.0, 400, true, theme::TEXT_SECONDARY);
@@ -2126,6 +2217,34 @@ impl Content for Workspace {
         } else {
             self.seen_replies = self.editor.as_ref().map(Editor::replies).unwrap_or(0);
         }
+        // The shown shell's working directory, for the status bar (the project folder until it is known).
+        {
+            let home = home_directory().unwrap_or_default();
+            let root = self.explorer.root().to_path_buf();
+            let directory = self.tabs.get_mut(self.shown).and_then(|tab| match &mut tab.pane {
+                Pane::Terminal(terminal) => terminal.directory().map(std::path::Path::to_path_buf),
+                _ => None,
+            });
+            // "Follow terminal": the tree shows where the shown shell is (the project stays the project).
+            if let (true, Some(directory)) = (self.explorer.follow_terminal, &directory) {
+                if directory != self.explorer.root() && directory.is_dir() {
+                    let options = (self.explorer.visible, self.explorer.compact(), self.explorer.show_hidden(), self.explorer.hide_ignored, self.explorer.reveal_active);
+                    self.explorer = Explorer::new(directory.clone());
+                    self.explorer.follow_terminal = true;
+                    self.explorer_options = Some(options);
+                    self.apply_explorer_options();
+                    if let Some(shared) = self.shared.upgrade() {
+                        self.explorer.attach(&shared);
+                    }
+                }
+            }
+            let directory = directory.unwrap_or(root);
+            self.shown_directory = match directory.strip_prefix(&home) {
+                Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+                Ok(rest) => format!("~/{}", rest.display()),
+                Err(_) => directory.display().to_string(),
+            };
+        }
         // An agent finished a turn: files and Git state may have changed.
         if self.agent.take_finished_turn() {
             self.explorer.refresh();
@@ -2237,6 +2356,7 @@ impl Content for Workspace {
         signature.add(frame.size.0 as u64).add(frame.size.1 as u64).add(self.cell.width.to_bits() as u64).add(self.cell.height.to_bits() as u64);
         signature.add(self.shown as u64).add(self.shown_selection).add(self.focused as u64).add(self.hover.map_or(u64::MAX, |index| index as u64));
         signature.add(self.hover_close.map_or(u64::MAX, |index| index as u64)).add(self.font_points.to_bits() as u64);
+        signature.add(self.tabs.get(self.shown).and_then(Tab::terminal).map_or(0, Terminal::look)).text(&self.shown_directory);
         if let Some(editor) = &self.editor {
             signature.text(editor.mode_label());
         }

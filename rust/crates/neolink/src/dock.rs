@@ -64,6 +64,11 @@ impl Dock {
         }
     }
 
+    /// Whether `(x, y)` is over the terminal's text.
+    pub fn over_text(&self, x: f32, y: f32) -> bool {
+        self.visible && self.terminal_rect.contains(x, y)
+    }
+
     pub fn terminal(&mut self) -> Option<&mut Terminal> {
         self.terminals.get_mut(self.selected)
     }
@@ -136,7 +141,7 @@ impl Dock {
     pub fn signature(&self) -> u64 {
         let mut value = (self.visible as u64) | (self.focused as u64) << 1 | ((self.side == Side::Right) as u64) << 2 | (self.selected as u64) << 8 | (self.terminals.len() as u64) << 16 | (self.height_points.to_bits() as u64) << 32 ^ (self.width_points.to_bits() as u64).rotate_left(7);
         if let Some(terminal) = self.terminals.get(self.selected) {
-            value ^= terminal.output_generation().wrapping_mul(0x9E3779B97F4A7C15) ^ terminal.scroll().to_bits();
+            value ^= terminal.output_generation().wrapping_mul(0x9E3779B97F4A7C15) ^ terminal.scroll().to_bits() ^ terminal.look().rotate_left(21);
         }
         value
     }

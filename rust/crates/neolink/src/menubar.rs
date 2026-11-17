@@ -8,6 +8,7 @@ use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 fn code(character: char) -> Option<Code> {
     Some(match character {
         'a' => Code::KeyA,
+        'c' => Code::KeyC,
         'b' => Code::KeyB,
         'e' => Code::KeyE,
         'f' => Code::KeyF,
@@ -84,9 +85,9 @@ pub fn install(on_command: impl Fn(String) + Send + Sync + 'static) -> Option<Me
         &key("Redo", "cs", 'z'),
         &separator(),
         &plain("editor:cut", "Cut"),
-        &plain("editor:copy", "Copy"),
+        &key("Copy", "c", 'c'),
         &key("Paste", "c", 'v'),
-        &plain("editor:selectAll", "Select All"),
+        &key("Select All", "c", 'a'),
         &separator(),
         &key("Find\u{2026}", "c", 'f'),
         &key("Find in Files\u{2026}", "cs", 'f'),

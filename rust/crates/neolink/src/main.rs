@@ -211,7 +211,13 @@ impl App {
             self.shortcut(&Key::Character(character.into()), event_loop);
             self.modifiers = held;
         } else if let Some(action) = command.strip_prefix("editor:") {
-            self.with_workspace(|workspace, _| workspace.editor_action(action));
+            self.with_workspace(|workspace, _| match action {
+                "copy" => {
+                    workspace.copy();
+                }
+                "selectAll" => workspace.select_all(),
+                _ => workspace.editor_action(action),
+            });
         } else if let Some(side) = command.strip_prefix("dock:") {
             self.with_workspace(|workspace, _| workspace.toggle_dock(side == "bottom"));
         } else if let Some(program) = command.strip_prefix("repl:") {
@@ -348,6 +354,13 @@ impl App {
             }
             "f" => {
                 self.with_workspace(|workspace, _| workspace.editor_action("find"));
+            }
+            "c" => {
+                self.with_workspace(|workspace, _| workspace.copy());
+            }
+            "a" => {
+                self.with_workspace(|workspace, _| workspace.select_all());
+                self.invalidate();
             }
             "v" => {
                 if let Ok(text) = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
@@ -571,6 +584,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 Injected::Keys(keys) => {
                     self.with_workspace(|workspace, _| workspace.editor_input(&keys));
+                }
+                Injected::Control(name) if name.starts_with("command:") => {
+                    // A menu bar command by its identifier, e.g. "command:key:c:a".
+                    self.menu_command(&name["command:".len()..], event_loop);
                 }
                 Injected::Control(name) => {
                     self.with_workspace(|workspace, _| {

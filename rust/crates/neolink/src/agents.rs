@@ -1012,7 +1012,7 @@ impl AgentPanel {
     pub fn signature(&self) -> u64 {
         let mut value = (self.visible as u64) | (self.focused as u64) << 1 | (self.selected as u64) << 8 | (self.sessions.len() as u64) << 24 | (self.width_points.to_bits() as u64) << 32;
         match self.sessions.get(self.selected).map(|session| &session.kind) {
-            Some(Kind::Terminal(terminal)) => value ^= terminal.output_generation().wrapping_mul(0x9E3779B97F4A7C15) ^ terminal.scroll().to_bits(),
+            Some(Kind::Terminal(terminal)) => value ^= terminal.output_generation().wrapping_mul(0x9E3779B97F4A7C15) ^ terminal.scroll().to_bits() ^ terminal.look().rotate_left(21),
             Some(Kind::Conversation(conversation)) => {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();

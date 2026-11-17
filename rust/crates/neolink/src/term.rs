@@ -12,7 +12,8 @@ use crate::theme::{self, Rgba};
 use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, Notifier};
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
@@ -145,6 +146,40 @@ pub struct Terminal {
     keys: std::collections::HashMap<i32, u64>,
     keys_state: Option<(u64, usize, usize, usize, bool, bool)>,
     pub fallback_title: String,
+    /// The shell's process, to ask the system for its working directory.
+    child: Option<u32>,
+    master: Option<i32>,
+    directory: Option<std::path::PathBuf>,
+    directory_checked: (u64, f64),
+    /// Counts changes of the selection (part of what a frame shows).
+    look: u64,
+    /// The pane as last drawn: where it was, and how far it was scrolled.
+    drawn_rect: Rect,
+}
+
+/// The working directory of process `pid`, where the system can say.
+fn process_directory(pid: u32) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+        let written = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDVNODEPATHINFO, 0, &mut info as *mut _ as *mut libc::c_void, size) };
+        if written != size {
+            return None;
+        }
+        let path = unsafe { std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr() as *const libc::c_char) };
+        let path = path.to_str().ok()?;
+        (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
 }
 
 fn window_size(columns: usize, lines: usize, cell: CellMetrics) -> WindowSize {
@@ -170,7 +205,17 @@ impl Terminal {
         env.insert("TERM_PROGRAM".to_string(), "NeoLink".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
         let options = tty::Options { shell: None, working_directory: directory, drain_on_exit: false, env, ..tty::Options::default() };
+        let start_directory = options.working_directory.clone();
         let pty = tty::new(&options, size, id)?;
+        // The PTY's descriptor names the foreground process (the shell at a prompt; on macOS the
+        // direct child is `login`, whose directory never changes).
+        #[cfg(unix)]
+        let (child, master) = {
+            use std::os::fd::AsRawFd;
+            (Some(pty.child().id()), Some(pty.file().as_raw_fd()))
+        };
+        #[cfg(not(unix))]
+        let (child, master): (Option<u32>, Option<i32>) = (None, None);
         let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, false, false)?;
         let sender = event_loop.channel();
         let _ = listener.sender.set(sender.clone());
@@ -196,7 +241,126 @@ impl Terminal {
             keys: std::collections::HashMap::new(),
             keys_state: None,
             fallback_title: "shell".to_string(),
+            child,
+            master,
+            directory: start_directory,
+            directory_checked: (u64::MAX, 0.0),
+            look: 0,
+            drawn_rect: Rect::default(),
         })
+    }
+
+    /// The shell's working directory. Asked of the system when output arrived since the last answer,
+    /// at most twice a second.
+    pub fn directory(&mut self) -> Option<&std::path::Path> {
+        let output = self.listener.output.load(Ordering::Acquire);
+        let now = crate::clock::now();
+        if self.directory_checked.0 != output && now - self.directory_checked.1 > 0.5 {
+            self.directory_checked = (output, now);
+            #[cfg(unix)]
+            let foreground = if self.has_exited() { None } else { self.master.map(|descriptor| unsafe { libc::tcgetpgrp(descriptor) }).filter(|pid| *pid > 0).map(|pid| pid as u32) };
+            #[cfg(not(unix))]
+            let foreground: Option<u32> = None;
+            if let Some(directory) = foreground.and_then(process_directory).or_else(|| self.child.and_then(process_directory)) {
+                self.directory = Some(directory);
+            }
+        }
+        self.directory.as_deref()
+    }
+
+    /// Changes when the selection does.
+    pub fn look(&self) -> u64 {
+        self.look
+    }
+
+    /// The grid point and cell half under `(x, y)` (window pixels), as last drawn.
+    fn point_at(&self, x: f32, y: f32, cell: CellMetrics) -> (Point, Side) {
+        let rect = self.drawn_rect;
+        let column = ((x - rect.x) / cell.width).floor().clamp(0.0, self.columns.saturating_sub(1) as f32);
+        let side = if (x - rect.x) - column * cell.width > cell.width * 0.5 { Side::Right } else { Side::Left };
+        let whole = (self.drawn / cell.height as f64).floor();
+        let fraction = (self.drawn - whole * cell.height as f64) as f32;
+        let row = ((y - rect.y - fraction) / cell.height).floor().clamp(-1.0, self.lines as f32 - 1.0) as i32;
+        (Point::new(Line(row - whole as i32), Column(column as usize)), side)
+    }
+
+    /// The program asked for mouse reports, so presses are its business, not a selection.
+    pub fn wants_mouse(&self) -> bool {
+        self.term.lock().mode().intersects(TermMode::MOUSE_MODE)
+    }
+
+    /// A press at `(x, y)`: starts a selection (`clicks` 2 selects a word, 3 a line), or reports the
+    /// press to a program that asked for the mouse.
+    pub fn mouse_down(&mut self, x: f32, y: f32, cell: CellMetrics, clicks: u8) {
+        let (point, side) = self.point_at(x, y, cell);
+        let mut term = self.term.lock();
+        if term.mode().intersects(TermMode::MOUSE_MODE) {
+            if term.mode().contains(TermMode::SGR_MOUSE) {
+                let (column, line) = (point.column.0 + 1, (point.line.0.max(0) + 1) as usize);
+                drop(term);
+                self.notifier.notify(format!("\x1b[<0;{column};{line}M").into_bytes());
+            }
+            return;
+        }
+        let kind = match clicks {
+            2 => SelectionType::Semantic,
+            3 => SelectionType::Lines,
+            _ => SelectionType::Simple,
+        };
+        term.selection = Some(Selection::new(kind, point, side));
+        self.look += 1;
+    }
+
+    pub fn mouse_drag(&mut self, x: f32, y: f32, cell: CellMetrics) {
+        let (point, side) = self.point_at(x, y, cell);
+        let mut term = self.term.lock();
+        if term.mode().intersects(TermMode::MOUSE_MODE) {
+            return;
+        }
+        if let Some(selection) = &mut term.selection {
+            selection.update(point, side);
+            self.look += 1;
+        }
+    }
+
+    pub fn mouse_up(&mut self, x: f32, y: f32, cell: CellMetrics) {
+        let (point, _) = self.point_at(x, y, cell);
+        let mut term = self.term.lock();
+        if term.mode().intersects(TermMode::MOUSE_MODE) {
+            if term.mode().contains(TermMode::SGR_MOUSE) {
+                let (column, line) = (point.column.0 + 1, (point.line.0.max(0) + 1) as usize);
+                drop(term);
+                self.notifier.notify(format!("\x1b[<0;{column};{line}m").into_bytes());
+            }
+            return;
+        }
+        // A click without a drag selects nothing.
+        if term.selection.as_ref().is_some_and(|selection| selection.is_empty()) {
+            term.selection = None;
+            self.look += 1;
+        }
+    }
+
+    /// The selected text, if any.
+    pub fn selected_text(&self) -> Option<String> {
+        self.term.lock().selection_to_string().filter(|text| !text.is_empty())
+    }
+
+    pub fn clear_selection(&mut self) {
+        let mut term = self.term.lock();
+        if term.selection.take().is_some() {
+            self.look += 1;
+        }
+    }
+
+    /// Selects everything, scrollback included.
+    pub fn select_all(&mut self) {
+        let mut term = self.term.lock();
+        let (top, bottom, last) = (term.topmost_line(), term.bottommost_line(), term.last_column());
+        let mut selection = Selection::new(SelectionType::Simple, Point::new(top, Column(0)), Side::Left);
+        selection.update(Point::new(bottom, last), Side::Right);
+        term.selection = Some(selection);
+        self.look += 1;
     }
 
     pub fn title(&self) -> String {
@@ -224,9 +388,14 @@ impl Terminal {
     /// Sends bytes to the program, and returns the view to the newest line. Returns `true` if that moved
     /// the view (typing itself changes nothing on screen until the program answers).
     pub fn write(&mut self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>) -> bool {
-        let moved = self.scroll != 0.0 || self.smoother.is_active();
+        let mut moved = self.scroll != 0.0 || self.smoother.is_active();
         self.scroll = 0.0;
         self.smoother.cancel();
+        // Typing ends a selection.
+        if self.term.lock().selection.take().is_some() {
+            self.look += 1;
+            moved = true;
+        }
         self.notifier.notify(bytes);
         moved
     }
@@ -371,7 +540,25 @@ impl Terminal {
         let fraction = (scroll - whole * cell.height as f64) as f32;
         let offset = whole as i32;
 
+        self.drawn_rect = rect;
         painter.scene.set_clip(Some(rect));
+        // The selection, under the text (cells without a background of their own show it).
+        if let Some(range) = term.selection.as_ref().and_then(|selection| selection.to_range(&term)) {
+            for row in -1..lines as i32 {
+                let line = Line(row - offset);
+                if line < range.start.line || line > range.end.line {
+                    continue;
+                }
+                let (from, to) = if range.is_block {
+                    (range.start.column.0, range.end.column.0 + 1)
+                } else {
+                    (if line == range.start.line { range.start.column.0 } else { 0 }, if line == range.end.line { range.end.column.0 + 1 } else { columns })
+                };
+                if to > from {
+                    painter.scene.fill(rect.x + from as f32 * cell.width, rect.y + row as f32 * cell.height + fraction, (to - from) as f32 * cell.width, cell.height, theme::TERMINAL_SELECTION);
+                }
+            }
+        }
         let colors = term.colors();
         let cursor = grid.cursor.point;
         let show_cursor = term.mode().contains(TermMode::SHOW_CURSOR);

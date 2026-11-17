@@ -111,6 +111,9 @@ pub struct Explorer {
     /// The row the keyboard acts on, and whether the tree has the keyboard.
     pub selected: Option<PathBuf>,
     pub focused: bool,
+    /// The tree shows the shown terminal's working directory instead of the project.
+    pub follow_terminal: bool,
+    follow_rect: Rect,
     /// The pane as last drawn, and what it was drawn from: an unchanged pane is replayed.
     drawn: Option<(u64, Vec<(Option<Rect>, Vec<crate::render::Instance>)>)>,
     git: Decorations,
@@ -195,6 +198,8 @@ impl Explorer {
             reveal_active: true,
             selected: None,
             focused: false,
+            follow_terminal: false,
+            follow_rect: Rect::default(),
             drawn: None,
             git: Decorations::default(),
             git_loaded: Arc::new(Mutex::new(None)),
@@ -327,6 +332,7 @@ impl Explorer {
             "explorer-new" => Some(self.plus_rect),
             "explorer-filter" => Some(self.filter_rect),
             "explorer-refresh" => Some(self.refresh_rect),
+            "explorer-follow" => Some(self.follow_rect),
             "explorer-collapse" => Some(self.collapse_rect),
             _ => None,
         }
@@ -420,6 +426,11 @@ impl Explorer {
     pub fn click(&mut self, x: f32, y: f32) -> Clicked {
         if self.close_rect.contains(x, y) {
             return Clicked::Close;
+        }
+        if self.follow_rect.contains(x, y) {
+            self.follow_terminal = !self.follow_terminal;
+            self.revision += 1;
+            return Clicked::Nothing;
         }
         self.filter_focused = self.filter_rect.contains(x, y);
         if self.filter_focused {
@@ -683,8 +694,10 @@ impl Explorer {
         let footer = Rect::new(rect.x, rect.bottom() - footer_height, rect.width, footer_height);
         ui.painter.scene.fill(rect.x + inset, footer.y, rect.width - 2.0 * inset, line, theme::SEPARATOR);
         let footer_middle = footer.y + ui.px(4.0) + (footer.height - ui.px(4.0)) * 0.5;
-        let link = ui.icon("link.badge.plus", 10.0, IconWeight::Regular, rect.x + inset + ui.px(7.0), footer_middle, theme::TEXT_SECONDARY);
-        ui.text("Follow terminal", rect.x + inset + link.max(ui.px(14.0)) + ui.px(4.0), footer_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+        let follow_color = if self.follow_terminal { theme::ACCENT } else { theme::TEXT_SECONDARY };
+        let link = ui.icon(if self.follow_terminal { "link" } else { "link.badge.plus" }, 10.0, IconWeight::Regular, rect.x + inset + ui.px(7.0), footer_middle, follow_color);
+        let follow_width = ui.text(if self.follow_terminal { "Following terminal" } else { "Follow terminal" }, rect.x + inset + link.max(ui.px(14.0)) + ui.px(4.0), footer_middle, 10.0, 400, false, follow_color);
+        self.follow_rect = Rect::new(rect.x + inset, footer.y, link.max(ui.px(14.0)) + ui.px(8.0) + follow_width, footer.height);
         let summary = if self.tree.was_truncated() { "Tree limit \u{b7} use \u{2318}P".to_string() } else { format!("{} visible", self.rows.len()) };
         ui.text_right(&summary, rect.right() - inset, footer_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         // The split view's divider.
