@@ -397,6 +397,38 @@ Known differences still open:
 - The app menu is titled "neolink" until the app is packaged as NeoLink.app.
 - Windows: none of this has been seen running; CI only compiles and runs the tests.
 
+## 6c. The minimum feature list (given by the user on 2026-11-17)
+
+The user's 14-section description of the Swift app is the floor, plus two things the Swift app does not have: a
+terminal under the code, and split views of code and terminal. Status of each section in the Rust app. "Checked"
+means synthetic presses plus a capture, and a look at the result on disk or in Git where there is one; nothing
+here has been used by a person, and none of it has been seen running on Windows.
+
+| # | Area | Have | Missing |
+|---|------|------|---------|
+| 1 | Workspace and window | Three areas (connections or files at the left, tabs in the middle, agent panel at the right), each shown and hidden on its own and remembered; file browser and agent panel resize by dragging; native menu bar and shortcuts; window frame remembered; minimise, zoom, full screen | Dragging the window by empty header space (the title bar area drags; the header below it does not) |
+| 2 | Tabs | One strip for terminals and documents; shells keep running; one Neovim for all files; reopening selects the tab; modified dot and close button; widths from names; folder context for same-named files; scrolling with nearest-edge reveal; path tooltips; next / previous / close shortcuts; panes stay mounted | Accessibility labels (the window has no accessibility tree) |
+| 3 | Local terminal | Several tabs; scrollback kept; selection, copy, paste, select all; mouse-aware programs get wheel and click reports; text size; agents and REPLs use the same terminal; working directory followed (status bar, Follow terminal) | Terminal search; mouse drag reports; IME |
+| 4 | SSH | Saved connections (name, host, user, port) in the Swift app's file and format, search, new / edit / remove, sessions in tabs through the system's `ssh` | The Swift app's built-in SSH library and Keychain passwords: here `ssh` asks in the terminal |
+| 5 | SFTP and remote files | Nothing | All of it |
+| 6 | Explorer | Tree with compact chains, collapse all, hidden and ignored controls, file-type icons, filter, active file highlight and reveal, Git colours and badges, diagnostics counts on files and folders; create, rename, copy / paste, trash, copy paths, show in Finder, default app, terminal here; dropped files are copied without overwriting; lazy loading and row limits | Folder List mode; deleted-file placeholders; anchor-preserving refresh; a file watcher |
+| 7 | Editing | Neovim as a native grid client; syntax colours, line numbers, undo / redo, find, cut / copy / paste / select all through Neovim, folding, several buffers, Insert mode at start; remembered screens for instant switches with input held until Neovim confirms; vertical pixel scrolling | Horizontal pixel scrolling; the TUI-in-terminal fallback and the native text editor fallback (without `nvim` the app says so and has no editor) |
+| 8 | Language tools | Whatever `neolink.lua` configures runs unchanged (Pyright checked: diagnostics, indicator, counts); Code menu actions; Run; REPLs | Nothing known; each server not tried individually |
+| 9 | Search | Quick Open and Find in Files with the Swift app's ripgrep arguments, scoring and limits | Cancelling a running `rg` (a newer query waits for the old process to end) |
+| 10 | Git | Status, staged / unstaged, diff, stage, unstage, commit, create and switch branch, stash preview, open changed file, explorer decorations, unsaved-buffer guard | Deleted-file placeholders in the explorer |
+| 11 | Agents | Terminal agents in the panel or a tab, Claude's continue option, custom CLI; native ACP conversations: streaming, plan, tools with input and diffs, permissions, stop, modes, several sessions, picker, include the active file, Git review, MCP servers passed through | Nothing known against the offline test agent; not tried with the real Claude adapter |
+| 12 | Documents and projects | Open Project, project restored, recent projects with removal and clearing; unsaved-change prompt on closing a tab | PDF tabs; prompt on quitting with unsaved changes; external-change check before saving beyond what `neolink.lua` does; file size limits enforced by the app |
+| 13 | Look | The palette, system font for controls, SF Mono for code, SF Symbols, thin separators, compact bars; the axolotl logo | Menus, sheets and alerts inside the window are drawn by the app rather than AppKit; the app icon in the Dock (needs packaging) |
+| 14 | Rendering | GPU glyph atlas, retained rows, one presenter for all panes, VSync kept, at most one commit per refresh, nothing presented when nothing changed, replayed unchanged chrome | The View menu's rendering toggles, Renderer Information and the Performance Monitor; phase-aware glyph positions are quarter-pixel horizontally only |
+| + | Terminal under the code | Control-` (also View menu): a panel under the code with any number of shells, resizable, remembered | |
+| + | Split view of code and terminal | Control-Shift-` or the panel's button: the same panel beside the code | Splitting two documents side by side |
+
+Measurements after this work: typing and terminal scrolling were re-measured once (about 7 ms key to display in
+full screen, as before; scroll CPU with the sidebar shown back to the milestone-1 level after the explorer replay).
+The editor's pixel scrolling has NOT been measured on screen: the display was asleep when it was finished, and a
+run with no displayed frames reports nothing. `NEOLINK_BENCHMARK=editor-scroll,editor-crawl,editor-flick` is the
+scenario to run with the screen on.
+
 ## 7. Open items after milestone 1
 
 - CPU while scrolling (section 5): try presenting on a raw Metal command buffer shared with rendering, or cut
@@ -409,6 +441,12 @@ Known differences still open:
 
 ## 8. Log
 
+- 2026-11-17 (early morning): the user's feature list became the floor (section 6c). Added: native ACP
+  conversations (new `neolink-acp` crate, tested against `scripts/fixtures/acp-agent.py`), terminal under or beside
+  the code, settings and recent projects, tab folder context / scrolling / tooltips, terminal selection and copy,
+  working directory and Follow terminal, diagnostics counters and language-server indicator, file drops, pixel
+  scrolling in the editor, connections sidebar and SSH tabs. 94 tests. CI: macOS green; Windows failed once on a
+  path check in a new test, fixed in `cde7563`.
 - 2026-11-17 (late night): Quick Open, Find in Files, Source Control, explorer context menu and keyboard, file
   operations, pane resizing, Save alert, native menu bar, agent panel and launcher (terminal agents). Explorer
   drawing is replayed when unchanged (scroll CPU with the sidebar shown back to about the milestone-1 level).
