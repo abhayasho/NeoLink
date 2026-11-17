@@ -445,8 +445,10 @@ scenario to run with the screen on.
   conversations (new `neolink-acp` crate, tested against `scripts/fixtures/acp-agent.py`), terminal under or beside
   the code, settings and recent projects, tab folder context / scrolling / tooltips, terminal selection and copy,
   working directory and Follow terminal, diagnostics counters and language-server indicator, file drops, pixel
-  scrolling in the editor, connections sidebar, SSH tabs and the remote file browser. 96 tests. CI: macOS green; Windows failed once on a
-  path check in a new test, fixed in `cde7563`.
+  scrolling in the editor, connections sidebar, SSH tabs and the remote file browser. 96 tests. CI: green on macOS and Windows for `e97bcd5` (Windows had failed
+  once on a path check in a new test, fixed in `cde7563`). After that: packaging (`rust/scripts/build-app.sh`, also
+  run in CI), a prompt before quitting with unsaved changes, terminal search, deleted-file placeholders, View >
+  Renderer Information, PDFs handed to the system's viewer.
 - 2026-11-17 (late night): Quick Open, Find in Files, Source Control, explorer context menu and keyboard, file
   operations, pane resizing, Save alert, native menu bar, agent panel and launcher (terminal agents). Explorer
   drawing is replayed when unchanged (scroll CPU with the sidebar shown back to about the milestone-1 level).
