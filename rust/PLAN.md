@@ -363,22 +363,39 @@ Symbol or two-letter file icon, Git colours and letter badges, footer); tab stri
 unsaved dot, accent line, new-tab button); terminal status bar; editor toolbar and footer; window footer; 13 pt
 default text. Icons are the same SF Symbols, rasterised on macOS; Windows has stand-in glyphs.
 
+Added on 2026-11-17 (night), each checked with synthetic presses and captures, and where it changes files or
+a repository, by looking at the result on disk:
+- Rounded corners and shadows; code drawn in SF Mono (loaded from Terminal's font files; Menlo if absent).
+- Toolbar Save, Run, text-size menu, Code menu; explorer filter, options menu, New File / New Folder sheet.
+- Quick Open (Cmd-P) and Find in Files (Shift-Cmd-F): the Swift app's ripgrep arguments, fuzzy scoring and
+  limits; a match opens the file at its line.
+- Source Control (Shift-Cmd-G): changed files, coloured diff, working tree / staged picker, Stage, Unstage,
+  Commit, branch menu with Create Branch, stashes. Stage, commit and branch creation verified in a scratch
+  repository with `git log` / `git branch`.
+- Explorer: right-click menu with the Swift app's entries (open, new here, default app, Finder, terminal here,
+  copy path / relative path, copy, paste here, rename, trash), arrow keys and Return, selection highlight.
+  Copy, paste, rename and trash verified on disk.
+- Sidebar and agent panel widths change by dragging their edges (200-400 and 240-480 points).
+- "Save changes?" alert (Save / Cancel / Don't Save) before closing a modified document; Save verified on disk.
+- Native macOS menu bar with the Swift app's menus, titles and key equivalents (read back through System
+  Events; File > Quick Open exercised). Open File / Open Project use the system's panel.
+- Agent panel and "Coding agent" launcher: terminal agents in the panel or in a tab (a custom command ran in
+  the panel).
+
 Known differences still open:
-- Header tools other than the explorer toggle only say that they are not available; the project menu, Agent
-  launcher, connections sidebar and agent panel do not exist.
-- Working since 2026-11-17 (checked with synthetic presses and captures, `docs/milestone-2-menu-capture.png`): the
-  filter field (typing narrows loaded rows; Esc clears), the explorer options menu (Compact Folders, Hide
-  Git-Ignored Files, Show Hidden Files), the Code menu (sends the same editor actions as the Swift app), the
-  text-size menu, the toolbar's Save button, Run (same runner table and command as `TabsController`; a Python
-  file ran and printed its output in a new shell tab), New File / New Folder (sheet with the Swift app's name
-  rules; a new file opens in a tab), Cmd-P (focuses the filter) and Reveal Active File.
-- Still drawn but not working: Folder List, "Follow terminal". New items are always created in the project
-  folder (the Swift app also offers "New File Here" on a row's context menu).
-- Menus are drawn by the app, not native `NSMenu`s, so they do not look like the Swift app's menus; the Code menu
-  always says there is no language server; Cmd-P does not focus the filter.
-- Rounded corners (filter field, buttons) are square; the terminal font is Menlo, not SF Mono; the status bar shows
-  the project folder, not the shell's directory; tab titles of duplicate file names carry no parent folder; the
-  tab strip does not scroll; panes cannot be resized by dragging; no native menus or context menus.
+- Native (ACP) conversations, the connections sidebar, SSH and SFTP do not exist; their menu items say so.
+- Menus opened inside the window (Code, text size, explorer, context, branches) and the sheets and alerts are
+  drawn by the app, not AppKit, so they are close to but not the same as the Swift app's native ones.
+- The Code menu always says there is no language server; diagnostics count is always what Neovim reports, with
+  no explorer counters; Folder List and Follow Terminal do nothing; no file watcher (the tree refreshes on
+  focus, save and file actions).
+- Editor scrolling moves by whole lines (the Swift app's native client scrolls by pixels); no horizontal smooth
+  scroll.
+- The status bar shows the project folder, not the shell's directory; tab titles of duplicate file names carry
+  no parent folder; the tab strip does not scroll; text size and the custom agent are not saved between runs.
+- Terminal: no selection or copy, no IME, no cursor blink.
+- The app menu is titled "neolink" until the app is packaged as NeoLink.app.
+- Windows: none of this has been seen running; CI only compiles and runs the tests.
 
 ## 7. Open items after milestone 1
 
@@ -392,6 +409,10 @@ Known differences still open:
 
 ## 8. Log
 
+- 2026-11-17 (late night): Quick Open, Find in Files, Source Control, explorer context menu and keyboard, file
+  operations, pane resizing, Save alert, native menu bar, agent panel and launcher (terminal agents). Explorer
+  drawing is replayed when unchanged (scroll CPU with the sidebar shown back to about the milestone-1 level).
+  84 tests.
 - 2026-11-17 (night): in-app popup menus and a text field; explorer filter and options, Code menu, text-size
   menu, toolbar Save, Run, New File / New Folder, Cmd-P and Reveal Active File now act. `controls` benchmark scenario presses named controls for captures.
 - 2026-11-17 (later): remembered screens for instant document switches (tested against real Neovim), live

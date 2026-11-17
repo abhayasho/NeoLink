@@ -19,6 +19,8 @@ pub enum Action {
     NewFolder,
     /// An explorer row's context-menu choice: what, the row's path, whether it is a folder.
     File(&'static str, std::path::PathBuf, bool),
+    /// Show this agent session in the panel.
+    AgentSession(u64),
     GitCreateBranch,
     GitSwitch(String),
     GitStash(Option<String>),

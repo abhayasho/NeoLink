@@ -1,3 +1,4 @@
+mod agents;
 mod bench;
 mod capture;
 mod chrome;
@@ -118,7 +119,7 @@ impl App {
         // No frame for the key itself: the frame belongs to the program's answer, which arrives a
         // moment later and would otherwise find this refresh already taken.
         let changed = self.with_workspace(|workspace, _| {
-            if workspace.active_is_document() {
+            if workspace.keys_go_to_editor() {
                 // Injected text for the editor: literal characters.
                 workspace.editor_input(&String::from_utf8_lossy(&bytes).replace('<', "<lt>"));
                 false
@@ -225,7 +226,7 @@ impl App {
                 self.invalidate();
             }
             "a" if controlled => {
-                self.with_workspace(|workspace, _| workspace.unavailable("The agent launcher"));
+                self.with_workspace(|workspace, _| workspace.open_launcher());
                 self.invalidate();
             }
             "s" if controlled => {
@@ -233,7 +234,7 @@ impl App {
                 self.invalidate();
             }
             "b" if controlled => {
-                self.with_workspace(|workspace, _| workspace.unavailable("The agent panel"));
+                self.with_workspace(|workspace, _| workspace.toggle_agent_panel());
                 self.invalidate();
             }
             "w" => {
@@ -632,13 +633,13 @@ impl ApplicationHandler<UserEvent> for App {
                     shared.invalidate();
                     return;
                 }
-                if self.with_workspace(|workspace, _| workspace.active_is_document()) == Some(true) {
+                if self.with_workspace(|workspace, _| workspace.keys_go_to_editor()) == Some(true) {
                     if let Some(keys) = input::neovim_keys(&event.logical_key, event.text.as_deref(), self.modifiers) {
                         self.with_workspace(|workspace, _| workspace.editor_input(&keys));
                     }
                     return;
                 }
-                let application_cursor = self.with_workspace(|workspace, _| workspace.active().map(|terminal| terminal.mode().contains(alacritty_terminal::term::TermMode::APP_CURSOR))).flatten().unwrap_or(false);
+                let application_cursor = self.with_workspace(|workspace, _| workspace.keyboard_terminal().map(|terminal| terminal.mode().contains(alacritty_terminal::term::TermMode::APP_CURSOR))).flatten().unwrap_or(false);
                 if let Some(bytes) = input::encode(&event.logical_key, event.text.as_deref(), self.modifiers, application_cursor) {
                     self.write(bytes);
                 }
@@ -683,6 +684,13 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
                 let pointer = self.pointer;
                 if self.with_workspace(|workspace, _| workspace.click(pointer.0, pointer.1)) == Some(true) {
+                    shared.invalidate();
+                }
+                // "Choose Folder...": the system's panel, shown without holding the workspace.
+                if self.with_workspace(|workspace, _| workspace.take_folder_request()) == Some(true) {
+                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        self.with_workspace(|workspace, _| workspace.set_launcher_directory(neolink_core::paths::canonical(&folder)));
+                    }
                     shared.invalidate();
                 }
             }

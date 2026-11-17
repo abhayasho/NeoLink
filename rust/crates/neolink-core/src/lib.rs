@@ -3,6 +3,7 @@
 //! Nothing here touches a window, a GPU or a clock: times are passed in as seconds on one
 //! monotonic timeline, so every rule can be tested exactly.
 
+pub mod agent;
 pub mod analysis;
 pub mod files;
 pub mod git;

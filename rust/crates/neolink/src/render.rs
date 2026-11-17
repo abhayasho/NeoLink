@@ -206,8 +206,9 @@ impl Scene {
     pub fn capture(&self, mark: usize) -> Vec<(Option<Rect>, Vec<Instance>)> {
         self.batches
             .iter()
-            .filter(|batch| !batch.retained && batch.start as usize >= mark)
-            .map(|batch| (batch.clip, self.instances[batch.start as usize..(batch.start + batch.count) as usize].to_vec()))
+            // A batch may have begun before the mark (instances with the same clipping join it).
+            .filter(|batch| !batch.retained && (batch.start + batch.count) as usize > mark)
+            .map(|batch| (batch.clip, self.instances[(batch.start as usize).max(mark)..(batch.start + batch.count) as usize].to_vec()))
             .collect()
     }
 
@@ -269,6 +270,32 @@ impl Scene {
             moved.position[1] += y;
             self.push(moved);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_capture_replays_everything_drawn_after_the_mark() {
+        let mut scene = Scene::default();
+        scene.fill(0.0, 0.0, 1.0, 1.0, [1, 0, 0, 255]);
+        let mark = scene.mark();
+        // Joins the batch begun before the mark.
+        scene.fill(1.0, 0.0, 1.0, 1.0, [2, 0, 0, 255]);
+        scene.set_clip(Some(Rect::new(0.0, 0.0, 5.0, 5.0)));
+        scene.fill(2.0, 0.0, 1.0, 1.0, [3, 0, 0, 255]);
+        scene.set_clip(None);
+        scene.fill(3.0, 0.0, 1.0, 1.0, [4, 0, 0, 255]);
+        let saved = scene.capture(mark);
+        let colors: Vec<u8> = saved.iter().flat_map(|(_, instances)| instances.iter().map(|instance| instance.color[0])).collect();
+        assert_eq!(colors, vec![2, 3, 4]);
+        assert_eq!(saved[1].0, Some(Rect::new(0.0, 0.0, 5.0, 5.0)));
+        let mut later = Scene::default();
+        later.replay(&saved);
+        assert_eq!(later.instances.len(), 3);
+        assert_eq!(later.capture(0).len(), 3);
     }
 }
 

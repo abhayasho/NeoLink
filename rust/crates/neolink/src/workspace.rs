@@ -114,6 +114,13 @@ pub struct Workspace {
     /// The "New File" / "New Folder" sheet, while it is open.
     creation: Option<Creation>,
     closing: Option<Closing>,
+    /// The agent panel at the right, the launcher sheet, and the remembered custom agent.
+    agent: crate::agents::AgentPanel,
+    launcher: Option<crate::agents::Launcher>,
+    custom_agent: (String, String),
+    agent_rect: Rect,
+    dragging_agent: bool,
+    folder_request: bool,
     /// A file or folder copied in the explorer ("Copy", then "Paste Here").
     copied: Option<std::path::PathBuf>,
     /// The explorer's width in points, and whether its edge is being dragged.
@@ -178,6 +185,12 @@ impl Workspace {
             menu: None,
             creation: None,
             closing: None,
+            agent: crate::agents::AgentPanel::new(),
+            launcher: None,
+            custom_agent: ("My agent".into(), String::new()),
+            agent_rect: Rect::default(),
+            dragging_agent: false,
+            folder_request: false,
             copied: None,
             explorer_points: crate::explorer::WIDTH_POINTS,
             dragging_divider: false,
@@ -217,7 +230,11 @@ impl Workspace {
         let explorer_width = if self.explorer.visible { px(self.explorer_points).min(width * 0.5) } else { 0.0 };
         self.sidebar = Rect::new(0.0, top, explorer_width, (bottom - top).max(1.0));
         let center_x = if explorer_width > 0.0 { explorer_width + line } else { 0.0 };
-        self.center = Rect::new(center_x, top, (width - center_x).max(1.0), (bottom - top).max(1.0));
+        // The agent panel takes its width from the right (`ContentView`: 240 to 480 points).
+        let agent_width = if self.agent.visible { px(self.agent.width_points).min((width - center_x) * 0.6) } else { 0.0 };
+        self.agent_rect = Rect::new(width - agent_width, top, agent_width, (bottom - top).max(1.0));
+        let center_right = if agent_width > 0.0 { width - agent_width - line } else { width };
+        self.center = Rect::new(center_x, top, (center_right - center_x).max(1.0), (bottom - top).max(1.0));
         self.strip = Rect::new(center_x, top, self.center.width, px(34.0));
         let below = self.strip.bottom() + line;
         self.status_bar = Rect::new(center_x, self.center.bottom() - px(28.0), self.center.width, px(28.0));
@@ -408,8 +425,99 @@ impl Workspace {
     }
 
     /// Bytes typed into the active terminal. Returns `true` if the view changed (it was scrolled back).
+    /// The terminal that typed bytes go to: the agent panel's when it has the keyboard, else the
+    /// active tab's.
+    pub fn keyboard_terminal(&mut self) -> Option<&mut Terminal> {
+        if self.agent.focused && self.agent.visible {
+            return self.agent.terminal();
+        }
+        self.active()
+    }
+
+    /// Key presses are the editor's (Neovim notation) rather than a terminal's.
+    pub fn keys_go_to_editor(&self) -> bool {
+        self.active_is_document() && !(self.agent.focused && self.agent.visible)
+    }
+
+    pub fn toggle_agent_panel(&mut self) {
+        self.agent.visible = !self.agent.visible;
+        if !self.agent.visible {
+            self.agent.focused = false;
+        }
+    }
+
+    /// Opens the "Coding agent" sheet.
+    pub fn open_launcher(&mut self) {
+        self.menu = None;
+        self.launcher = Some(crate::agents::Launcher::new(Some(self.explorer.root().to_path_buf()), self.custom_agent.0.clone(), self.custom_agent.1.clone()));
+    }
+
+    /// "Choose Folder..." was pressed in the launcher (the caller shows the system's panel).
+    pub fn take_folder_request(&mut self) -> bool {
+        std::mem::take(&mut self.folder_request)
+    }
+
+    pub fn set_launcher_directory(&mut self, directory: std::path::PathBuf) {
+        if let Some(launcher) = &mut self.launcher {
+            launcher.directory = Some(directory);
+        }
+    }
+
+    fn agent_outcome(&mut self, outcome: Option<crate::agents::Outcome>) {
+        use crate::agents::Outcome;
+        let Some(outcome) = outcome else {
+            // The sheet closes; the custom agent's name and program are remembered.
+            if let Some(launcher) = self.launcher.take() {
+                self.custom_agent = launcher.remembered();
+            }
+            return;
+        };
+        match outcome {
+            Outcome::Nothing => {}
+            Outcome::OpenLauncher => self.open_launcher(),
+            Outcome::Hide => self.toggle_agent_panel(),
+            Outcome::Menu(menu) => self.menu = Some(menu),
+            Outcome::ChooseFolder => self.folder_request = true,
+            Outcome::Launch { agent, directory, docked } => {
+                if !directory.is_dir() {
+                    if let Some(launcher) = &mut self.launcher {
+                        launcher.error = Some("The project folder no longer exists.".into());
+                    }
+                    return;
+                }
+                let Some(shared) = self.shared.upgrade() else { return };
+                let result = if docked {
+                    self.agent.launch(&shared, &agent, &directory, self.cell).map_err(|error| error.to_string())
+                } else {
+                    let before = self.tabs.len();
+                    self.open_terminal_in(directory.clone());
+                    if self.tabs.len() > before {
+                        let resolved = crate::agents::executable(&agent.executable);
+                        self.write(agent.launch_command(&directory.to_string_lossy(), resolved.as_deref()).replace('\n', "\r").into_bytes());
+                        Ok(())
+                    } else {
+                        Err("Could not start a shell.".to_string())
+                    }
+                };
+                match result {
+                    Ok(()) => self.agent_outcome(None),
+                    Err(error) => {
+                        if let Some(launcher) = &mut self.launcher {
+                            launcher.error = Some(error);
+                        }
+                    }
+                }
+            }
+            Outcome::Connect { .. } => {
+                if let Some(launcher) = &mut self.launcher {
+                    launcher.error = Some("Native (ACP) conversations are not available in this build yet. Use Terminal.".into());
+                }
+            }
+        }
+    }
+
     pub fn write(&mut self, bytes: Vec<u8>) -> bool {
-        match self.active() {
+        match self.keyboard_terminal() {
             Some(terminal) => terminal.write(bytes),
             None => false,
         }
@@ -441,6 +549,12 @@ impl Workspace {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if self.agent.focused && self.agent.visible {
+            if let Some(terminal) = self.agent.terminal() {
+                terminal.paste(text);
+            }
+            return;
+        }
         if self.active_is_document() {
             if let Some(editor) = &self.editor {
                 editor.paste(text);
@@ -467,6 +581,12 @@ impl Workspace {
             return;
         }
         let (cell, period) = (self.cell, self.period);
+        if self.agent.contains(self.pointer.0, self.pointer.1) {
+            if let Some(terminal) = self.agent.terminal() {
+                terminal.scroll_input(time, delta_y, phase, cell, period);
+            }
+            return;
+        }
         if self.explorer.contains(self.pointer.0, self.pointer.1) {
             self.explorer.scroll_input(time, delta_y, phase, period);
             return;
@@ -507,6 +627,12 @@ impl Workspace {
         if let (Some(part), Some(closing)) = (name.strip_prefix("closing:"), &self.closing) {
             return closing.buttons.iter().find(|(_, what)| *what == part).map(|(rect, _)| middle(*rect));
         }
+        if let Some(part) = name.strip_prefix("launcher:") {
+            return self.launcher.as_ref()?.control_rect(part).map(middle);
+        }
+        if let Some(part) = name.strip_prefix("agent:") {
+            return self.agent.control_rect(part).map(middle);
+        }
         if let Some(part) = name.strip_prefix("git:") {
             return self.git.as_ref()?.control_rect(part).map(middle);
         }
@@ -526,6 +652,11 @@ impl Workspace {
             if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.menu = None;
             }
+            return true;
+        }
+        if self.launcher.is_some() {
+            let outcome = self.launcher.as_mut().and_then(|launcher| launcher.key(key, text));
+            self.agent_outcome(outcome);
             return true;
         }
         if self.closing.is_some() {
@@ -857,7 +988,12 @@ impl Workspace {
 
     /// Which pointer the window should show at `(x, y)`: `true` for the column-resize arrows.
     pub fn wants_resize_cursor(&self, x: f32, y: f32) -> bool {
-        self.dragging_divider || self.over_divider(x, y)
+        self.dragging_divider || self.dragging_agent || self.over_divider(x, y) || self.over_agent_divider(x, y)
+    }
+
+    fn over_agent_divider(&self, x: f32, y: f32) -> bool {
+        let reach = 3.0 * self.scale;
+        self.agent.visible && self.menu.is_none() && self.creation.is_none() && self.search.is_none() && self.git.is_none() && self.closing.is_none() && self.launcher.is_none() && (x - self.agent.left_edge()).abs() <= reach && y >= self.agent_rect.y && y < self.agent_rect.bottom()
     }
 
     fn over_divider(&self, x: f32, y: f32) -> bool {
@@ -928,6 +1064,7 @@ impl Workspace {
             Action::NewFile => self.begin_create(false),
             Action::NewFolder => self.begin_create(true),
             Action::File(what, path, is_directory) => self.file_action(what, path, is_directory),
+            Action::AgentSession(id) => self.agent.select(id),
             Action::GitCreateBranch | Action::GitSwitch(_) | Action::GitStash(_) => {
                 let unsaved = self.any_unsaved();
                 if let Some(git) = &mut self.git {
@@ -977,6 +1114,11 @@ impl Workspace {
             }
             return true;
         }
+        if self.launcher.is_some() {
+            let outcome = self.launcher.as_mut().and_then(|launcher| launcher.click(x, y));
+            self.agent_outcome(outcome);
+            return true;
+        }
         if let Some(closing) = &self.closing {
             if let Some((_, what)) = closing.buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
                 self.answer_closing(what);
@@ -1008,6 +1150,18 @@ impl Workspace {
             self.dragging_divider = true;
             return true;
         }
+        if self.over_agent_divider(x, y) {
+            self.dragging_agent = true;
+            return true;
+        }
+        if self.agent.contains(x, y) {
+            let outcome = self.agent.click(x, y);
+            self.explorer.focused = false;
+            self.explorer.filter_focused = false;
+            self.agent_outcome(Some(outcome));
+            return true;
+        }
+        self.agent.focused = false;
         if !self.explorer.contains(x, y) {
             self.explorer.filter_focused = false;
             self.explorer.focused = false;
@@ -1048,6 +1202,8 @@ impl Workspace {
         if let Some((_, action)) = self.header_buttons.iter().find(|(rect, _)| rect.contains(x, y)).copied() {
             match action {
                 "files" => self.toggle_explorer(),
+                "agent-panel" => self.toggle_agent_panel(),
+                "agent" => self.open_launcher(),
                 "quick-open" => self.open_search(false),
                 "find" => self.open_search(true),
                 "git" => self.open_git(),
@@ -1055,8 +1211,6 @@ impl Workspace {
                 // agent launcher do not exist in this build yet (PLAN.md).
                 _ => self.notice = Some(format!("{} is not available in this build yet.", match action {
                     "connections" => "The connections sidebar",
-                    "agent-panel" => "The agent panel",
-                    "agent" => "The agent launcher",
                     "project" => "The project menu",
                     _ => "This",
                 })),
@@ -1110,7 +1264,7 @@ impl Workspace {
     }
 
     pub fn release(&mut self, x: f32, y: f32) {
-        if std::mem::take(&mut self.dragging_divider) {
+        if std::mem::take(&mut self.dragging_divider) | std::mem::take(&mut self.dragging_agent) {
             return;
         }
         if self.editor_pane.contains(x, y) && self.active_is_document() && self.shown == self.active {
@@ -1124,6 +1278,12 @@ impl Workspace {
     /// The pointer moved to `(x, y)`. Returns `true` if a hover highlight changed.
     pub fn pointer(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
+        if self.dragging_agent {
+            let points = ((self.window.0 - x) / self.scale).clamp(240.0, 480.0).round();
+            let changed = points != self.agent.width_points;
+            self.agent.width_points = points;
+            return changed;
+        }
         if self.dragging_divider {
             // `ContentView`: the file browser is 200 to 400 points wide.
             let points = (x / self.scale).clamp(200.0, 400.0).round();
@@ -1218,8 +1378,9 @@ impl Workspace {
         let gap = ui.px(10.0);
         let mut right = rect.right() - ui.px(10.0);
         let explorer_shown = self.explorer.visible;
+        let agent_shown = self.agent.visible;
         for (symbol, action, lit) in [
-            ("sidebar.right", "agent-panel", false),
+            ("sidebar.right", "agent-panel", agent_shown),
             ("folder", "files", explorer_shown),
             ("sidebar.left", "connections", false),
             ("arrow.triangle.branch", "git", false),
@@ -1493,7 +1654,7 @@ impl Content for Workspace {
         }
         self.draw_header(painter);
         self.draw_strip(painter);
-        let (pane, focused, period) = (self.pane, self.focused, frame.period);
+        let (pane, focused, period) = (self.pane, self.focused && !(self.agent.focused && self.agent.visible), frame.period);
         let editor_pane = self.editor_pane;
         let mut chrome: Option<Option<String>> = None;
         let mut output = 0;
@@ -1534,8 +1695,23 @@ impl Content for Workspace {
                 (Next::Idle, Next::Idle) => Next::Idle,
             };
         }
+        if self.agent.visible {
+            let (rect, cell, window_focused) = (self.agent_rect, self.cell, self.focused);
+            let agent_next = self.agent.build(painter, rect, frame.scale, cell, window_focused, frame.display, period);
+            next = match (next, agent_next) {
+                (Next::Soon, _) | (_, Next::Soon) => Next::Soon,
+                (Next::At(a), Next::At(b)) => Next::At(a.min(b)),
+                (Next::At(a), Next::Idle) | (Next::Idle, Next::At(a)) => Next::At(a),
+                (Next::Idle, Next::Idle) => Next::Idle,
+            };
+        }
         self.draw_creation(painter);
         self.draw_closing(painter);
+        if let Some(mut launcher) = self.launcher.take() {
+            let mut ui = Ui { painter, scale: self.scale };
+            launcher.draw(&mut ui, self.window);
+            self.launcher = Some(launcher);
+        }
         if let Some(mut git) = self.git.take() {
             // The explorer's decorations follow what the review changes.
             if git.mutations() != self.git_seen {
@@ -1569,7 +1745,10 @@ impl Content for Workspace {
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
-        signature.add(self.explorer_points.to_bits() as u64);
+        signature.add(self.explorer_points.to_bits() as u64).add(self.agent.signature());
+        if let Some(launcher) = &self.launcher {
+            signature.add(0x4C41554E).add(launcher.signature());
+        }
         if let Some(closing) = &self.closing {
             signature.add(0x434C4F53).text(&closing.path);
         }
