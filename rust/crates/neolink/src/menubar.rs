@@ -109,6 +109,8 @@ pub fn install(on_command: impl Fn(String) + Send + Sync + 'static) -> Option<Me
         &key("Decrease Text Size", "c", '-'),
         &key("Reset Text Size", "c", '0'),
         &separator(),
+        &plain("view:renderer", "Renderer Information\u{2026}"),
+        &separator(),
         &key("Toggle Connections Sidebar", "cx", 's'),
         &key("Toggle File Browser", "cs", 'e'),
         &key("Toggle Agent Panel", "cx", 'b'),

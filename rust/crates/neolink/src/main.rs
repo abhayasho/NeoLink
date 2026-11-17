@@ -252,6 +252,8 @@ impl App {
                 "selectAll" => workspace.select_all(),
                 _ => workspace.editor_action(action),
             });
+        } else if command == "view:renderer" {
+            self.with_workspace(|workspace, _| workspace.show_renderer_information());
         } else if let Some(side) = command.strip_prefix("dock:") {
             self.with_workspace(|workspace, _| workspace.toggle_dock(side == "bottom"));
         } else if let Some(program) = command.strip_prefix("repl:") {
@@ -466,6 +468,8 @@ impl App {
         let scale = window.scale_factor();
         let period = display_period(&window);
         let text = text::TextSystem::new(&gpu.device, saved.font_points.clamp(10.0, 24.0), scale as f32);
+        let adapter = gpu.adapter.get_info();
+        let renderer_information = format!("Renderer: {} on {:?} \u{b7} {:.0} Hz display \u{b7} {} \u{b7} frames are presented only when something changed", adapter.name, adapter.backend, 1.0 / period.max(0.001), if cfg!(target_os = "macos") { "own Metal layer with display timestamps" } else { "wgpu surface, FIFO" });
         let font_family = text.family().to_string();
 
         let shared = if let Some(mode) = &self.spike {
@@ -474,6 +478,7 @@ impl App {
         } else {
             let mut workspace = Workspace::new(text.cell, saved.font_points.clamp(10.0, 24.0), scale as f32, (size.width, size.height), period);
             workspace.apply_settings(&saved);
+            workspace.renderer_information = renderer_information;
             self.saved = saved.clone();
             let proxy = self.proxy.clone();
             workspace.set_on_empty(Box::new(move || {

@@ -149,6 +149,8 @@ pub struct Workspace {
     /// What the held mouse button was pressed in (1 the shown terminal, 2 the docked one, 3 the
     /// editor), and the last press for counting double and triple clicks.
     pressed_in: u8,
+    /// What draws the window, for View > Renderer Information.
+    pub renderer_information: String,
     /// The terminal's find bar while it is open: the text, and whether it was found.
     find: Option<(String, bool)>,
     /// The shown terminal's working directory as the status bar spells it.
@@ -246,6 +248,7 @@ impl Workspace {
             tip_changed: false,
             pressed_in: 0,
             find: None,
+            renderer_information: String::new(),
             shown_directory: String::new(),
             shown_servers: String::new(),
             last_press: (0.0, 0.0, 0.0, 0),
@@ -1997,6 +2000,10 @@ impl Workspace {
         } else {
             self.open_document(path);
         }
+    }
+
+    pub fn show_renderer_information(&mut self) {
+        self.notice = Some(self.renderer_information.clone());
     }
 
     /// Command-F: Neovim's search in the editor, the find bar in a terminal.
