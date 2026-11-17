@@ -412,7 +412,7 @@ Known differences still open:
 - 2026-11-17 (late night): Quick Open, Find in Files, Source Control, explorer context menu and keyboard, file
   operations, pane resizing, Save alert, native menu bar, agent panel and launcher (terminal agents). Explorer
   drawing is replayed when unchanged (scroll CPU with the sidebar shown back to about the milestone-1 level).
-  84 tests.
+  80 tests.
 - 2026-11-17 (night): in-app popup menus and a text field; explorer filter and options, Code menu, text-size
   menu, toolbar Save, Run, New File / New Folder, Cmd-P and Reveal Active File now act. `controls` benchmark scenario presses named controls for captures.
 - 2026-11-17 (later): remembered screens for instant document switches (tested against real Neovim), live

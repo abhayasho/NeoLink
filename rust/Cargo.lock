@@ -1190,6 +1190,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neolink-acp"
+version = "0.1.0"
+dependencies = [
+ "neolink-core",
+ "parking_lot",
+ "serde_json",
+]
+
+[[package]]
 name = "neolink-core"
 version = "0.1.0"
 
