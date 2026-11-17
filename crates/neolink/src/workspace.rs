@@ -123,6 +123,10 @@ pub struct Workspace {
     pub explorer: Explorer,
     sidebar: Rect,
     notice: Option<String>,
+    /// The text of the last notice that only informs (drawn neutral, not as an error).
+    info: Option<String>,
+    /// The notice's close button.
+    notice_close: Rect,
     /// The document whose unsaved changes the user has just been warned about.
     close_warned: Option<String>,
     /// A save was sent: refresh the explorer once Neovim has answered it.
@@ -252,6 +256,8 @@ impl Workspace {
             explorer: Explorer::new(project_directory()),
             sidebar: Rect::default(),
             notice: None,
+            info: None,
+            notice_close: Rect::default(),
             close_warned: None,
             refresh_explorer_soon: false,
             seen_replies: 0,
@@ -1510,7 +1516,7 @@ impl Workspace {
     /// View > Pixel-Smooth Sideways Scrolling.
     pub fn toggle_pixel_sideways(&mut self) {
         self.pixel_sideways = !self.pixel_sideways;
-        self.notice = Some(if self.pixel_sideways { "Pixel-smooth sideways scrolling is on (preview).".into() } else { "Sideways scrolling moves by whole columns.".into() });
+        self.inform(if self.pixel_sideways { "Pixel-smooth sideways scrolling is on (preview).".into() } else { "Sideways scrolling moves by whole columns.".into() });
     }
 
     /// The document has changes that are not on disk (in Neovim or the native editor).
@@ -2131,6 +2137,10 @@ impl Workspace {
 
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        if self.notice.is_some() && self.notice_close.contains(x, y) {
+            self.notice = None;
+            return true;
+        }
         if self.monitor.as_ref().is_some_and(|monitor| monitor.close.contains(x, y)) {
             self.monitor = None;
             return true;
@@ -2524,7 +2534,7 @@ impl Workspace {
     }
 
     pub fn show_renderer_information(&mut self) {
-        self.notice = Some(self.renderer_information.clone());
+        self.inform(self.renderer_information.clone());
     }
 
     /// Command-F: Neovim's search in the editor, the find bar in a terminal.
@@ -2758,18 +2768,39 @@ impl Workspace {
 
     /// A message for the user (an editor error) along the bottom of the centre. Any key dismisses it.
     fn draw_notice(&mut self, painter: &mut Painter) {
-        let Some(notice) = self.notice.clone() else { return };
+        let Some(notice) = self.notice.clone() else {
+            self.notice_close = Rect::default();
+            return;
+        };
+        // Information is neutral; a problem is red with a warning mark. Both close with x (or any key).
+        let informs = self.info.as_deref() == Some(notice.as_str());
         let mut ui = Ui { painter, scale: self.scale };
-        let height = ui.px(26.0);
+        let height = ui.px(28.0);
         let rect = Rect::new(self.center.x, self.center.bottom() - height - ui.px(28.0), self.center.width, height);
-        ui.fill(rect, theme::rgb(0x382626));
-        ui.painter.scene.set_clip(Some(rect));
-        ui.text(&notice, rect.x + ui.px(12.0), rect.y + rect.height * 0.5, 11.0, 400, false, theme::rgb(0xE1B4B4));
+        let middle = rect.y + rect.height * 0.5;
+        ui.fill(rect, if informs { theme::rgb(0x25272B) } else { theme::rgb(0x382626) });
+        ui.painter.scene.fill(rect.x, rect.y, rect.width, ui.px(1.0).max(1.0), if informs { theme::white(0.08) } else { theme::rgb(0x5A3434) });
+        let mut x = rect.x + ui.px(12.0);
+        if !informs {
+            let mark = ui.icon("exclamationmark.circle", 11.0, IconWeight::Medium, x + ui.px(6.0), middle, theme::rgb(0xE1B4B4)).max(ui.px(12.0));
+            x += mark + ui.px(7.0);
+        }
+        let close = Rect::new(rect.right() - ui.px(28.0), rect.y, ui.px(28.0), rect.height);
+        ui.icon("xmark", 9.0, IconWeight::Semibold, close.x + close.width * 0.5, middle, theme::TEXT_SECONDARY);
+        ui.painter.scene.set_clip(Some(Rect::new(x, rect.y, (close.x - x - ui.px(4.0)).max(1.0), rect.height)));
+        ui.text(&notice, x, middle, 11.0, 400, false, if informs { theme::TEXT_PRIMARY } else { theme::rgb(0xE1B4B4) });
         ui.painter.scene.set_clip(None);
+        self.notice_close = close;
     }
 
     pub fn dismiss_notice(&mut self) -> bool {
         self.notice.take().is_some()
+    }
+
+    /// A notice that only informs (not a problem).
+    fn inform(&mut self, text: String) {
+        self.info = Some(text.clone());
+        self.notice = Some(text);
     }
 
     /// The header (`ContentView.workspaceHeader`): project name at the left, tools at the right.
