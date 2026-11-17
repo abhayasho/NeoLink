@@ -194,7 +194,7 @@ exercised by the in-app benchmark or the capture, not by a person at the keyboar
 | Editor | Correct-buffer guarantee on switch (`neolink_selection` ordering), snapshot cache rules | done | macOS and Windows CI against real Neovim: 40 alternations, 10 rapid switches with typing, remembered screens equal to Neovim's redraw, a touched hidden buffer loses its screen. The diagnostics-flag rule is not checked (nothing in this app toggles it) |
 | Editor | Smooth vertical scroll, pixel-smooth horizontal scroll, axis lock | not started | the wheel scrolls the editor by whole lines; axis lock logic exists in `neolink-core` with tests |
 | Editor | LSP/Tree-sitter limits (2 MiB, 128 MiB), Run file, REPLs, folding menu | partial | the limits live in `neolink.lua` and apply; Tree-sitter highlighting seen in the capture; LSP not exercised; no Run, REPL or menus |
-| Editor | Native text fallback without `nvim`; PDF viewer tabs | not started | - |
+| Editor | Native text fallback without `nvim`; PDF viewer tabs | done (PDF: macOS) | `native.rs`: line numbers, selection, word/line/document movement per platform, undo/redo, clipboard, find, smooth scrolling, saves keep line endings and refuse files changed on disk; >8 MiB or non-UTF-8 opens read-only. `NEOLINK_NO_NVIM=1` forces it |
 | Remote | SSH terminal tabs, saved connections, validated creation | not started | - |
 | Remote | SFTP browser: list, create, rename, delete, upload, download, read-only preview | not started | - |
 | Remote | Credential storage (Keychain / Windows Credential Manager) | not started | - |
@@ -447,12 +447,23 @@ scenario to run with the screen on.
   of the frame's display time (about 1,600 discarded builds a second while a tooltip was pending). Fixed in the
   content and guarded in the frame loop. Idle measured again: 0 frames, 0.0% CPU. Typing in this session's display
   state ("composited"): 22.6 ms new build, 22.4 ms for the build installed in the morning, so no regression.
+- 2026-11-17 (later): full-screen program scrolling on by default (`NEOLINK_PROGRAM_SMOOTH=0` turns it off):
+  movement is measured against the last screen the program confirmed (75% of rows agreeing), direction changes
+  only on real movement, and the program is returned to a whole line at rest. Full screen, direct display path,
+  two runs each: steady 1/304 uneven frames, crawl 0/159 (line steps: 109/114). A flick is 42-54 uneven of ~120
+  frames against 29-31 of 42 with line steps (fewer, larger steps); runs in the composited display state were
+  much worse for both (71 and 196 uneven for steady) and are kept out of the comparison above, not hidden.
+  Built-in editor without Neovim added (see the Editor row); accessibility through AccessKit.
+  Against VS Code 1.146 (fresh profile, no extensions; `scripts/compare-editors.py`): 112-115 MiB physical
+  footprint vs 849-1,299 MiB, idle CPU 0.0% vs 5.7% a minute after launch. An accessibility client (any AX
+  query) used to keep NeoLink rebuilding its tree twice a second (0.2-0.3% idle CPU); it now rebuilds only
+  after a frame was drawn.
 - 2026-11-17 (afternoon): editor scrolling made even. Measured full screen, synthetic input: steady scroll uneven
   frames 196/302 -> 2/303, jerk p95 24 px -> 0; slow scroll bursts 73 -> 0; flick on par with the terminal's
   (42/114 vs 39/123, the rest is whole-point momentum input). Two causes fixed: wheel input now goes through the
   frame-paced smoother, and Neovim's view notice is applied with the redraw it describes, with two hidden lines
-  either side instead of one. Full-screen terminal programs (less, vim): pixel scrolling written but off by default
-  (NEOLINK_PROGRAM_SMOOTH=1): its row-movement detection still over-counts (63 lines seen for 4.7 asked).
+  either side instead of one. Full-screen terminal programs (less, vim): pixel scrolling written but off by default at this point
+  (its row-movement detection over-counted; fixed later the same day, see above).
 - 2026-11-17 (early morning): the user's feature list became the floor (section 6c). Added: native ACP
   conversations (new `neolink-acp` crate, tested against `scripts/fixtures/acp-agent.py`), terminal under or beside
   the code, settings and recent projects, tab folder context / scrolling / tooltips, terminal selection and copy,

@@ -72,6 +72,22 @@ Matched release runs show it much smoother for steady and slow sideways motion; 
 one catch-up step at its start. It stays opt-in until checked with a physical trackpad. See
 [horizontal-scrolling verification](docs/HORIZONTAL_SCROLL.md) for the numbers and tests.
 
+## Compared with VS Code
+
+`scripts/compare-editors.py <folder> <file>` opens the same folder and file in both apps and measures them
+after they settle (macOS). Measured 2026-11-17 on this repository's `rust/` folder with `workspace.rs`
+open, VS Code 1.146 with a fresh profile and no extensions, NeoLink release build:
+
+| | NeoLink (app + Neovim + shell) | VS Code (10 processes) |
+|---|---|---|
+| Memory, physical footprint | 112–115 MiB | 849–1,299 MiB |
+| CPU while idle, 15–25 s after launch | 0.0% | 15–16% (first-launch work) |
+| CPU while idle, 60–70 s after launch | 0.0% | 5.7% |
+
+Not measured against VS Code: typing latency and scrolling (VS Code has no equivalent of NeoLink's
+benchmark hooks). NeoLink's own measurements are in `PLAN.md` and `docs/HORIZONTAL_SCROLL.md`.
+Real-world VS Code usually runs with extensions, which this comparison leaves out.
+
 ## Accessibility
 
 The window describes itself through AccessKit (NSAccessibility on macOS, UI Automation on Windows):

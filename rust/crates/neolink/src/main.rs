@@ -88,6 +88,8 @@ struct App {
     access_items: Vec<workspace::AccessItem>,
     access_sent: u64,
     access_at: f64,
+    /// Frames drawn when the tree was last described: nothing on screen changes without one.
+    access_frames: u64,
 }
 
 fn display_period(window: &Window) -> f64 {
@@ -192,12 +194,18 @@ impl App {
         self.invalidate();
     }
 
-    /// Sends the screen reader a new tree if what the window shows changed.
-    fn update_access(&mut self) {
+    /// Sends the screen reader a new tree if what the window shows changed. Without `force`, nothing is
+    /// built unless a frame was drawn since the last description (an idle window does no work).
+    fn update_access(&mut self, force: bool) {
         if !self.access_active || self.access.is_none() {
             return;
         }
         self.access_at = clock::now();
+        let frames = self.shared.as_ref().map_or(0, |shared| shared.frames.load(std::sync::atomic::Ordering::Relaxed));
+        if !force && frames == self.access_frames {
+            return;
+        }
+        self.access_frames = frames;
         let Some(items) = self.with_workspace(|workspace, _| workspace.accessibility()) else { return };
         let fingerprint = {
             use std::hash::{Hash, Hasher};
@@ -793,7 +801,7 @@ impl ApplicationHandler<UserEvent> for App {
                     accesskit_winit::WindowEvent::InitialTreeRequested => {
                         self.access_active = true;
                         self.access_sent = 0;
-                        self.update_access();
+                        self.update_access(true);
                     }
                     accesskit_winit::WindowEvent::ActionRequested(request) => {
                         use accesskit::Action;
@@ -808,7 +816,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 self.invalidate();
                             }
                         }
-                        self.update_access();
+                        self.update_access(true);
                     }
                     accesskit_winit::WindowEvent::AccessibilityDeactivated => {
                         self.access_active = false;
@@ -995,13 +1003,13 @@ impl ApplicationHandler<UserEvent> for App {
                 self.invalidate();
             }
         }
-        // While a screen reader listens: describe the window again after events, and twice a second
-        // for output that arrives without one (nothing is built otherwise).
+        // While a screen reader listens: describe the window again when a frame was drawn, checked after
+        // events and four times a second (output arrives without an event here).
         if self.access_active {
             if clock::now() - self.access_at > 0.1 {
-                self.update_access();
+                self.update_access(false);
             }
-            _event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(500)));
+            _event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(250)));
         }
         // At most once a second, and only after something happened (this runs after events).
         if clock::now() - self.settings_checked > 1.0 {
@@ -1049,6 +1057,7 @@ fn main() {
         access_items: Vec::new(),
         access_sent: 0,
         access_at: 0.0,
+        access_frames: u64::MAX,
     };
     event_loop.run_app(&mut app).expect("the event loop");
 }

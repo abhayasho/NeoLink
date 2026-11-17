@@ -619,6 +619,38 @@ impl NativeEditor {
         }
     }
 
+    /// Selects the next match of `query` (any case), from the current match's start when `restart`
+    /// (the query changed) or after it, wrapping round. Returns `false` if the text is nowhere.
+    pub fn find(&mut self, query: &str, restart: bool) -> bool {
+        let needle: Vec<char> = query.chars().collect();
+        if needle.is_empty() {
+            return false;
+        }
+        let same = |a: char, b: char| a == b || a.to_lowercase().eq(b.to_lowercase());
+        let start = if restart { self.selection().map_or(self.cursor, |(start, _)| start) } else { self.cursor };
+        let total = self.lines.len();
+        for step in 0..=total {
+            let line = (start.line + step) % total;
+            let characters: Vec<char> = self.lines[line].chars().collect();
+            let from = if step == 0 { start.column } else { 0 };
+            if characters.len() < needle.len() {
+                continue;
+            }
+            for column in from..=characters.len() - needle.len() {
+                if characters[column..column + needle.len()].iter().zip(&needle).all(|(a, b)| same(*a, *b)) {
+                    self.anchor = Some(Position { line, column });
+                    self.cursor = Position { line, column: column + needle.len() };
+                    self.goal = display_column(&self.lines[line], self.cursor.column);
+                    self.typing = false;
+                    self.revision += 1;
+                    self.keep_cursor_visible();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// The lines in view (for screen readers).
     pub fn visible_text(&self) -> String {
         let height = self.cell.height.max(1.0) as f64;
@@ -696,6 +728,23 @@ mod tests {
         assert_eq!(editor.selected_text().as_deref(), Some("alpha pasted\nlines"));
         press(&mut editor, NamedKey::Backspace);
         assert_eq!(editor.text(), "");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn find_selects_matches_in_order_and_wraps() {
+        let path = scratch("find.txt", "Alpha beta\nbeta ALPHA\n".as_bytes());
+        let mut editor = NativeEditor::open(&path, cell()).unwrap();
+        assert!(editor.find("alpha", true));
+        assert_eq!(editor.selected_text().as_deref(), Some("Alpha"));
+        // Typing more of the query keeps the same match; Return goes to the next.
+        assert!(editor.find("alpha", true));
+        assert_eq!(editor.cursor_label(), "Ln 1, Col 6");
+        assert!(editor.find("alpha", false));
+        assert_eq!((editor.selected_text().as_deref(), editor.cursor_label().as_str()), (Some("ALPHA"), "Ln 2, Col 11"));
+        assert!(editor.find("alpha", false));
+        assert_eq!(editor.cursor_label(), "Ln 1, Col 6");
+        assert!(!editor.find("gamma", false));
         let _ = std::fs::remove_file(&path);
     }
 

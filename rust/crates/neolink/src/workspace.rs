@@ -1527,6 +1527,29 @@ impl Workspace {
 
     /// A key for the native editor. Returns `true` if it used the key.
     pub fn native_key(&mut self, key: &winit::keyboard::Key, text: Option<&str>, modifiers: winit::keyboard::ModifiersState) -> bool {
+        // Elsewhere than macOS the app's shortcuts need Control-Shift (a terminal owns Control-letters),
+        // but a text editor has no such conflict: the usual Control-letters edit, save and find.
+        if !cfg!(target_os = "macos") && modifiers.control_key() && !modifiers.alt_key() && self.native_editor().is_some() {
+            if let winit::keyboard::Key::Character(character) = key {
+                match character.to_lowercase().as_str() {
+                    "z" if modifiers.shift_key() => self.editor_action("redo"),
+                    "z" => self.editor_action("undo"),
+                    "y" => self.editor_action("redo"),
+                    "c" => self.editor_action("copy"),
+                    "x" => self.cut(),
+                    "a" => self.editor_action("selectAll"),
+                    "s" => self.save_active(),
+                    "f" => self.find(),
+                    "v" => {
+                        if let Some(text) = arboard::Clipboard::new().ok().and_then(|mut clipboard| clipboard.get_text().ok()) {
+                            self.paste(&text);
+                        }
+                    }
+                    _ => return false,
+                }
+                return true;
+            }
+        }
         match self.native_editor() {
             Some(editor) => {
                 editor.key(key, text, modifiers);
@@ -2497,7 +2520,9 @@ impl Workspace {
 
     /// Command-F: Neovim's search in the editor, the find bar in a terminal.
     pub fn find(&mut self) {
-        if self.keys_go_to_editor() {
+        if self.native_editor().is_some() {
+            self.find = Some((String::new(), true));
+        } else if self.keys_go_to_editor() {
             self.editor_action("find");
         } else if self.keyboard_terminal().is_some() {
             self.find = Some((String::new(), true));
@@ -2507,7 +2532,10 @@ impl Workspace {
     fn find_in_terminal(&mut self, restart: bool) {
         let Some((query, _)) = self.find.clone() else { return };
         let cell = self.cell;
-        let found = self.keyboard_terminal().map(|terminal| terminal.find(&query, restart, cell)).unwrap_or(false);
+        let found = match self.native_editor() {
+            Some(editor) => editor.find(&query, restart),
+            None => self.keyboard_terminal().map(|terminal| terminal.find(&query, restart, cell)).unwrap_or(false),
+        };
         if let Some(find) = &mut self.find {
             find.1 = found;
         }
@@ -2526,11 +2554,12 @@ impl Workspace {
         let glass = ui.icon("magnifyingglass", 11.0, IconWeight::Regular, bar.x + ui.px(9.0 + 6.0), middle, theme::TEXT_SECONDARY).max(ui.px(12.0));
         let text_x = bar.x + ui.px(9.0) + glass + ui.px(7.0);
         let line = ui.px(1.0).max(1.0);
-        let hint = if found { "\u{21a9} previous \u{b7} esc" } else { "No matches" };
+        let in_file = self.active_document().is_some_and(|path| self.native.contains_key(&path)) && !(self.dock.focused && self.dock.visible) && !(self.agent.focused && self.agent.visible);
+        let hint = if !found { "No matches" } else if in_file { "\u{21a9} next \u{b7} esc" } else { "\u{21a9} previous \u{b7} esc" };
         let hint_width = ui.text_right(hint, bar.right() - ui.px(9.0), middle, 10.0, 400, false, if found { theme::TEXT_SECONDARY } else { theme::rgb(0xCC9595) });
         ui.painter.scene.set_clip(Some(Rect::new(text_x, bar.y, (bar.right() - ui.px(15.0) - hint_width - text_x).max(1.0), bar.height)));
         let end = if query.is_empty() {
-            ui.text("Find in terminal", text_x, middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
+            ui.text(if in_file { "Find in file" } else { "Find in terminal" }, text_x, middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
             0.0
         } else {
             ui.text(&query, text_x, middle, 12.0, 400, false, theme::TEXT_PRIMARY) + line
@@ -2937,7 +2966,7 @@ impl Workspace {
             // The built-in editor (Neovim is not installed): no modes.
             Some(native) => (
                 format!("Text Editor \u{b7} {}{}", native.cursor_label(), if native.read_only { " \u{b7} Read Only" } else { "" }),
-                if cfg!(target_os = "macos") { "\u{2318}Z  Undo   \u{b7}   \u{2318}S  Save" } else { "Ctrl+Z  Undo   \u{b7}   Ctrl+Shift+S  Save" },
+                if cfg!(target_os = "macos") { "\u{2318}F  Find   \u{b7}   \u{2318}Z  Undo   \u{b7}   \u{2318}S  Save" } else { "Ctrl+F  Find   \u{b7}   Ctrl+Z  Undo   \u{b7}   Ctrl+S  Save" },
             ),
             None => (format!("Neovim \u{b7} {mode}"), if cfg!(target_os = "macos") { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   \u{2318}S  Save" } else { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   Ctrl+Shift+S  Save" }),
         };
