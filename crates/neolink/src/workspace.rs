@@ -2486,10 +2486,6 @@ impl Workspace {
                 if intervals.is_empty() { "Presented intervals: none yet".to_string() } else { format!("Presented intervals (last {}): p50 {:.1} ms \u{b7} p95 {:.1} ms \u{b7} max {:.1} ms", intervals.len(), percentile(0.5), percentile(0.95), intervals.last().copied().unwrap_or(0.0)) },
                 format!("Last frame built in {cost:.2} ms"),
                 format!("CPU: render thread {:.1}% \u{b7} main thread {:.1}% of one core", (render_cpu - monitor.render_cpu) / elapsed * 100.0, (main_cpu - monitor.main_cpu) / elapsed * 100.0),
-                String::new(),
-                "Frames are presented only when something changed; an idle window presents nothing.".into(),
-                "Keep-warm frames follow input for a few seconds so the display stays at full rate.".into(),
-                "This panel itself causes two frames a second.".into(),
             ];
             *monitor = Monitor { sampled_at: now, frames, skipped, warm, render_cpu, main_cpu, lines: std::mem::take(&mut monitor.lines), close: monitor.close };
         }
@@ -2497,7 +2493,11 @@ impl Workspace {
         let lines = monitor.lines.clone();
         let mut ui = Ui { painter, scale: self.scale };
         let (width, row, pad) = (ui.px(540.0).min(self.center.width - ui.px(24.0)), ui.px(16.0), ui.px(14.0));
-        let height = pad * 2.0 + ui.px(22.0) + lines.len() as f32 * row;
+        // The numbers in monospace, then what they mean in ordinary text wrapped to the panel.
+        const NOTE: &str = "Frames are presented only when something changed; an idle window presents nothing. Keep-warm frames follow input for a few seconds so the display stays at full rate. This panel itself causes two frames a second.";
+        let note = crate::agents::wrap(&mut ui, NOTE, width - pad * 2.0, 11.0);
+        let note_row = ui.px(15.0);
+        let height = pad * 2.0 + ui.px(22.0) + lines.len() as f32 * row + ui.px(8.0) + note.len() as f32 * note_row;
         let panel = Rect::new(self.center.right() - width - ui.px(12.0), self.center.y + ui.px(44.0), width, height);
         ui.shadow(panel, 8.0);
         ui.rounded(panel, 8.0, theme::rgb(0x202020));
@@ -2506,10 +2506,17 @@ impl Workspace {
         let close = Rect::new(panel.right() - pad - ui.px(16.0), panel.y + pad, ui.px(16.0), ui.px(16.0));
         ui.icon("xmark", 10.0, IconWeight::Semibold, close.x + close.width * 0.5, close.y + close.height * 0.5, theme::TEXT_SECONDARY);
         let mut y = panel.y + pad + ui.px(22.0);
+        ui.painter.scene.set_clip(Some(Rect::new(panel.x + pad, panel.y, (panel.width - pad * 2.0).max(1.0), panel.height)));
         for line in &lines {
-            ui.text(line, panel.x + pad, y + row * 0.5, 11.0, 400, true, theme::TEXT_SECONDARY);
+            ui.text(line, panel.x + pad, y + row * 0.5, 11.0, 400, true, theme::TEXT_PRIMARY);
             y += row;
         }
+        y += ui.px(8.0);
+        for line in &note {
+            ui.text(line, panel.x + pad, y + note_row * 0.5, 11.0, 400, false, theme::TEXT_SECONDARY);
+            y += note_row;
+        }
+        ui.painter.scene.set_clip(None);
         if let Some(monitor) = &mut self.monitor {
             monitor.close = close;
         }
@@ -2869,8 +2876,9 @@ impl Workspace {
             }
             let close = Rect::new(rect.right() - ui.px(3.0 + 27.0), middle - ui.px(15.0), ui.px(27.0), ui.px(30.0));
             if *modified {
+                // A round dot, as the Swift app's `Circle()` (a square read as a stray glyph).
                 let dot = ui.px(6.0);
-                ui.painter.scene.fill(close.x - dot, middle - dot * 0.5, dot, dot, theme::ACCENT);
+                ui.rounded(Rect::new(close.x - dot, middle - dot * 0.5, dot, dot), 3.0, theme::ACCENT);
             }
             let strong = selected || hovered;
             ui.icon("xmark", 9.0, IconWeight::Semibold, close.x + close.width * 0.5, middle, faded(theme::TEXT_SECONDARY, if strong { 1.0 } else { 0.55 }));

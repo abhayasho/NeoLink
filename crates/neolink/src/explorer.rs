@@ -82,6 +82,20 @@ fn file_look(path: &Path) -> (Option<&'static str>, &'static str, theme::Rgba) {
     (abbreviation, symbol, color)
 }
 
+/// Draws a file's icon (as the explorer shows it) centred at `(center_x, middle)`.
+pub fn draw_file_icon(ui: &mut Ui, path: &Path, center_x: f32, middle: f32, opacity: f32) {
+    let (abbreviation, symbol, color) = file_look(path);
+    match abbreviation {
+        Some(text) => {
+            let width = ui.measure(text, 8.0, 700, true);
+            ui.text(text, center_x - width * 0.5, middle, 8.0, 700, true, faded(color, opacity));
+        }
+        None => {
+            ui.icon(symbol, 12.0, IconWeight::Regular, center_x, middle, faded(color, opacity));
+        }
+    }
+}
+
 pub struct Explorer {
     tree: Tree,
     rows: Vec<Row>,

@@ -660,10 +660,29 @@ impl GitSheet {
                 ui.fill(row, theme::SELECTION);
             }
             let middle = row.y + row.height * 0.5;
-            let code = format!("{}{}", change.index, change.worktree);
-            let code_width = ui.text_right(&code, row.right() - ui.px(8.0), middle, 11.0, 400, true, theme::TEXT_PRIMARY);
-            let name = ui.fit_middle(&change.path, row.width - ui.px(24.0) - code_width, 12.0, 400, false);
-            ui.text(&name, row.x + ui.px(8.0), middle, 12.0, 400, false, theme::TEXT_PRIMARY);
+            // Git's two status letters, as the explorer shows them: "U" for untracked, colored by kind.
+            let code: String = if change.index == '?' { "U".into() } else { format!("{}{}", change.index, change.worktree).trim().to_string() };
+            let letter = code.chars().find(|character| *character != ' ').unwrap_or(' ');
+            let code_color = match letter {
+                'U' if change.index == '?' => theme::rgb(0xA4B29B),
+                'A' => theme::rgb(0xA4B29B),
+                'D' => theme::rgb(0xCC9595),
+                'R' | 'C' => theme::rgb(0xA8CCDF),
+                'U' => theme::rgb(0xD6B3D2),
+                _ => theme::rgb(0xD7C4A2),
+            };
+            let code_width = ui.text_right(&code, row.right() - ui.px(10.0), middle, 11.0, 600, true, code_color);
+            crate::explorer::draw_file_icon(ui, std::path::Path::new(&change.path), row.x + ui.px(8.0 + 8.0), middle, 1.0);
+            let text_x = row.x + ui.px(8.0 + 16.0 + 6.0);
+            let available = row.right() - ui.px(10.0) - code_width - ui.px(8.0) - text_x;
+            let (folder, name) = change.path.rsplit_once('/').unwrap_or(("", change.path.as_str()));
+            let name = ui.fit_middle(name, available, 12.0, 400, false);
+            let name_width = ui.text(&name, text_x, middle, 12.0, 400, false, theme::TEXT_PRIMARY);
+            let folder_room = available - name_width - ui.px(6.0);
+            if !folder.is_empty() && folder_room > ui.px(20.0) {
+                let folder = ui.fit_middle(folder, folder_room, 11.0, 400, false);
+                ui.text(&folder, text_x + name_width + ui.px(6.0), middle, 11.0, 400, false, theme::TEXT_SECONDARY);
+            }
         }
         if snapshot.as_ref().is_some_and(|snapshot| snapshot.changes.is_empty()) {
             ui.text("Working tree clean", list.x + ui.px(12.0), list.y + ui.px(22.0), 13.0, 400, false, theme::TEXT_SECONDARY);
@@ -713,7 +732,17 @@ impl GitSheet {
         self.preview = preview;
         let line_height = cell_height.max(1.0);
         let inset = ui.px(10.0);
-        let lines: Vec<&str> = if patch_current { patch.split('\n').collect() } else { Vec::new() };
+        // From the first change block on: git's header lines (diff --git, index, ---/+++) say nothing
+        // the title does not. A patch without blocks (a binary or mode change) is shown whole.
+        let lines: Vec<&str> = if patch_current {
+            let all: Vec<&str> = patch.split('\n').collect();
+            match all.iter().position(|text| text.starts_with("@@")) {
+                Some(first) if self.selected_stash.is_none() => all[first..].to_vec(),
+                _ => all,
+            }
+        } else {
+            Vec::new()
+        };
         self.diff_scroll.1 = self.diff_scroll.1.clamp(0.0, (lines.len() as f32 * line_height + 2.0 * inset - preview.height).max(0.0));
         self.diff_scroll.0 = self.diff_scroll.0.clamp(0.0, ui.px(4000.0));
         ui.painter.scene.set_clip(Some(preview));
@@ -722,7 +751,19 @@ impl GitSheet {
         let points = ui.painter.text.cell.font_pixels / ui.scale;
         for (index, text) in lines.iter().enumerate().skip(first).take(shown) {
             let y = preview.y + inset + index as f32 * line_height - self.diff_scroll.1.round();
-            let color = if text.starts_with('+') { theme::rgb(0xA4B29B) } else if text.starts_with('-') { theme::rgb(0xCC9595) } else if text.starts_with("@@") { theme::rgb(0xC6B28E) } else { theme::TEXT_PRIMARY };
+            let (color, band) = if text.starts_with('+') && !text.starts_with("+++") {
+                (theme::rgb(0xB9C6AF), Some([110, 170, 100, 36]))
+            } else if text.starts_with('-') && !text.starts_with("---") {
+                (theme::rgb(0xD9A9A9), Some([210, 100, 100, 36]))
+            } else if text.starts_with("@@") {
+                (theme::TEXT_SECONDARY, Some([255, 255, 255, 10]))
+            } else {
+                (theme::TEXT_PRIMARY, None)
+            };
+            // Added and removed lines are tinted across the whole width, as in any diff view.
+            if let Some(band) = band {
+                ui.painter.scene.fill(preview.x, y, preview.width, line_height, band);
+            }
             let shown_text: String = text.chars().take(600).map(|character| if character == '\t' { ' ' } else { character }).collect();
             if !shown_text.is_empty() {
                 ui.text(&shown_text, preview.x + inset - self.diff_scroll.0.round(), y + line_height * 0.5, points, 400, true, color);

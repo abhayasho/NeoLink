@@ -498,8 +498,13 @@ impl Connections {
             }
             if !searching {
                 y += ui.px(8.0);
-                let width = ui.text("Add connection", left, y + ui.px(7.0), 11.0, 500, false, theme::ACCENT);
-                self.buttons.push((Rect::new(left, y, width, ui.px(16.0)), "new".into()));
+                // A button, not a line of text: it is the one thing to do here.
+                let label_width = ui.measure("Add connection", 11.0, 500, false);
+                let button = Rect::new(left, y, (label_width + ui.px(20.0)).round(), ui.px(24.0).round());
+                ui.rounded(button, 6.0, theme::white(0.08));
+                ui.outline(button, 6.0, theme::white(0.10));
+                ui.text("Add connection", button.x + ui.px(10.0), button.y + button.height * 0.5, 11.0, 500, false, theme::TEXT_PRIMARY);
+                self.buttons.push((button, "new".into()));
             }
         }
         ui.painter.scene.set_clip(None);

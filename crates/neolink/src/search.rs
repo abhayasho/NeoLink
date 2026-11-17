@@ -330,15 +330,40 @@ impl SearchSheet {
                 if index == self.selected {
                     ui.rounded(row, 6.0, theme::SELECTION);
                 }
-                let title = match found.line {
-                    Some(line) => format!("{}:{line}", found.path),
-                    None => found.path.clone(),
+                // Icon, then the file's name, then its folder dimmed: the name is what the eye looks for.
+                let opacity = if stale { 0.6 } else { 1.0 };
+                let middle = row.y + ui.px(9.0 + 7.5);
+                let icon_center = row.x + ui.px(9.0 + 8.0);
+                crate::explorer::draw_file_icon(ui, std::path::Path::new(&found.path), icon_center, middle, opacity);
+                let text_x = row.x + ui.px(9.0 + 16.0 + 7.0);
+                let available = row.right() - ui.px(9.0) - text_x;
+                let (folder, name) = match found.path.rsplit_once('/') {
+                    Some((folder, name)) => (folder, name),
+                    None => ("", found.path.as_str()),
                 };
-                let title = ui.fit_middle(&title, row.width - ui.px(18.0), 12.0, 500, false);
-                ui.text(&title, row.x + ui.px(9.0), row.y + ui.px(9.0 + 7.5), 12.0, 500, false, faded(theme::TEXT_PRIMARY, if stale { 0.6 } else { 1.0 }));
+                let name = match found.line {
+                    Some(line) => format!("{name}:{line}"),
+                    None => name.to_string(),
+                };
+                let name = ui.fit_middle(&name, available, 12.5, 500, false);
+                let name_width = ui.text(&name, text_x, middle, 12.5, 500, false, faded(theme::TEXT_PRIMARY, opacity));
+                let folder_room = available - name_width - ui.px(8.0);
+                if !folder.is_empty() && folder_room > ui.px(24.0) {
+                    let folder = ui.fit_middle(folder, folder_room, 11.5, 400, false);
+                    ui.text(&folder, text_x + name_width + ui.px(8.0), middle, 11.5, 400, false, faded(theme::TEXT_SECONDARY, opacity));
+                }
                 if !found.preview.is_empty() {
-                    ui.painter.scene.set_clip(Some(Rect::new(row.x + ui.px(9.0), list.y.max(row.y), row.width - ui.px(18.0), (list.bottom().min(row.bottom()) - list.y.max(row.y)).max(0.0))));
-                    ui.text(&found.preview, row.x + ui.px(9.0), row.y + ui.px(9.0 + 15.0 + 4.0 + 7.0), 11.0, 400, true, theme::TEXT_SECONDARY);
+                    ui.painter.scene.set_clip(Some(Rect::new(text_x, list.y.max(row.y), (row.right() - ui.px(9.0) - text_x).max(0.0), (list.bottom().min(row.bottom()) - list.y.max(row.y)).max(0.0))));
+                    let preview = found.preview.trim_start();
+                    let preview_middle = row.y + ui.px(9.0 + 15.0 + 4.0 + 7.0);
+                    // The matched text gets a quiet highlight, so it is clear why the line is listed.
+                    if let Some((start, end)) = match_span(preview, &results.query) {
+                        let before = ui.measure(&preview[..start], 11.0, 400, true);
+                        let width = ui.measure(&preview[start..end], 11.0, 400, true);
+                        let highlight = Rect::new(text_x + before - ui.px(1.0), preview_middle - ui.px(8.0), width + ui.px(2.0), ui.px(16.0));
+                        ui.rounded(highlight, 3.0, theme::rgb(0x3A3F4A));
+                    }
+                    ui.text(preview, text_x, preview_middle, 11.0, 400, true, theme::TEXT_SECONDARY);
                     ui.painter.scene.set_clip(Some(list));
                 }
             }
@@ -364,8 +389,43 @@ impl SearchSheet {
     }
 }
 
+/// Where `query` first occurs in `text`, ignoring case, as byte offsets into `text`.
+fn match_span(text: &str, query: &str) -> Option<(usize, usize)> {
+    let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    if needle.is_empty() {
+        return None;
+    }
+    let characters: Vec<(usize, char)> = text.char_indices().collect();
+    for start in 0..characters.len() {
+        let mut matched = 0;
+        let mut index = start;
+        while matched < needle.len() && index < characters.len() {
+            let lower: Vec<char> = characters[index].1.to_lowercase().collect();
+            if needle[matched..].starts_with(&lower) {
+                matched += lower.len();
+                index += 1;
+            } else {
+                break;
+            }
+        }
+        if matched == needle.len() {
+            let end = characters.get(index).map_or(text.len(), |(offset, _)| *offset);
+            return Some((characters[start].0, end));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn match_span_ignores_case_and_keeps_byte_offsets() {
+        assert_eq!(super::match_span("let ScrollSmoother = 1;", "smoother"), Some((10, 18)));
+        assert_eq!(super::match_span("é Smoother", "SMOOTHER"), Some((3, 11)));
+        assert_eq!(super::match_span("nothing", "smoother"), None);
+        assert_eq!(super::match_span("anything", ""), None);
+    }
+
     use super::*;
 
     #[test]

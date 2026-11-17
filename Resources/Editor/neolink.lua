@@ -17,7 +17,11 @@ vim.o.cmdheight = 0
 -- Embedded panes cannot answer a hit-enter prompt while a redraw is gated.
 -- Keep errors in :messages and publish v:errmsg to the native error banner.
 if vim.fn.exists('+messagesopt')==1 then vim.o.messagesopt='wait:0,history:500' end
-vim.o.fillchars = 'eob: '
+-- The fold column marks only closed folds: no level digits, separators or open markers beside every
+-- nested block (Markdown lists and code showed a column of "3", "-" and "|"). `foldinner` needs 0.12.
+if not pcall(function() vim.o.fillchars = 'eob: ,fold: ,foldopen: ,foldsep: ,foldclose:›,foldinner: ' end) then
+  vim.o.fillchars = 'eob: ,fold: ,foldopen: ,foldsep: ,foldclose:›'
+end
 vim.o.foldcolumn = '1'
 vim.o.foldlevel = 99
 vim.o.foldmethod = 'indent'
