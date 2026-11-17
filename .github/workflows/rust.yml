@@ -2,9 +2,9 @@ name: Rust app checks
 on:
   push:
     branches: [rust-rewrite]
-    paths: ['rust/**', '.github/workflows/rust.yml']
+    paths: ['rust/**', 'Resources/Editor/**', '.github/workflows/rust.yml']
   pull_request:
-    paths: ['rust/**', '.github/workflows/rust.yml']
+    paths: ['rust/**', 'Resources/Editor/**', '.github/workflows/rust.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -51,6 +51,11 @@ jobs:
         run: cargo build --workspace --release --locked
       - name: Tests
         run: cargo test --workspace --locked
+      - name: Archive layout tests
+        run: python scripts/test-package-windows.py
+      - name: Package the Windows preview with editor resources
+        if: runner.os == 'Windows'
+        run: python scripts/package-windows.py
       # The macOS bundle (its own bundle identifier; ad-hoc signed). Built to prove packaging works;
       # nobody has launched this artifact.
       - name: Package the macOS app
@@ -72,5 +77,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: neolink-windows-x64-unverified
-          path: rust/target/release/neolink.exe
+          path: rust/target/NeoLink-windows-x64.zip
           if-no-files-found: error
