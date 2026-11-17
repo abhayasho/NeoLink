@@ -45,7 +45,7 @@ Build and install it (needs [Rust](https://rustup.rs), Neovim and ripgrep):
 ```bash
 cd rust
 ./scripts/build-app.sh        # makes rust/target/NeoLink.app
-ditto target/NeoLink.app "/Applications/NeoLink Rust.app"
+ditto target/NeoLink.app "/Applications/NeoLink Rust.app"   # shows as "NeoLink Rust"
 ```
 
 Or run it straight from the source tree with `cargo run --release -p neolink -- <project folder>`. Tests: `cargo test --workspace`.

@@ -28,6 +28,9 @@ cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.neolink.app.rust" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable NeoLink" "$PLIST"
+# Named apart from the Swift app in the Dock and Finder.
+/usr/libexec/PlistBuddy -c "Set :CFBundleName NeoLink Rust" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string NeoLink Rust" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName NeoLink Rust" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 13.0" "$PLIST"
 ICON_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$PLIST")
