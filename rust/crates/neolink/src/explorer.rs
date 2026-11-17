@@ -29,6 +29,8 @@ pub enum Clicked {
     Close,
     /// A deleted file's placeholder: its deletion is reviewed in Source Control.
     Missing,
+    /// The folder name in the navigation bar: its menu (parent, home, enclosing folders).
+    FolderMenu(Rect),
     /// The "new" and "options" menus, with the control they hang from.
     NewMenu(Rect),
     OptionsMenu(Rect),
@@ -116,6 +118,12 @@ pub struct Explorer {
     /// The tree shows the shown terminal's working directory instead of the project.
     pub follow_terminal: bool,
     follow_rect: Rect,
+    /// Folder List mode: the project's tree is put aside and one folder is shown flat.
+    pub folder_list: bool,
+    project_tree: Option<Tree>,
+    /// Folder List order (the Swift app's `FileSortOrder`, by index).
+    pub sort: usize,
+    name_rect: Rect,
     /// Rows that stand for files deleted from the working tree.
     missing: std::collections::HashSet<PathBuf>,
     /// Diagnostics of open files: `(path, count, errors)`.
@@ -207,6 +215,10 @@ impl Explorer {
             follow_terminal: false,
             follow_rect: Rect::default(),
             missing: Default::default(),
+            folder_list: false,
+            project_tree: None,
+            sort: 0,
+            name_rect: Rect::default(),
             diagnostics: Vec::new(),
             drawn: None,
             git: Decorations::default(),
@@ -240,8 +252,94 @@ impl Explorer {
         self.request_git();
     }
 
+    /// The project's folder (also in Folder List mode, where another folder may be shown).
     pub fn root(&self) -> &Path {
+        self.project_tree.as_ref().unwrap_or(&self.tree).root()
+    }
+
+    /// The folder the explorer shows at its top.
+    pub fn current_folder(&self) -> &Path {
         self.tree.root()
+    }
+
+    /// Switches between the project tree and Folder List.
+    pub fn set_folder_list(&mut self, on: bool) {
+        if on == self.folder_list {
+            return;
+        }
+        self.folder_list = on;
+        if on {
+            let folder = self.tree.root().to_path_buf();
+            let mut list = Tree::new(folder);
+            list.show_hidden = self.tree.show_hidden;
+            list.compact = false;
+            self.project_tree = Some(std::mem::replace(&mut self.tree, list));
+        } else if let Some(mut tree) = self.project_tree.take() {
+            tree.show_hidden = self.tree.show_hidden;
+            self.tree = tree;
+        }
+        self.requested.clear();
+        self.scroll = 0.0;
+        self.smoother.cancel();
+        self.stale = true;
+        self.revision += 1;
+    }
+
+    /// Folder List: shows `folder`.
+    pub fn navigate(&mut self, folder: &Path) {
+        if !self.folder_list || !folder.is_dir() {
+            return;
+        }
+        let mut list = Tree::new(folder.to_path_buf());
+        list.show_hidden = self.tree.show_hidden;
+        list.compact = false;
+        self.tree = list;
+        self.requested.clear();
+        self.filter.clear();
+        self.scroll = 0.0;
+        self.smoother.cancel();
+        self.stale = true;
+        self.revision += 1;
+    }
+
+    /// Folder List: the order of the Swift app's "Sort by" entries.
+    pub const SORT_ORDERS: [&'static str; 8] = ["Name (A\u{2013}Z)", "Name (Z\u{2013}A)", "Date modified (newest)", "Date modified (oldest)", "Date added (newest)", "Date added (oldest)", "Size (largest first)", "Size (smallest first)"];
+
+    pub fn set_sort(&mut self, sort: usize) {
+        self.sort = sort.min(Self::SORT_ORDERS.len() - 1);
+        self.stale = true;
+    }
+
+    /// Folder List rows in the chosen order (folders first, as the Swift list).
+    fn sorted(&self, mut rows: Vec<Row>) -> Vec<Row> {
+        if !self.folder_list || self.sort == 0 {
+            return rows;
+        }
+        let key = |row: &Row| -> (u64, std::time::SystemTime, std::time::SystemTime) {
+            let metadata = std::fs::metadata(&row.path).ok();
+            let modified = metadata.as_ref().and_then(|metadata| metadata.modified().ok()).unwrap_or(std::time::UNIX_EPOCH);
+            let created = metadata.as_ref().and_then(|metadata| metadata.created().ok()).unwrap_or(modified);
+            (metadata.map_or(0, |metadata| metadata.len()), modified, created)
+        };
+        let mut keyed: Vec<(Row, (u64, std::time::SystemTime, std::time::SystemTime))> = rows.drain(..).map(|row| {
+            let key = key(&row);
+            (row, key)
+        }).collect();
+        let sort = self.sort;
+        keyed.sort_by(|(a, ka), (b, kb)| {
+            let folders = matches!(b.kind, RowKind::Folder { .. }).cmp(&matches!(a.kind, RowKind::Folder { .. }));
+            folders.then_with(|| match sort {
+                1 => b.label.to_lowercase().cmp(&a.label.to_lowercase()),
+                2 => kb.1.cmp(&ka.1),
+                3 => ka.1.cmp(&kb.1),
+                4 => kb.2.cmp(&ka.2),
+                5 => ka.2.cmp(&kb.2),
+                6 => kb.0.cmp(&ka.0),
+                7 => ka.0.cmp(&kb.0),
+                _ => a.label.to_lowercase().cmp(&b.label.to_lowercase()),
+            })
+        });
+        keyed.into_iter().map(|(row, _)| row).collect()
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
@@ -284,7 +382,8 @@ impl Explorer {
         if self.stale {
             self.stale = false;
             let rows = self.tree.rows();
-            let rows = self.with_deleted(rows);
+            let rows = if self.folder_list { rows } else { self.with_deleted(rows) };
+            let rows = self.sorted(rows);
             self.rows = self.filtered(rows);
             self.revision += 1;
             self.request_listings();
@@ -367,6 +466,7 @@ impl Explorer {
             "explorer-filter" => Some(self.filter_rect),
             "explorer-refresh" => Some(self.refresh_rect),
             "explorer-follow" => Some(self.follow_rect),
+            "explorer-name" => Some(self.name_rect),
             "explorer-collapse" => Some(self.collapse_rect),
             _ => None,
         }
@@ -473,6 +573,9 @@ impl Explorer {
         if self.plus_rect.contains(x, y) {
             return Clicked::NewMenu(self.plus_rect);
         }
+        if self.name_rect.contains(x, y) {
+            return Clicked::FolderMenu(self.name_rect);
+        }
         if self.options_rect.contains(x, y) {
             return Clicked::OptionsMenu(self.options_rect);
         }
@@ -496,6 +599,10 @@ impl Explorer {
         }
         match row.kind {
             RowKind::File => Clicked::File(row.path),
+            RowKind::Folder { .. } if self.folder_list => {
+                self.navigate(&row.path);
+                Clicked::Nothing
+            }
             RowKind::Folder { .. } => {
                 self.tree.toggle(&row.path);
                 self.stale = true;
@@ -541,6 +648,23 @@ impl Explorer {
         match key {
             Key::Named(NamedKey::ArrowDown) => target = Some(current.map_or(0, |index| (index + 1).min(self.rows.len() - 1))),
             Key::Named(NamedKey::ArrowUp) => target = Some(current.map_or(0, |index| index.saturating_sub(1))),
+            Key::Named(NamedKey::ArrowLeft) if self.folder_list => {
+                if let Some(parent) = self.tree.root().parent().map(Path::to_path_buf) {
+                    self.navigate(&parent);
+                }
+                return Some(Clicked::Nothing);
+            }
+            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::ArrowRight) if self.folder_list => {
+                let row = self.rows.get(current?)?.clone();
+                match row.kind {
+                    RowKind::File if matches!(key, Key::Named(NamedKey::Enter)) => result = Clicked::File(row.path),
+                    RowKind::Folder { .. } => {
+                        self.navigate(&row.path);
+                        return Some(Clicked::Nothing);
+                    }
+                    _ => {}
+                }
+            }
             Key::Named(NamedKey::Enter) => {
                 let row = self.rows.get(current?)?.clone();
                 match row.kind {
@@ -610,7 +734,7 @@ impl Explorer {
 
     /// What decides the sidebar's pixels, apart from the active file.
     pub fn signature(&self) -> u64 {
-        self.revision ^ (self.filter.len() as u64).rotate_left(50) ^ ((self.filter_focused as u64) << 58) ^ (self.drawn_scroll.to_bits().rotate_left(17)) ^ (self.hover.map_or(u64::MAX, |index| index as u64) << 40) ^ self.visible as u64 ^ ((self.focused as u64) << 59)
+        self.revision ^ (self.filter.len() as u64).rotate_left(50) ^ ((self.filter_focused as u64) << 58) ^ (self.drawn_scroll.to_bits().rotate_left(17)) ^ (self.hover.map_or(u64::MAX, |index| index as u64) << 40) ^ self.visible as u64 ^ ((self.focused as u64) << 59) ^ ((self.folder_list as u64) << 60) ^ (self.sort as u64).rotate_left(44)
     }
 
     /// Draws the pane as the Swift app's `FileBrowserPane` and explorer cells do (sizes in points there).
@@ -677,8 +801,10 @@ impl Explorer {
         ui.icon("rectangle.compress.vertical", 12.0, IconWeight::Regular, right - slot * 0.5, bar_middle, theme::TEXT_SECONDARY);
         right -= slot + ui.px(8.0);
         let name_x = rect.x + inset + slot + ui.px(8.0);
-        let fitted = ui.fit_middle(&name, (right - name_x).max(1.0), 12.0, 600, false);
-        ui.text(&fitted, name_x, bar_middle, 12.0, 600, false, theme::TEXT_SECONDARY);
+        let fitted = ui.fit_middle(&name, (right - name_x - ui.px(14.0)).max(1.0), 12.0, 600, false);
+        let name_width = ui.text(&fitted, name_x, bar_middle, 12.0, 600, false, theme::TEXT_SECONDARY);
+        ui.icon("chevron.down", 7.0, IconWeight::Semibold, name_x + name_width + ui.px(7.0), bar_middle, theme::TEXT_SECONDARY);
+        self.name_rect = Rect::new(name_x - ui.px(4.0), bar_top, name_width + ui.px(18.0), ui.px(24.0));
         // Filter field (not editable yet: PLAN.md).
         let field = Rect::new(rect.x + inset, bar_top + ui.px(24.0 + 6.0), rect.width - 2.0 * inset, ui.px(27.0));
         ui.rounded(field, 4.0, theme::rgb(0x161616));
@@ -688,7 +814,7 @@ impl Explorer {
         self.filter_rect = field;
         let text_x = field.x + ui.px(9.0) + glass.max(ui.px(12.0)) + ui.px(7.0);
         if self.filter.is_empty() && !self.filter_focused {
-            ui.text("Filter tree\u{2026}", text_x, field_middle, 11.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
+            ui.text(if self.folder_list { "Filter files\u{2026}" } else { "Filter tree\u{2026}" }, text_x, field_middle, 11.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
         } else {
             let filter = self.filter.clone();
             let width = ui.text(&filter, text_x, field_middle, 11.0, 400, false, theme::TEXT_PRIMARY);
@@ -717,7 +843,9 @@ impl Explorer {
             let x = rect.x + ui.px(8.0 + row.depth as f32 * 12.0);
             let is_folder = !matches!(row.kind, RowKind::File);
             if let RowKind::Folder { expanded, .. } = row.kind {
-                ui.icon(if expanded { "chevron.down" } else { "chevron.right" }, 8.0, IconWeight::Regular, x + ui.px(5.0), row_middle, faded(theme::TEXT_SECONDARY, opacity));
+                if !self.folder_list {
+                    ui.icon(if expanded { "chevron.down" } else { "chevron.right" }, 8.0, IconWeight::Regular, x + ui.px(5.0), row_middle, faded(theme::TEXT_SECONDARY, opacity));
+                }
                 ui.icon(if expanded { "folder.fill" } else { "folder" }, 12.0, IconWeight::Regular, x + ui.px(15.0 + 8.5), row_middle, faded(theme::TEXT_SECONDARY, opacity));
             } else {
                 let (abbreviation, symbol, color) = file_look(&row.path);
@@ -765,7 +893,13 @@ impl Explorer {
         let link = ui.icon(if self.follow_terminal { "link" } else { "link.badge.plus" }, 10.0, IconWeight::Regular, rect.x + inset + ui.px(7.0), footer_middle, follow_color);
         let follow_width = ui.text(if self.follow_terminal { "Following terminal" } else { "Follow terminal" }, rect.x + inset + link.max(ui.px(14.0)) + ui.px(4.0), footer_middle, 10.0, 400, false, follow_color);
         self.follow_rect = Rect::new(rect.x + inset, footer.y, link.max(ui.px(14.0)) + ui.px(8.0) + follow_width, footer.height);
-        let summary = if self.tree.was_truncated() { "Tree limit \u{b7} use \u{2318}P".to_string() } else { format!("{} visible", self.rows.len()) };
+        let summary = if self.folder_list {
+            format!("{} items", self.rows.len())
+        } else if self.tree.was_truncated() {
+            "Tree limit \u{b7} use \u{2318}P".to_string()
+        } else {
+            format!("{} visible", self.rows.len())
+        };
         ui.text_right(&summary, rect.right() - inset, footer_middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         // The split view's divider.
         ui.painter.scene.fill(rect.right(), rect.y, line, rect.height, theme::SEPARATOR);

@@ -359,9 +359,12 @@ impl Workspace {
         self.recent.retain(|path| path != &root);
         self.recent.insert(0, root.clone());
         self.recent.truncate(12);
+        let (list, sort) = (self.explorer.folder_list, self.explorer.sort);
         self.explorer = Explorer::new(root);
         self.explorer_options = Some(options);
         self.apply_explorer_options();
+        self.explorer.set_sort(sort);
+        self.explorer.set_folder_list(list);
         if let Some(shared) = self.shared.upgrade() {
             self.explorer.attach(&shared);
         }
@@ -690,6 +693,8 @@ impl Workspace {
         settings.connections_visible = self.connections.visible;
         settings.explorer_points = self.explorer_points;
         settings.compact_folders = self.explorer.compact();
+        settings.folder_list = self.explorer.folder_list;
+        settings.folder_sort = self.explorer.sort;
         settings.show_hidden = self.explorer.show_hidden();
         settings.hide_ignored = self.explorer.hide_ignored;
         settings.reveal_active = self.explorer.reveal_active;
@@ -719,6 +724,8 @@ impl Workspace {
         self.recent = settings.recent_projects.iter().filter(|path| path.is_dir()).take(12).cloned().collect();
         self.explorer_options = Some((settings.explorer_visible, settings.compact_folders, settings.show_hidden, settings.hide_ignored, settings.reveal_active));
         self.apply_explorer_options();
+        self.explorer.set_sort(settings.folder_sort);
+        self.explorer.set_folder_list(settings.folder_list);
     }
 
     fn apply_explorer_options(&mut self) {
@@ -1325,7 +1332,7 @@ impl Workspace {
     }
 
     fn begin_create(&mut self, is_directory: bool) {
-        let directory = self.explorer.root().to_path_buf();
+        let directory = self.explorer.current_folder().to_path_buf();
         self.begin_create_in(directory, is_directory);
     }
 
@@ -1658,6 +1665,11 @@ impl Workspace {
             Action::TextSize(points) => self.set_font_points(points),
             Action::TextSizeBy(delta) => self.set_font_points(self.font_points + delta),
             Action::ToggleCompact => self.explorer.toggle_compact(),
+            Action::FolderList(on) => self.explorer.set_folder_list(on),
+            Action::SortBy(index) => self.explorer.set_sort(index),
+            Action::Navigate(folder) => self.explorer.navigate(&folder),
+            Action::ShowInFinder(folder) => self.file_action("show", folder, true),
+            Action::ToggleFollow => self.explorer.follow_terminal = !self.explorer.follow_terminal,
             Action::ToggleHidden => self.explorer.toggle_hidden(),
             Action::ToggleHideIgnored => {
                 self.explorer.hide_ignored = !self.explorer.hide_ignored;
@@ -1928,19 +1940,52 @@ impl Workspace {
                 crate::explorer::Clicked::File(file) => self.open_document(&file),
                 crate::explorer::Clicked::Close => self.toggle_explorer(),
                 crate::explorer::Clicked::Missing => self.open_git(),
+                crate::explorer::Clicked::FolderMenu(rect) => {
+                    // `LocalFileBrowserView`'s folder menu: parent, home, the enclosing folders, Finder.
+                    let current = self.explorer.current_folder().to_path_buf();
+                    let list = self.explorer.folder_list;
+                    let mut items = Vec::new();
+                    if list {
+                        items.push(match current.parent() {
+                            Some(parent) => Item::entry("Parent Folder", Action::Navigate(parent.to_path_buf())),
+                            None => Item::note("Parent Folder"),
+                        });
+                        if let Some(home) = home_directory() {
+                            items.push(Item::entry("Home", Action::Navigate(home)));
+                        }
+                        items.push(Item::Separator);
+                        for ancestor in current.ancestors().skip(1) {
+                            items.push(Item::entry(&ancestor.display().to_string(), Action::Navigate(ancestor.to_path_buf())));
+                        }
+                        items.push(Item::Separator);
+                    } else {
+                        items.push(Item::entry("Show as Folder List", Action::FolderList(true)));
+                        items.push(Item::Separator);
+                    }
+                    items.push(Item::entry(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in File Manager" }, Action::ShowInFinder(current)));
+                    self.menu = Some(Menu::new(rect, items));
+                }
                 crate::explorer::Clicked::NewMenu(rect) => self.menu = Some(Menu::new(rect, vec![Item::entry("New File\u{2026}", Action::NewFile), Item::entry("New Folder\u{2026}", Action::NewFolder)])),
                 crate::explorer::Clicked::OptionsMenu(rect) => {
-                    self.menu = Some(Menu::new(rect, vec![
-                        Item::toggle("Project Tree", Action::Nothing, true),
-                        Item::note("Folder List"),
+                    let tree = !self.explorer.folder_list;
+                    let option = |label: &str, action: Action, checked: bool| Item::Entry { label: label.to_string(), action, checked, enabled: tree };
+                    let mut items = vec![
+                        Item::toggle("Project Tree", Action::FolderList(false), tree),
+                        Item::toggle("Folder List", Action::FolderList(true), !tree),
                         Item::Separator,
-                        Item::toggle("Compact Folders", Action::ToggleCompact, self.explorer.compact()),
-                        Item::toggle("Reveal Active File", Action::ToggleReveal, self.explorer.reveal_active),
-                        Item::toggle("Hide Git-Ignored Files", Action::ToggleHideIgnored, self.explorer.hide_ignored),
+                        option("Compact Folders", Action::ToggleCompact, self.explorer.compact()),
+                        option("Reveal Active File", Action::ToggleReveal, self.explorer.reveal_active),
+                        option("Hide Git-Ignored Files", Action::ToggleHideIgnored, self.explorer.hide_ignored),
                         Item::Separator,
-                        Item::note("Follow Terminal"),
+                        Item::toggle("Follow Terminal", Action::ToggleFollow, self.explorer.follow_terminal),
                         Item::toggle("Show Hidden Files", Action::ToggleHidden, self.explorer.show_hidden()),
-                    ]))
+                        Item::Separator,
+                        Item::note("Sort by"),
+                    ];
+                    for (index, label) in crate::explorer::Explorer::SORT_ORDERS.iter().enumerate() {
+                        items.push(Item::Entry { label: format!("   {label}"), action: Action::SortBy(index), checked: !tree && self.explorer.sort == index, enabled: !tree });
+                    }
+                    self.menu = Some(Menu::new(rect, items))
                 }
                 crate::explorer::Clicked::Nothing => {}
             }

@@ -12,9 +12,16 @@ pub enum Action {
     TextSize(f32),
     TextSizeBy(f32),
     ToggleCompact,
+    /// Project Tree (`false`) or Folder List (`true`).
+    FolderList(bool),
+    SortBy(usize),
+    /// Folder List: show this folder.
+    Navigate(std::path::PathBuf),
+    ShowInFinder(std::path::PathBuf),
     ToggleHidden,
     ToggleHideIgnored,
     ToggleReveal,
+    ToggleFollow,
     NewFile,
     NewFolder,
     OpenProject,
