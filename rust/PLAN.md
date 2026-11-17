@@ -317,8 +317,10 @@ the PTY is `alacritty_terminal`'s ConPTY backend, and fonts fall back to Cascadi
 The editor client's tests run against a real Neovim (0.12.6, installed by the job) on Windows too. The first such
 run (commit `14c1068`) passed four of six and failed two for a real reason: `std::fs::canonicalize` returns
 `\\?\C:\...` there and Neovim names the same file `C:\...`, so paths did not compare equal. The app had the same flaw
-(tab matching, unsaved marker, explorer highlight); `neolink_core::paths::canonical` now removes that prefix. The
-state of the latest run is whatever that workflow shows; the tests skip themselves if `nvim` is missing.
+(tab matching, unsaved marker, explorer highlight); `neolink_core::paths::canonical` now removes that prefix, and the next run (commit `821875e`,
+17 Nov 2026) passed all 64 tests on Windows, the five real-Neovim tests included: the editor client opens, types,
+saves, refuses a conflicting save, switches buffers correctly and resizes against Neovim on Windows. The tests skip
+themselves if `nvim` is missing, so check the run's log rather than its colour.
 `cargo check -p neolink --target x86_64-pc-windows-msvc` on the Mac catches type errors before a push.
 
 ## 6a. Milestone 2 so far (editor and explorer)
