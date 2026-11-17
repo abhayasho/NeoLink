@@ -3,8 +3,9 @@
 Living document for the Rust rebuild (branch `rust-rewrite`, directory `rust/`). The Swift app in `Sources/` stays the
 working product until this reaches parity; nothing here replaces or modifies it.
 
-Status line (update every milestone): **Milestone 1 (terminal skeleton, harness, first comparison) is done and
-measured on macOS. Windows: type-checked only. Milestones 2-5 not started.**
+Status line (update every milestone): **Milestone 1 is done and measured on macOS; CI builds and unit-tests it on
+macOS and Windows. Milestone 2 is partly done: the Neovim editor and a basic explorer work on macOS (synthetic input
+and captures only). Milestones 3-5 not started.**
 
 ## 1. Why a rewrite, and what "better" has to mean
 
@@ -184,15 +185,15 @@ exercised by the in-app benchmark or the capture, not by a person at the keyboar
 | Shell | IME / marked text; accessibility | not started | - |
 | Shell | Window resize (smooth live resize), display changes | partial | resize relays out the grid; live-resize smoothness not measured |
 | Harness | Synthetic input with timestamps, busy main thread, key-to-display, evenness, idle CPU, per-thread CPU | done | macOS |
-| Explorer | Lazy project tree, compact folders, reveal active file, filter | not started | - |
+| Explorer | Lazy project tree, compact folders, reveal active file, filter | partial | tree, compaction, reveal, active-file highlight, pixel scrolling: macOS capture and unit tests; no filter, no refresh on file changes, no keyboard navigation |
 | Explorer | Git decorations and ignore dimming, diagnostics counters, icons | not started | - |
 | Explorer | File actions (create, rename, trash, copy path, open terminal here, drag/drop copy) | not started | - |
 | Explorer | Folder List mode with sorts; Follow Terminal | not started | - |
-| Editor | Shared headless Neovim, `ext_linegrid` client, `Resources/Editor/neolink.lua` | not started | - |
-| Editor | Tabs, open/save/close with dirty prompts, external-change conflict check | not started | - |
-| Editor | Correct-buffer guarantee on switch (`neolink_selection` ordering), snapshot cache rules | not started | - |
-| Editor | Smooth vertical scroll, pixel-smooth horizontal scroll, axis lock | not started | axis lock logic exists in `neolink-core` with tests |
-| Editor | LSP/Tree-sitter limits (2 MiB, 128 MiB), Run file, REPLs, folding menu | not started | - |
+| Editor | Shared embedded Neovim, `ext_linegrid` client, `Resources/Editor/neolink.lua` unchanged | done | macOS: real-Neovim tests, capture, `editor-type` |
+| Editor | Tabs, open/save/close with dirty prompts, external-change conflict check | partial | open, save, refused save after an outside change: tested; close discards without a prompt; modified marker updates only after a command |
+| Editor | Correct-buffer guarantee on switch (`neolink_selection` ordering), snapshot cache rules | partial | display and input guarantees tested against real Neovim (40 alternations; 10 rapid switches with typing); the cached-image shortcut is not ported, so a switch waits for Neovim (17-24 ms) |
+| Editor | Smooth vertical scroll, pixel-smooth horizontal scroll, axis lock | not started | the wheel scrolls the editor by whole lines; axis lock logic exists in `neolink-core` with tests |
+| Editor | LSP/Tree-sitter limits (2 MiB, 128 MiB), Run file, REPLs, folding menu | partial | the limits live in `neolink.lua` and apply; Tree-sitter highlighting seen in the capture; LSP not exercised; no Run, REPL or menus |
 | Editor | Native text fallback without `nvim`; PDF viewer tabs | not started | - |
 | Remote | SSH terminal tabs, saved connections, validated creation | not started | - |
 | Remote | SFTP browser: list, create, rename, delete, upload, download, read-only preview | not started | - |
@@ -203,7 +204,7 @@ exercised by the in-app benchmark or the capture, not by a person at the keyboar
 | Agents | ACP v1 stdio conversations: streaming, tool previews, permissions, cancel, modes, MCP config | not started | - |
 | Agents | Agent terminals (Claude Code / custom CLI) in panel or tab | not started | - |
 | Shell UI | Menus, panel visibility persistence, recent projects, Performance Monitor | not started | winit's default macOS menu only |
-| Packaging | macOS `.app` (resources, signing), Windows artifact, CI on both | partial | workflow written (`.github/workflows/rust.yml`), never run: the branch is not pushed |
+| Packaging | macOS `.app` (resources, signing), Windows artifact, CI on both | partial | CI builds, tests and uploads a Windows executable on every push; no `.app`, no installer |
 
 ## 5. Measurements (milestone 1)
 
@@ -307,12 +308,34 @@ ms with 44 / 4 / 4 uneven frames of 360; `ui-tabs` (24 switches between two shel
 
 ## 6. Windows
 
-No Windows machine is available. What exists: `cargo check -p neolink --target x86_64-pc-windows-msvc` passes on this
-Mac (types only: nothing was linked or run), and `.github/workflows/rust.yml` builds and runs the unit tests on
-`windows-latest` and uploads the executable. **That workflow has never run**, because the branch is not pushed (the
-repository is public; pushing waits for a go-ahead). On Windows the presenter is the plain wgpu surface (no display
-timestamps), the PTY is `alacritty_terminal`'s ConPTY backend, and fonts fall back to Cascadia/Consolas. None of it
-has executed.
+No Windows machine is available. What has been established, all of it by GitHub Actions on `windows-latest`
+(`.github/workflows/rust.yml`): the workspace **compiles and links with MSVC and the unit tests pass** (first green
+run: 17 Nov 2026, commit `4a73914`, milestone 1). The job opens no window, so **rendering, input, the PTY, fonts and
+latency on Windows have never executed**. On Windows the presenter is the plain wgpu surface (no display timestamps),
+the PTY is `alacritty_terminal`'s ConPTY backend, and fonts fall back to Cascadia/Consolas. Whether the real-Neovim
+tests run and pass there is whatever the latest run of that workflow says; they skip themselves if `nvim` is missing.
+`cargo check -p neolink --target x86_64-pc-windows-msvc` on the Mac catches type errors before a push.
+
+## 6a. Milestone 2 so far (editor and explorer)
+
+- **Editor.** `neolink-nvim` runs `nvim --embed` with the Swift app's `Resources/Editor/neolink.lua` unchanged, as
+  an `ext_linegrid` UI. Commands, redraws and the `neolink_selection` notice share one ordered channel; a document
+  tab is shown only when the notice for its request has been read, and until then the pane (and the highlighted
+  tab) stay on what was confirmed before.
+- **Input needs its own rule, found by test:** Neovim handles `nvim_input` the moment it is read, ahead of an `open`
+  that is still queued, and runs queued requests back to back. So keys sent right after a switch were typed into the
+  buffer being left. The client keeps one switch in flight and holds everything sent after it until that switch is
+  confirmed (`keys_sent_right_after_a_switch_reach_the_new_buffer`, 5 of 5 runs after the fix; the hazard itself is
+  pinned by `ungated_keys_after_an_open_request_reach_the_old_buffer`).
+- **Explorer.** `neolink_core::tree` (tests) plus a sidebar drawn by the same renderer; folders are read on
+  background threads; Cmd-B hides it; a folder on the command line is the project.
+- Captures: `docs/milestone-2-editor-capture.png`, `docs/milestone-2-explorer-capture.png`.
+
+Measured (full screen, direct state, synthetic input, two runs; `docs/milestone-2/`): editor typing key to display
+p50 5.3 / 7.3 ms, p95 8.1 / 9.3 ms (the Swift app's best documented figures: 12-19 ms); switching between two
+documents, request to confirmed buffer on the display, p50 17.5 / 23.8 ms, worst 25.8 / 36.3 ms (Swift: about 16 ms
+with its cached images, 31-36 ms without). A third run (`with-explorer.json.gz`) fell in the composited state for
+its first scenarios: editor typing 24.6 ms, terminal typing 22.7 ms. No paired Swift run was made for the editor.
 
 ## 7. Open items after milestone 1
 
@@ -325,6 +348,10 @@ has executed.
 - A person has not used this build: every interaction above was synthetic.
 
 ## 8. Log
+
+- 2026-11-17: branch pushed with the user's go-ahead; first CI run green on macOS and Windows. Milestone 2 begun:
+  Neovim crate (RPC framing, grid model, embedded client with input held across switches, 6 real-Neovim tests),
+  editor pane and document tabs, explorer tree and sidebar. 63 tests.
 
 - 2026-11-16 (night): milestone 1. Terminal on `alacritty_terminal`, tabs, key encoding, pixel scrollback, harness
   with the Swift benchmark's profiles and analysis, off-screen capture, retained rows, keep-warm frames, pacer

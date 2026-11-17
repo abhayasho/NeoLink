@@ -8,3 +8,4 @@ pub mod pacer;
 pub mod profile;
 pub mod scroll;
 pub mod stats;
+pub mod tree;

@@ -384,6 +384,12 @@ impl Runner {
         Value::Object(report)
     }
 
+    /// Terminal scenarios run in the first tab (the shell), whatever an earlier scenario left selected.
+    fn select_shell(&self) {
+        (self.post)(Injected::SelectTab { index: 0, sent: clock::now() });
+        sleep(0.3);
+    }
+
     /// Fills the scrollback so there is something to scroll through.
     fn fill_scrollback(&self) {
         self.type_text("clear; seq 1 6000\r", 0.01);
@@ -510,9 +516,16 @@ impl Runner {
             "editor-type" => self.editor_typing(),
             "editor-tabs" => self.editor_tabs(),
             "idle" => self.idle(),
-            "terminal-type" => self.typing(75, 1.0 / 25.0),
-            "terminal-type-sparse" => self.typing(6, 1.6),
+            "terminal-type" => {
+                self.select_shell();
+                self.typing(75, 1.0 / 25.0)
+            }
+            "terminal-type-sparse" => {
+                self.select_shell();
+                self.typing(6, 1.6)
+            }
             "terminal-scroll" | "terminal-flick" | "terminal-swell" | "terminal-crawl" | "terminal-steady60" | "terminal-reversal" => {
+                self.select_shell();
                 self.fill_scrollback();
                 let profile = match scenario {
                     "terminal-flick" => ScrollProfile::flick(true),

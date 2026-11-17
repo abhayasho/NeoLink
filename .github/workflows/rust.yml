@@ -14,8 +14,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  # What this establishes on Windows: the workspace compiles and links with the MSVC toolchain and the unit
-  # tests pass. It does not open a window, so it says nothing about rendering, input or latency there.
+  # What this establishes on Windows: the workspace compiles and links with the MSVC toolchain, the unit
+  # tests pass, and the editor client's tests pass against a real Neovim. It does not open a window, so it
+  # says nothing about rendering, input or latency there.
   build-and-test:
     strategy:
       fail-fast: false
@@ -35,6 +36,17 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustc --version
+      # The editor tests drive a real Neovim; they skip themselves where `nvim` is missing.
+      - name: Neovim (macOS)
+        if: runner.os == 'macOS'
+        run: brew install neovim
+      - name: Neovim (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install neovim -y --no-progress
+          $nvim = Get-ChildItem -Path 'C:\tools\neovim','C:\Program Files\Neovim' -Recurse -Filter nvim.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($nvim) { $nvim.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append; & $nvim.FullName --version | Select-Object -First 1 }
       - name: Build
         run: cargo build --workspace --release --locked
       - name: Tests

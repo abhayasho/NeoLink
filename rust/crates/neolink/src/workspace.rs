@@ -2,6 +2,7 @@
 //! switching is drawing a different pane into the same surface.
 
 use crate::editor::Editor;
+use crate::explorer::Explorer;
 use crate::frame::{Built, Content, FrameContext, FrameMarks, Next, Painter, Shared};
 use crate::render::{Rect, Scene};
 use crate::term::{ScrollPhase, Terminal};
@@ -51,6 +52,8 @@ pub struct Workspace {
     shown_selection: u64,
     /// One Neovim for every document tab, started with the first one.
     editor: Option<Editor>,
+    pub explorer: Explorer,
+    sidebar: Rect,
     notice: Option<String>,
     pointer: (f32, f32),
     next_id: u64,
@@ -83,6 +86,8 @@ impl Workspace {
             shown: 0,
             shown_selection: 0,
             editor: None,
+            explorer: Explorer::new(project_directory()),
+            sidebar: Rect::default(),
             notice: None,
             pointer: (-1.0, -1.0),
             next_id: 1,
@@ -115,8 +120,10 @@ impl Workspace {
         let strip_height = (30.0 * scale).round();
         let padding_x = (6.0 * scale).round();
         let padding_top = (4.0 * scale).round();
-        self.strip = Rect::new(0.0, 0.0, size.0 as f32, strip_height);
-        self.pane = Rect::new(padding_x, strip_height + padding_top, (size.0 as f32 - 2.0 * padding_x).max(1.0), (size.1 as f32 - strip_height - padding_top).max(1.0));
+        let sidebar_width = if self.explorer.visible { (crate::explorer::WIDTH_POINTS * scale).round().min(size.0 as f32 * 0.5) } else { 0.0 };
+        self.sidebar = Rect::new(0.0, 0.0, sidebar_width, size.1 as f32);
+        self.strip = Rect::new(sidebar_width, 0.0, size.0 as f32 - sidebar_width, strip_height);
+        self.pane = Rect::new(sidebar_width + padding_x, strip_height + padding_top, (size.0 as f32 - sidebar_width - 2.0 * padding_x).max(1.0), (size.1 as f32 - strip_height - padding_top).max(1.0));
         let grid = (((self.pane.width / self.cell.width).floor() as usize).max(2), ((self.pane.height / self.cell.height).floor() as usize).max(1));
         let changed = grid != self.grid;
         self.grid = grid;
@@ -140,6 +147,21 @@ impl Workspace {
     /// The window's shared state, for panes that wake the render thread from their own threads.
     pub fn attach(&mut self, shared: &Arc<Shared>) {
         self.shared = Arc::downgrade(shared);
+        self.explorer.attach(shared);
+    }
+
+    /// Shows a different folder in the explorer.
+    pub fn set_project(&mut self, root: std::path::PathBuf) {
+        let visible = self.explorer.visible;
+        self.explorer = Explorer::new(root);
+        self.explorer.visible = visible;
+        if let Some(shared) = self.shared.upgrade() {
+            self.explorer.attach(&shared);
+        }
+    }
+
+    pub fn toggle_explorer(&mut self) {
+        self.explorer.visible = !self.explorer.visible;
     }
 
     /// The active tab's terminal, if it is one.
@@ -164,7 +186,7 @@ impl Workspace {
     }
 
     pub fn new_tab(&mut self, shared: &Arc<Shared>) -> std::io::Result<()> {
-        let directory = std::env::var_os("NEOLINK_START_DIRECTORY").map(std::path::PathBuf::from).or_else(home_directory);
+        let directory = std::env::var_os("NEOLINK_START_DIRECTORY").map(std::path::PathBuf::from).or_else(|| Some(self.explorer.root().to_path_buf())).or_else(home_directory);
         let id = self.next_id;
         self.next_id += 1;
         let terminal = Terminal::spawn(shared, self.grid.0, self.grid.1, self.cell, directory, id)?;
@@ -299,6 +321,10 @@ impl Workspace {
     /// A scroll event in device pixels over the pane.
     pub fn scroll(&mut self, time: f64, _delta_x: f64, delta_y: f64, phase: ScrollPhase) {
         let (cell, period) = (self.cell, self.period);
+        if self.explorer.contains(self.pointer.0, self.pointer.1) {
+            self.explorer.scroll_input(time, delta_y, phase, period);
+            return;
+        }
         if self.active_is_document() {
             let (row, column) = self.pointer_cell();
             if let Some(editor) = &mut self.editor {
@@ -321,6 +347,12 @@ impl Workspace {
 
     /// A press at `(x, y)` device pixels. Returns `true` if it changed anything.
     pub fn click(&mut self, x: f32, y: f32) -> bool {
+        if self.explorer.contains(x, y) {
+            if let Some(file) = self.explorer.click(x, y) {
+                self.open_document(&file);
+            }
+            return true;
+        }
         if let Some(index) = self.tab_rects.iter().position(|rect| rect.contains(x, y)) {
             self.select(index);
             return true;
@@ -348,8 +380,9 @@ impl Workspace {
     pub fn pointer(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
         let hover = self.tab_rects.iter().position(|rect| rect.contains(x, y));
-        let changed = hover != self.hover;
+        let mut changed = hover != self.hover;
         self.hover = hover;
+        changed |= self.explorer.pointer(x, y);
         changed
     }
 
@@ -388,14 +421,14 @@ impl Workspace {
         let Some(notice) = self.notice.clone() else { return };
         let scale = self.scale;
         let height = (26.0 * scale).round();
-        let rect = Rect::new(0.0, self.pane.bottom() - height, self.strip.width, height);
+        let rect = Rect::new(self.strip.x, self.pane.bottom() - height, self.strip.width, height);
         painter.scene.fill_rect(rect, theme::rgb(0x382626));
         let font_pixels = (12.0 * scale).round();
         let line = painter.text.line(painter.queue, &notice, font_pixels, false, false);
         let baseline = (rect.y + rect.height * 0.5 + font_pixels * 0.36).round();
         painter.scene.set_clip(Some(rect));
         for glyph in &line.glyphs {
-            painter.scene.glyph(glyph.sprite, (10.0 * scale).round() + glyph.x, baseline + glyph.y, theme::rgb(0xE1B4B4));
+            painter.scene.glyph(glyph.sprite, rect.x + (10.0 * scale).round() + glyph.x, baseline + glyph.y, theme::rgb(0xE1B4B4));
         }
         painter.scene.set_clip(None);
     }
@@ -412,7 +445,7 @@ impl Workspace {
         let width = ((220.0 * scale).min(self.strip.width / count)).floor();
         let font_pixels = (12.0 * scale).round();
         for (index, tab) in self.tabs.iter().enumerate() {
-            let rect = Rect::new(index as f32 * width, 0.0, width, self.strip.height);
+            let rect = Rect::new(self.strip.x + index as f32 * width, 0.0, width, self.strip.height);
             self.tab_rects.push(rect);
             let active = index == self.shown;
             if active {
@@ -441,7 +474,7 @@ impl Workspace {
             }
             scene.set_clip(None);
         }
-        scene.fill(0.0, self.strip.height - 1.0, self.strip.width, 1.0, theme::SEPARATOR);
+        scene.fill(self.strip.x, self.strip.height - 1.0, self.strip.width, 1.0, theme::SEPARATOR);
         if let Some(rect) = self.tab_rects.get(self.shown).copied() {
             // The active tab is open toward its pane.
             scene.fill(rect.x, rect.bottom() - 1.0, rect.width - 1.0, 1.0, theme::EDITOR_BACKGROUND);
@@ -471,6 +504,18 @@ impl Signature {
 
     fn finish(&self) -> u64 {
         self.0
+    }
+}
+
+/// The folder the explorer starts in: `NEOLINK_PROJECT`, else the directory the app was started from
+/// (a graphical launch starts in `/`, where the home folder is the better guess).
+fn project_directory() -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("NEOLINK_PROJECT").map(std::path::PathBuf::from) {
+        return path.canonicalize().unwrap_or(path);
+    }
+    match std::env::current_dir() {
+        Ok(directory) if directory.parent().is_some() => directory,
+        _ => home_directory().unwrap_or_else(|| std::path::PathBuf::from("/")),
     }
 }
 
@@ -549,6 +594,18 @@ impl Content for Workspace {
             None => Next::Idle,
         };
         self.draw_notice(painter);
+        let mut next = next;
+        if self.explorer.visible {
+            let active_file = self.tabs.get(self.shown).and_then(Tab::document).map(str::to_string);
+            let sidebar = self.sidebar;
+            let explorer_next = self.explorer.build(painter, sidebar, frame.scale, active_file.as_deref(), frame.display, period);
+            next = match (next, explorer_next) {
+                (Next::Soon, _) | (_, Next::Soon) => Next::Soon,
+                (Next::At(a), Next::At(b)) => Next::At(a.min(b)),
+                (Next::At(a), Next::Idle) | (Next::Idle, Next::At(a)) => Next::At(a),
+                (Next::Idle, Next::Idle) => Next::Idle,
+            };
+        }
         let (scroll_lines, input_lines) = self.scroll_lines();
         self.marks = FrameMarks { scroll_lines, input_lines, output, selection: self.shown_selection, instances: 0 };
         // Everything that decides a pixel of this frame. Equal to the last one: nothing to present.
@@ -556,6 +613,7 @@ impl Content for Workspace {
         signature.add(frame.size.0 as u64).add(frame.size.1 as u64).add(self.cell.width.to_bits() as u64).add(self.cell.height.to_bits() as u64);
         signature.add(self.shown as u64).add(self.shown_selection).add(self.focused as u64).add(self.hover.map_or(u64::MAX, |index| index as u64));
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
+        signature.add(self.explorer.signature());
         for (index, tab) in self.tabs.iter().enumerate() {
             signature.add(tab.id);
             match &tab.pane {
