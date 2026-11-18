@@ -3013,7 +3013,6 @@ impl Workspace {
         if let Some(first) = language.get_mut(0..1) {
             first.make_ascii_uppercase();
         }
-        ui.text(&language, bar.x + ui.px(12.0), middle, 11.0, 500, false, theme::TEXT_SECONDARY);
         let gap = ui.px(8.0);
         let mut right = bar.right() - ui.px(12.0);
         let mut buttons: Vec<(Rect, &'static str)> = Vec::new();
@@ -3039,6 +3038,38 @@ impl Workspace {
             // Code intelligence is attached to this file.
             let bolt = ui.icon("bolt.fill", 10.0, IconWeight::Medium, right - ui.px(5.0), middle, theme::ACCENT).max(ui.px(10.0));
             buttons.push((area(right - bolt, right), "servers"));
+            right -= bolt + gap;
+        }
+        // Left: where the file is in the project (folders dim, the file's name bright), then its
+        // language. Leading folders give way to an ellipsis when the toolbar is narrow.
+        {
+            let relative = std::path::Path::new(path).strip_prefix(self.explorer.root()).map(|relative| relative.to_path_buf()).unwrap_or_else(|_| std::path::PathBuf::from(path));
+            let mut segments: Vec<String> = relative.components().map(|component| component.as_os_str().to_string_lossy().into_owned()).collect();
+            let separator = "  \u{203a}  ";
+            let language_text = format!("   \u{b7}   {language}");
+            let limit = right - ui.px(16.0) - (bar.x + ui.px(12.0)) - ui.measure(&language_text, 11.0, 500, false);
+            let width_of = |ui: &mut Ui, segments: &[String]| -> f32 {
+                let joined = segments.join(separator);
+                ui.measure(&joined, 11.0, 500, false)
+            };
+            let mut elided = false;
+            while segments.len() > 1 && width_of(&mut ui, &segments) > limit {
+                segments.remove(0);
+                elided = true;
+            }
+            if elided {
+                segments.insert(0, "\u{2026}".into());
+            }
+            let mut x = bar.x + ui.px(12.0);
+            let last = segments.len().saturating_sub(1);
+            for (index, segment) in segments.iter().enumerate() {
+                let fitted = if index == last { ui.fit_middle(segment, (limit - (x - bar.x - ui.px(12.0))).max(ui.px(40.0)), 11.0, 500, false) } else { segment.clone() };
+                x += ui.text(&fitted, x, middle, 11.0, 500, false, if index == last { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY });
+                if index != last {
+                    x += ui.text(separator, x, middle, 11.0, 500, false, faded(theme::TEXT_SECONDARY, 0.6));
+                }
+            }
+            ui.text(&language_text, x, middle, 11.0, 500, false, faded(theme::TEXT_SECONDARY, 0.8));
         }
         let footer = self.editor_footer;
         ui.fill(footer, theme::EDITOR_BACKGROUND);
