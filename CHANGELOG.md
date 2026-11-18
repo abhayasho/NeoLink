@@ -4,7 +4,7 @@ What changed in each NeoLink release. Downloads and full notes are on the
 [releases page](https://github.com/abhayasho/NeoLink/releases); each version's notes are also in
 [`docs/releases`](docs/releases).
 
-## Unreleased
+## 2.2.0 (2026-11-18)
 
 - **Command palette.** ⇧⌘P or F1 (Ctrl+Shift+Alt+P on Windows) lists every command with its
   shortcut; type a few letters of it and press Return. Recently used commands come first. On Windows,
