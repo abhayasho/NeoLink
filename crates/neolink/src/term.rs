@@ -157,6 +157,8 @@ pub struct Terminal {
     pub auto_password: Option<(Vec<String>, String, f64)>,
     /// The shell's process, to ask the system for its working directory.
     child: Option<u32>,
+    /// The PTY's descriptor, which names the foreground process (Unix only).
+    #[cfg_attr(not(unix), allow(dead_code))]
     master: Option<i32>,
     directory: Option<std::path::PathBuf>,
     directory_checked: (u64, f64),
@@ -369,11 +371,6 @@ impl Terminal {
         (Point::new(Line(row - whole as i32), Column(column as usize)), side)
     }
 
-    /// The program asked for mouse reports, so presses are its business, not a selection.
-    pub fn wants_mouse(&self) -> bool {
-        self.term.lock().mode().intersects(TermMode::MOUSE_MODE)
-    }
-
     /// A press at `(x, y)`: starts a selection (`clicks` 2 selects a word, 3 a line), or reports the
     /// press to a program that asked for the mouse.
     pub fn mouse_down(&mut self, x: f32, y: f32, cell: CellMetrics, clicks: u8) {
@@ -519,10 +516,6 @@ impl Terminal {
     /// Batches of output parsed so far.
     pub fn output_generation(&self) -> u64 {
         self.listener.output.load(Ordering::Acquire)
-    }
-
-    pub fn grid_size(&self) -> (usize, usize) {
-        (self.columns, self.lines)
     }
 
     /// Scrollback position as last drawn: whole device pixels above the newest line.

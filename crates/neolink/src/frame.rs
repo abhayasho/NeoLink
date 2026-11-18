@@ -122,6 +122,7 @@ pub struct FrameRecord {
     /// When the decision to draw was made.
     pub planned: f64,
     /// The refresh this frame was committed for, and when it was expected on the display.
+    #[allow(dead_code)] // Diagnostics: shown with the record when frames are logged.
     pub latch: f64,
     pub expected: f64,
     pub committed: f64,
@@ -148,11 +149,6 @@ impl FrameLog {
     pub fn stop(&self) -> Vec<FrameRecord> {
         self.recording.store(false, Ordering::Release);
         std::mem::take(&mut *self.records.lock())
-    }
-
-    /// The frames recorded so far, leaving the log running.
-    pub fn snapshot(&self) -> Vec<FrameRecord> {
-        self.records.lock().clone()
     }
 
     fn is_recording(&self) -> bool {

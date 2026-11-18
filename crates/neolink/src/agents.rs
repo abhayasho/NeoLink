@@ -821,7 +821,7 @@ impl Launcher {
     }
 }
 
-fn open_link(url: &str) {
+pub(crate) fn open_link(url: &str) {
     let (program, arguments): (&str, Vec<&str>) = if cfg!(target_os = "macos") { ("open", vec![url]) } else if cfg!(windows) { ("cmd", vec!["/C", "start", "", url]) } else { ("xdg-open", vec![url]) };
     let _ = std::process::Command::new(program).args(arguments).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
 }
@@ -876,10 +876,6 @@ impl AgentPanel {
 
     pub fn left_edge(&self) -> f32 {
         self.rect.x
-    }
-
-    pub fn session_count(&self) -> usize {
-        self.sessions.len()
     }
 
     pub fn terminal(&mut self) -> Option<&mut Terminal> {

@@ -1012,13 +1012,4 @@ impl Explorer {
         }
     }
 
-    /// Number of rows (tests, benchmark).
-    pub fn row_count(&self) -> usize {
-        self.rows.len()
-    }
-
-    /// Scroll position in device pixels, as drawn.
-    pub fn scroll(&self) -> f64 {
-        self.drawn_scroll
-    }
 }

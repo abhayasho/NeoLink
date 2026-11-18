@@ -42,12 +42,6 @@ impl Ui<'_, '_> {
         }
     }
 
-    /// A one-point line along the bottom of `rect`.
-    pub fn line_below(&mut self, rect: Rect, color: Rgba) {
-        let thickness = self.px(1.0).max(1.0);
-        self.painter.scene.fill(rect.x, rect.bottom() - thickness, rect.width, thickness, color);
-    }
-
     pub fn measure(&mut self, text: &str, points: f32, weight: u16, monospace: bool) -> f32 {
         let pixels = self.px(points);
         self.painter.text.styled_line(self.painter.queue, text, pixels, weight, monospace).width

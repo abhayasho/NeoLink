@@ -8,6 +8,7 @@ mod capture;
 mod chrome;
 mod clock;
 mod connections;
+mod crash;
 mod dock;
 mod editor;
 mod explorer;
@@ -53,7 +54,8 @@ const DEFAULT_FONT_POINTS: f32 = 13.0;
 #[derive(Debug, Clone)]
 enum UserEvent {
     Injected(Injected),
-    /// A menu bar item was chosen.
+    /// A menu bar item was chosen (macOS; elsewhere there is no menu bar).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Command(String),
     /// The workspace wants the native views (PDFs) placed or commanded.
     Layout,
@@ -339,6 +341,15 @@ impl App {
             self.with_workspace(|workspace, _| workspace.toggle_dock(side == "bottom"));
         } else if let Some(program) = command.strip_prefix("repl:") {
             self.with_workspace(|workspace, _| workspace.open_repl(program));
+        } else if command == "help:issue" {
+            agents::open_link("https://github.com/abhayasho/NeoLink/issues/new/choose");
+        } else if command == "help:crashes" {
+            if let Some(folder) = crash::folder() {
+                let _ = std::fs::create_dir_all(&folder);
+                agents::open_link(&folder.to_string_lossy());
+            }
+        } else if command == "help:releases" {
+            agents::open_link("https://github.com/abhayasho/NeoLink/releases");
         }
         self.invalidate();
     }
@@ -553,11 +564,11 @@ impl App {
             self.access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, self.proxy.clone()));
         }
         window.set_visible(true);
-        let gpu = gpu::Gpu::new().expect("a GPU");
+        let gpu = gpu::Gpu::new().unwrap_or_else(|error| fatal(&format!("NeoLink needs a graphics card with Metal, Direct3D 12 or Vulkan support.\n\n{error}")));
         #[cfg(target_os = "macos")]
-        let presenter = present::Presenter::new(&gpu, &window).expect("a presenter");
+        let presenter = present::Presenter::new(&gpu, &window).unwrap_or_else(|error| fatal(&format!("NeoLink could not draw to its window.\n\n{error}")));
         #[cfg(not(target_os = "macos"))]
-        let presenter = present::Presenter::new(&gpu, window.clone()).expect("a presenter");
+        let presenter = present::Presenter::new(&gpu, window.clone()).unwrap_or_else(|error| fatal(&format!("NeoLink could not draw to its window.\n\n{error}")));
         let size = window.inner_size();
         let scale = window.scale_factor();
         let period = display_period(&window);
@@ -573,6 +584,14 @@ impl App {
             let mut workspace = Workspace::new(text.cell, saved.font_points.clamp(10.0, 24.0), scale as f32, (size.width, size.height), period);
             workspace.apply_settings(&saved);
             workspace.renderer_information = renderer_information;
+            // The last run ended in a crash: say so once, and where the report is (in benchmarks and
+            // captures only when NEOLINK_LOG_DIR names the folder, as settings files are named).
+            if std::env::var_os("NEOLINK_BENCHMARK").is_none() || std::env::var_os("NEOLINK_LOG_DIR").is_some() {
+                if let Some(report) = crash::take_unseen() {
+                    let folder = report.parent().map(neolink_core::paths::tilde).unwrap_or_default();
+                    workspace.show_notice(format!("NeoLink quit unexpectedly last time. A crash report was saved in {folder} (Help \u{2192} Show Crash Reports)."));
+                }
+            }
             self.saved = saved.clone();
             let proxy = self.proxy.clone();
             let layout_proxy = self.proxy.clone();
@@ -746,6 +765,10 @@ impl ApplicationHandler<UserEvent> for App {
                             workspace.take_folder_request();
                             workspace.remote_chosen(vec![std::path::PathBuf::from(folder)], true);
                             return;
+                        }
+                        // Checks crash reporting end to end.
+                        if name == "crash" {
+                            panic!("a crash requested by the capture controls");
                         }
                         if name == "close-active" {
                             let index = workspace.active_index();
@@ -1035,6 +1058,16 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+/// A problem that stops the app from starting: says so in a dialog (a crash report would mean little
+/// to the user) and exits.
+fn fatal(message: &str) -> ! {
+    eprintln!("{message}");
+    if std::env::var_os("NEOLINK_BENCHMARK").is_none() {
+        rfd::MessageDialog::new().set_level(rfd::MessageLevel::Error).set_title("NeoLink cannot start").set_description(message).set_buttons(rfd::MessageButtons::Ok).show();
+    }
+    std::process::exit(1);
+}
+
 fn main() {
     let spike = std::env::args().any(|argument| argument == "--spike").then(|| std::env::var("SPIKE_MODE").unwrap_or_else(|_| "sparse".into()));
     let spike_seconds: f64 = std::env::var("SPIKE_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(8.0);
@@ -1042,6 +1075,7 @@ fn main() {
         // The spike logs every frame's journey.
         unsafe { std::env::set_var("NEOLINK_DEBUG_FRAMES", "1") };
     }
+    crash::install();
     alacritty_terminal::tty::setup_env();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("an event loop");
     event_loop.set_control_flow(ControlFlow::Wait);

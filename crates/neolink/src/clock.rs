@@ -21,14 +21,6 @@ pub fn now() -> f64 {
     START.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
-/// Sleeps until `deadline` on this clock; returns at once if it has passed.
-pub fn sleep_until(deadline: f64) {
-    let remaining = deadline - now();
-    if remaining > 0.0 {
-        std::thread::sleep(std::time::Duration::from_secs_f64(remaining));
-    }
-}
-
 /// CPU seconds used so far by the calling thread (0 where the system cannot tell).
 pub fn thread_cpu_seconds() -> f64 {
     #[cfg(unix)]

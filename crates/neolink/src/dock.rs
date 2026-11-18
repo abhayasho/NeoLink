@@ -77,10 +77,6 @@ impl Dock {
         self.terminals.get_mut(self.selected)
     }
 
-    pub fn has_terminal(&self) -> bool {
-        !self.terminals.is_empty()
-    }
-
     /// Starts another shell in the panel.
     pub fn open_shell(&mut self, shared: &Arc<Shared>, directory: &Path, cell: CellMetrics) -> std::io::Result<()> {
         let id = self.next_id;

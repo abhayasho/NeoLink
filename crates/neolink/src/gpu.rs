@@ -1,6 +1,8 @@
 //! The wgpu device shared by the renderer and the presenter.
 
 pub struct Gpu {
+    /// Owned for the device's lifetime, though nothing reads it after setup.
+    #[allow(dead_code)]
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,

@@ -194,11 +194,6 @@ impl Editor {
         self.shows(path) || (self.speculative.is_some() && self.requested.as_ref().is_some_and(|requested| requested.1 == path))
     }
 
-    /// The buffer Neovim last confirmed.
-    pub fn confirmed_path(&self) -> Option<String> {
-        self.client.with_state(|state| state.selection.as_ref().map(|selection| selection.1.clone()))
-    }
-
     /// `rows`: the rows the pane shows. With pixel scrolling Neovim draws two more, which are the slack
     /// the text slides through.
     pub fn resize(&mut self, columns: usize, rows: usize) {

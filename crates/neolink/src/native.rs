@@ -155,6 +155,7 @@ impl NativeEditor {
     }
 
     /// Whole lines, for the benchmark and tests.
+    #[cfg(test)]
     pub fn text(&self) -> String {
         self.lines.join("\n")
     }

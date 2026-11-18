@@ -61,7 +61,7 @@ mod host {
             let wanted = request.shown.as_ref().map(|(path, _)| path.clone());
             if self.shown != wanted {
                 if let Some(view) = self.shown.as_ref().and_then(|path| self.views.get(path)) {
-                    unsafe { view.setHidden(true) };
+                    view.setHidden(true);
                 }
                 self.shown = wanted.clone();
             }
@@ -69,7 +69,7 @@ mod host {
             if !self.views.contains_key(path) {
                 match open(main, path) {
                     Some(view) => {
-                        unsafe { parent.addSubview(&view) };
+                        parent.addSubview(&view);
                         self.views.insert(path.clone(), view);
                     }
                     None => {
@@ -83,13 +83,11 @@ mod host {
             let bounds = parent.bounds();
             let y = if parent.isFlipped() { frame[1] } else { bounds.size.height - frame[1] - frame[3] };
             let rect = NSRect::new(NSPoint::new(frame[0], y), NSSize::new(frame[2].max(1.0), frame[3].max(1.0)));
-            unsafe {
-                if view.frame() != rect {
-                    view.setFrame(rect);
-                }
-                if view.isHidden() {
-                    view.setHidden(false);
-                }
+            if view.frame() != rect {
+                view.setFrame(rect);
+            }
+            if view.isHidden() {
+                view.setHidden(false);
             }
             problem
         }

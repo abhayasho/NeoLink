@@ -27,5 +27,6 @@ pub struct Presented {
     /// display timestamps this is the time the present call returned.
     pub displayed: f64,
     /// Whether `displayed` is a true display time.
+    #[allow(dead_code)] // Diagnostics: shown with the report when frames are logged.
     pub exact: bool,
 }

@@ -1398,10 +1398,6 @@ impl Workspace {
         self.notice = Some(message);
     }
 
-    pub fn unavailable(&mut self, what: &str) {
-        self.notice = Some(format!("{what} is not available in this build yet."));
-    }
-
     /// A new local tab running `program` (the Code menu's "Open REPL").
     pub fn open_repl(&mut self, program: &str) {
         let directory = self.explorer.root().to_path_buf();
@@ -1655,10 +1651,6 @@ impl Workspace {
         self.search = Some(crate::search::SearchSheet::new(self.explorer.root(), contents, self.shared.clone()));
     }
 
-    pub fn search_is_open(&self) -> bool {
-        self.search.is_some()
-    }
-
     /// Scrolls the search results. Returns `false` if no search is open.
     pub fn scroll_search(&mut self, delta: f32) -> bool {
         match &mut self.search {
@@ -1683,12 +1675,6 @@ impl Workspace {
                 }
             }
         }
-    }
-
-    /// Puts the keyboard in the explorer's filter field (Cmd-P).
-    pub fn focus_filter(&mut self) {
-        self.explorer.visible = true;
-        self.explorer.filter_focused = true;
     }
 
     /// Creates what the sheet names; a new file is opened, as in the Swift app.
@@ -2851,6 +2837,11 @@ impl Workspace {
         ui.text(&notice, x, middle, 11.0, 400, false, if informs { theme::TEXT_PRIMARY } else { theme::rgb(0xE1B4B4) });
         ui.painter.scene.set_clip(None);
         self.notice_close = close;
+    }
+
+    /// Shows `text` in the notice banner (a problem, until dismissed).
+    pub fn show_notice(&mut self, text: String) {
+        self.notice = Some(text);
     }
 
     pub fn dismiss_notice(&mut self) -> bool {

@@ -47,6 +47,11 @@ Control, ACP and terminal coding agents. Versions 1.x were a Swift app; that cod
   to the terminal), except in the built-in editor. Word movement is Option on macOS, Ctrl on Windows.
 - Keep the bundle identifier `com.neolink.app` and the release asset names: `scripts/install.sh` and
   existing installs depend on them.
+- The code builds with no warnings on macOS and Windows; CI's "No warnings" step enforces it
+  (`cargo check --target x86_64-pc-windows-msvc` from a Mac catches Windows-only ones).
+- Crashes: `crash.rs` writes a report per panic (`~/Library/Logs/NeoLink`, `%LOCALAPPDATA%\NeoLink\Logs`;
+  `NEOLINK_LOG_DIR` overrides) and the next launch says so once. The `crash` capture control tests it.
+  Startup failures (no GPU, no presenter) show a dialog through `fatal` instead of panicking.
 
 ## Verifying UI and timing
 - Drive the app without a person: `NEOLINK_BENCHMARK=controls NEOLINK_CONTROLS="tab:1,git,type:ls^,scroll:-200"

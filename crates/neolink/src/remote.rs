@@ -192,10 +192,6 @@ impl RemoteBrowser {
         RemoteBrowser { connection, state, commands, prompt: None, selected: None, pending_download: None, scroll: 0.0, rect: Rect::default(), list: Rect::default(), rows: Vec::new(), buttons: Vec::new() }
     }
 
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        self.rect.contains(x, y)
-    }
-
     pub fn prompting(&self) -> bool {
         self.prompt.is_some()
     }

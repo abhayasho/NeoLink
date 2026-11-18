@@ -46,6 +46,13 @@ jobs:
           if ($nvim) { $nvim.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append; & $nvim.FullName --version | Select-Object -First 1 }
       - name: Build
         run: cargo build --workspace --release --locked
+      # The code builds without warnings on both systems; keep it that way (a separate target folder,
+      # so the release build above is not rebuilt with different flags).
+      - name: No warnings
+        run: cargo check --workspace --all-targets --locked
+        env:
+          RUSTFLAGS: -D warnings
+          CARGO_TARGET_DIR: target/lint
       - name: Tests
         run: cargo test --workspace --locked
       - name: Editor runtime (neolink.lua against Neovim)

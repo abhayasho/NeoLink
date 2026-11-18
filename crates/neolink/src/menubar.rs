@@ -128,9 +128,12 @@ pub fn install(pixel_sideways: bool, on_command: impl Fn(String) + Send + Sync +
     .ok()?;
     let window = Submenu::new("Window", true);
     window.append_items(&[&key("Minimize", "c", 'm'), &PredefinedMenuItem::maximize(Some("Zoom")), &separator(), &PredefinedMenuItem::bring_all_to_front(Some("Bring All to Front"))]).ok()?;
-    menu.append_items(&[&app, &file, &edit, &code_menu, &view, &window]).ok()?;
+    let help = Submenu::new("Help", true);
+    help.append_items(&[&plain("help:issue", "Report an Issue\u{2026}"), &plain("help:releases", "Release Notes"), &separator(), &plain("help:crashes", "Show Crash Reports")]).ok()?;
+    menu.append_items(&[&app, &file, &edit, &code_menu, &view, &window, &help]).ok()?;
     menu.init_for_nsapp();
     window.set_as_windows_menu_for_nsapp();
+    help.set_as_help_menu_for_nsapp();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| on_command(event.id.0.clone())));
     Some(menu)
 }
