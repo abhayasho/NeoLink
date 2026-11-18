@@ -65,6 +65,7 @@ On Windows, use **Ctrl+Shift** where macOS uses **⌘** (Ctrl alone stays with t
 | New terminal tab / close tab | ⌘T / ⌘W |
 | Next / previous tab | ⇧⌘] / ⇧⌘[ |
 | Open file / open project | ⌘O / ⇧⌘O |
+| Command palette (every command) | ⇧⌘P or F1 |
 | Quick Open / Find in Files | ⌘P / ⇧⌘F |
 | Find in terminal or file | ⌘F |
 | Source Control | ⇧⌘G |

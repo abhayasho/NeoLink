@@ -7,6 +7,7 @@ mod bench;
 mod capture;
 mod chrome;
 mod clock;
+mod commands;
 mod connections;
 mod crash;
 mod dock;
@@ -54,8 +55,7 @@ const DEFAULT_FONT_POINTS: f32 = 13.0;
 #[derive(Debug, Clone)]
 enum UserEvent {
     Injected(Injected),
-    /// A menu bar item was chosen (macOS; elsewhere there is no menu bar).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// A command was chosen (the menu bar or the command palette; see `commands`).
     Command(String),
     /// The workspace wants the native views (PDFs) placed or commanded.
     Layout,
@@ -310,19 +310,8 @@ impl App {
         }
         if let Some(rest) = command.strip_prefix("key:") {
             let Some((flags, character)) = rest.split_once(':') else { return };
-            let mut modifiers = ModifiersState::empty();
-            for flag in flags.chars() {
-                modifiers |= match flag {
-                    'c' => ModifiersState::SUPER,
-                    's' => ModifiersState::SHIFT,
-                    'x' => ModifiersState::CONTROL,
-                    _ => ModifiersState::empty(),
-                };
-            }
-            // The same code as the key itself, with the item's modifiers.
-            let held = std::mem::replace(&mut self.modifiers, modifiers);
-            self.shortcut(&Key::Character(character.into()), event_loop);
-            self.modifiers = held;
+            // The same code as the key itself, as its Shift or Control variant, on any system.
+            self.run_command_key(character, flags.contains('s'), flags.contains('x'), event_loop);
         } else if let Some(action) = command.strip_prefix("editor:") {
             self.with_workspace(|workspace, _| match action {
                 "copy" => {
@@ -365,6 +354,12 @@ impl App {
             self.invalidate();
             return true;
         }
+        // F1 opens the command palette, as in VS Code.
+        if matches!(key, Key::Named(NamedKey::F1)) && !modifiers.super_key() && !modifiers.control_key() && !modifiers.alt_key() && !modifiers.shift_key() {
+            self.with_workspace(|workspace, _| workspace.open_palette());
+            self.invalidate();
+            return true;
+        }
         if !command {
             if modifiers.shift_key() && !modifiers.control_key() && !modifiers.alt_key() {
                 let pages = match key {
@@ -393,8 +388,18 @@ impl App {
         // The Swift app's Shift and Control variants of a Command shortcut. Elsewhere the command chord
         // is Control+Shift, so Alt marks the Shift variant and there is no Control variant.
         let (shifted, controlled) = if cfg!(target_os = "macos") { (modifiers.shift_key(), modifiers.control_key()) } else { (modifiers.alt_key(), false) };
-        match characters.to_lowercase().as_str() {
+        self.run_command_key(characters.as_str(), shifted, controlled, event_loop)
+    }
+
+    /// Runs the command chord + `character`, as its Shift or Control variant. Returns `true` if the
+    /// character names a command.
+    fn run_command_key(&self, character: &str, shifted: bool, controlled: bool, event_loop: &ActiveEventLoop) -> bool {
+        match character.to_lowercase().as_str() {
             "t" => self.new_tab(),
+            "p" if shifted => {
+                self.with_workspace(|workspace, _| workspace.open_palette());
+                self.invalidate();
+            }
             "w" if shifted => self.quit(event_loop),
             "n" if shifted => {
                 self.with_workspace(|workspace, _| workspace.new_connection());
@@ -598,6 +603,10 @@ impl App {
             workspace.set_on_layout(Box::new(move || {
                 let _ = layout_proxy.send_event(UserEvent::Layout);
             }));
+            let command_proxy = self.proxy.clone();
+            workspace.set_on_command(Box::new(move |command| {
+                let _ = command_proxy.send_event(UserEvent::Command(command));
+            }));
             workspace.set_on_empty(Box::new(move || {
                 let _ = proxy.send_event(UserEvent::Quit);
             }));
@@ -769,6 +778,10 @@ impl ApplicationHandler<UserEvent> for App {
                         // Checks crash reporting end to end.
                         if name == "crash" {
                             panic!("a crash requested by the capture controls");
+                        }
+                        if name == "palette" {
+                            workspace.open_palette();
+                            return;
                         }
                         if name == "close-active" {
                             let index = workspace.active_index();

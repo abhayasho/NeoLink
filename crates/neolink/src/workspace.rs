@@ -50,6 +50,7 @@ enum Welcome {
     QuickOpen,
     FindInFiles,
     Agent,
+    Palette,
     Recent(std::path::PathBuf),
 }
 
@@ -61,6 +62,7 @@ impl Welcome {
             Welcome::QuickOpen => "Quick Open".into(),
             Welcome::FindInFiles => "Find in Files".into(),
             Welcome::Agent => "Coding Agent".into(),
+            Welcome::Palette => "Show All Commands".into(),
             Welcome::Recent(folder) => format!("Open recent project {}", folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()),
         }
     }
@@ -265,6 +267,10 @@ pub struct Workspace {
     marks: FrameMarks,
     /// Called (on the render thread) when the last tab's program has exited.
     on_empty: Option<Box<dyn Fn() + Send>>,
+    /// Runs a command chosen in the palette (`commands`), in the app.
+    on_command: Option<Box<dyn Fn(String) + Send>>,
+    /// Commands run from the palette, most recent first.
+    recent_commands: Vec<String>,
     /// Quitting was asked for and waits on the "Save changes?" answers.
     quitting: bool,
     hover: Option<usize>,
@@ -370,6 +376,8 @@ impl Workspace {
             selection: 0,
             marks: FrameMarks::default(),
             on_empty: None,
+            on_command: None,
+            recent_commands: Vec::new(),
             quitting: false,
             hover: None,
             signature: 0,
@@ -419,6 +427,10 @@ impl Workspace {
         let label = if self.pdf_label.is_empty() { "PDF".to_string() } else { self.pdf_label.clone() };
         ui.text(&label, footer.x + ui.px(14.0), footer.y + footer.height * 0.5, 10.0, 500, false, theme::TEXT_SECONDARY);
         self.toolbar_buttons.clear();
+    }
+
+    pub fn set_on_command(&mut self, callback: Box<dyn Fn(String) + Send>) {
+        self.on_command = Some(callback);
     }
 
     pub fn set_on_empty(&mut self, callback: Box<dyn Fn() + Send>) {
@@ -1651,6 +1663,12 @@ impl Workspace {
         self.search = Some(crate::search::SearchSheet::new(self.explorer.root(), contents, self.shared.clone()));
     }
 
+    /// Opens the command palette (every command; F1, ⇧⌘P).
+    pub fn open_palette(&mut self) {
+        self.menu = None;
+        self.search = Some(crate::search::SearchSheet::palette(crate::commands::palette(), &self.recent_commands));
+    }
+
     /// Scrolls the search results. Returns `false` if no search is open.
     pub fn scroll_search(&mut self, delta: f32) -> bool {
         match &mut self.search {
@@ -1666,6 +1684,15 @@ impl Workspace {
         match outcome {
             crate::search::Outcome::Stay => {}
             crate::search::Outcome::Close => self.search = None,
+            crate::search::Outcome::Command(command) => {
+                self.search = None;
+                self.recent_commands.retain(|recent| recent != &command);
+                self.recent_commands.insert(0, command.clone());
+                self.recent_commands.truncate(5);
+                if let Some(callback) = &self.on_command {
+                    callback(command);
+                }
+            }
             crate::search::Outcome::Open(path, line) => {
                 self.search = None;
                 self.open_document(&path);
@@ -3158,12 +3185,13 @@ impl Workspace {
         // macOS: Command chords. Elsewhere the chord is Control+Shift, Alt marks the Shift variant and
         // the agent launcher has no shortcut (`main.rs` `shortcut`).
         let mac = cfg!(target_os = "macos");
-        let actions: [(&str, &str, &str, Welcome); 5] = [
+        let actions: [(&str, &str, &str, Welcome); 6] = [
             ("terminal", "New Terminal", if mac { "\u{2318}T" } else { "Ctrl+Shift+T" }, Welcome::NewTerminal),
             ("folder", "Open Project\u{2026}", if mac { "\u{21e7}\u{2318}O" } else { "Ctrl+Shift+Alt+O" }, Welcome::OpenProject),
             ("doc.text.magnifyingglass", "Quick Open", if mac { "\u{2318}P" } else { "Ctrl+Shift+P" }, Welcome::QuickOpen),
             ("magnifyingglass", "Find in Files", if mac { "\u{21e7}\u{2318}F" } else { "Ctrl+Shift+Alt+F" }, Welcome::FindInFiles),
             ("sparkles", "Coding Agent\u{2026}", if mac { "\u{2303}\u{2318}A" } else { "" }, Welcome::Agent),
+            ("command", "Show All Commands", if mac { "\u{21e7}\u{2318}P" } else { "F1" }, Welcome::Palette),
         ];
         let root = self.explorer.root().to_path_buf();
         let recent: Vec<std::path::PathBuf> = self.recent.iter().filter(|path| **path != root).take(5).cloned().collect();
@@ -3237,6 +3265,7 @@ impl Workspace {
             Welcome::QuickOpen => self.open_search(false),
             Welcome::FindInFiles => self.open_search(true),
             Welcome::Agent => self.open_launcher(),
+            Welcome::Palette => self.open_palette(),
             Welcome::Recent(folder) => self.perform(Action::Project(folder)),
         }
     }

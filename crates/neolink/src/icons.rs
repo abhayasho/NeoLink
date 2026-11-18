@@ -44,6 +44,7 @@ pub fn fallback_glyph(name: &str) -> &'static str {
         "photo" => "\u{25a3}",
         "checkmark" | "checkmark.circle" => "\u{2713}",
         "doc.text" => "\u{2630}",
+        "command" => "\u{2318}",
         _ => "\u{25a4}",
     }
 }

@@ -13,6 +13,7 @@ use winit::keyboard::{Key, NamedKey};
 use crate::chrome::{faded, Ui};
 use crate::frame::Shared;
 use crate::icons::IconWeight;
+use crate::commands::PaletteEntry;
 use crate::render::Rect;
 use crate::theme;
 
@@ -46,12 +47,42 @@ pub struct SearchSheet {
     list: Rect,
     frame: Rect,
     done: Rect,
+    /// The command palette: every command, and which are shown in what order for the query.
+    commands: Option<Vec<PaletteEntry>>,
+    shown: Vec<usize>,
+    recent: Vec<String>,
 }
 
 pub enum Outcome {
     Stay,
     Close,
     Open(PathBuf, Option<u64>),
+    /// Run this command (`commands`).
+    Command(String),
+}
+
+/// The palette's commands for `query`, best first: with no query, the recently used (most recent
+/// first) and then menu order; otherwise those whose label spells the query, fewest separate runs of
+/// letters first, then the earliest start, then the shortest label.
+fn rank(entries: &[PaletteEntry], query: &str, recent: &[String]) -> Vec<usize> {
+    if query.trim().is_empty() {
+        let mut order: Vec<usize> = recent.iter().filter_map(|id| entries.iter().position(|entry| &entry.id == id)).collect();
+        let rest: Vec<usize> = (0..entries.len()).filter(|index| !order.contains(index)).collect();
+        order.extend(rest);
+        return order;
+    }
+    let mut scored: Vec<((usize, usize, usize), usize)> = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let positions = subsequence(&entry.label, query);
+            let first = *positions.first()?;
+            let runs = 1 + positions.windows(2).filter(|pair| pair[1] != pair[0] + 1).count();
+            Some(((runs, first, entry.label.len()), index))
+        })
+        .collect();
+    scored.sort();
+    scored.into_iter().map(|(_, index)| index).collect()
 }
 
 /// `rg`, from PATH or the usual install places (a program started from the Finder has a short PATH).
@@ -173,16 +204,53 @@ impl SearchSheet {
                 }
             }
         });
-        SearchSheet { contents, root: root.to_path_buf(), query: String::new(), results, queries, selected: 0, scroll: 0.0, rows: Vec::new(), list: Rect::default(), frame: Rect::default(), done: Rect::default() }
+        SearchSheet { contents, root: root.to_path_buf(), query: String::new(), results, queries, selected: 0, scroll: 0.0, rows: Vec::new(), list: Rect::default(), frame: Rect::default(), done: Rect::default(), commands: None, shown: Vec::new(), recent: Vec::new() }
+    }
+
+    /// The command palette over `entries`; `recent` are command ids, most recently run first.
+    pub fn palette(entries: Vec<PaletteEntry>, recent: &[String]) -> SearchSheet {
+        let (queries, _) = channel::<String>();
+        let shown = rank(&entries, "", recent);
+        SearchSheet {
+            contents: false,
+            root: PathBuf::new(),
+            query: String::new(),
+            results: Arc::new(Mutex::new(Results::default())),
+            queries,
+            selected: 0,
+            scroll: 0.0,
+            rows: Vec::new(),
+            list: Rect::default(),
+            frame: Rect::default(),
+            done: Rect::default(),
+            commands: Some(entries),
+            shown,
+            recent: recent.to_vec(),
+        }
     }
 
     fn query_changed(&mut self) {
         self.selected = 0;
         self.scroll = 0.0;
-        let _ = self.queries.send(self.query.clone());
+        match &self.commands {
+            Some(entries) => self.shown = rank(entries, &self.query, &self.recent),
+            None => {
+                let _ = self.queries.send(self.query.clone());
+            }
+        }
+    }
+
+    fn count(&self) -> usize {
+        if self.commands.is_some() { self.shown.len() } else { self.results.lock().matches.len() }
     }
 
     fn chosen(&self, index: usize) -> Outcome {
+        if let Some(entries) = &self.commands {
+            return match self.shown.get(index).and_then(|&shown| entries.get(shown)) {
+                Some(entry) => Outcome::Command(entry.id.clone()),
+                None => Outcome::Stay,
+            };
+        }
         match self.results.lock().matches.get(index) {
             Some(found) => Outcome::Open(self.root.join(&found.path), found.line),
             None => Outcome::Stay,
@@ -190,7 +258,7 @@ impl SearchSheet {
     }
 
     pub fn key(&mut self, key: &Key, text: Option<&str>) -> Outcome {
-        let count = self.results.lock().matches.len();
+        let count = self.count();
         match key {
             Key::Named(NamedKey::Escape) => return Outcome::Close,
             Key::Named(NamedKey::Enter) => return self.chosen(self.selected),
@@ -264,6 +332,10 @@ impl SearchSheet {
     }
 
     pub fn draw(&mut self, ui: &mut Ui, window: (f32, f32)) {
+        if self.commands.is_some() {
+            self.draw_palette(ui, window);
+            return;
+        }
         let results = self.results.lock();
         ui.fill(Rect::new(0.0, 0.0, window.0, window.1), [0, 0, 0, 90]);
         let pad = ui.px(20.0);
@@ -415,6 +487,115 @@ impl SearchSheet {
     }
 }
 
+impl SearchSheet {
+    /// The command palette: the field, then each command as "Menu: Title" with the letters the query
+    /// matched lit and its shortcut on the right.
+    fn draw_palette(&mut self, ui: &mut Ui, window: (f32, f32)) {
+        let Some(entries) = self.commands.clone() else { return };
+        ui.fill(Rect::new(0.0, 0.0, window.0, window.1), [0, 0, 0, 90]);
+        let pad = ui.px(16.0);
+        let width = ui.px(600.0).min(window.0 - ui.px(40.0));
+        let row_height = ui.px(30.0);
+        let list_height = (row_height * 12.0).min(window.1 - ui.px(220.0)).max(row_height * 3.0);
+        let height = pad + ui.px(28.0) + ui.px(10.0) + list_height + ui.px(8.0 + 1.0 + 9.0 + 13.0) + pad * 0.75;
+        let frame = Rect::new(((window.0 - width) * 0.5).round(), ui.px(60.0), width, height.round());
+        self.frame = frame;
+        ui.shadow(frame, 10.0);
+        ui.rounded(frame, 10.0, theme::EDITOR_BACKGROUND);
+        ui.outline(frame, 10.0, theme::white(0.12));
+        let (left, right) = (frame.x + pad, frame.right() - pad);
+        let line = ui.px(1.0).max(1.0);
+        // The field, with the palette's mark at its start.
+        let field = Rect::new(left, frame.y + pad, right - left, ui.px(28.0));
+        ui.rounded(field, 6.0, theme::rgb(0x1E1E1E));
+        ui.outline(field, 6.0, theme::PRIMARY);
+        let middle = field.y + field.height * 0.5;
+        ui.icon("command", 12.0, IconWeight::Medium, field.x + ui.px(14.0), middle, theme::TEXT_SECONDARY);
+        let text_x = field.x + ui.px(28.0);
+        let caret = if self.query.is_empty() {
+            ui.text("Type a command\u{2026}", text_x, middle, 13.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
+            0.0
+        } else {
+            ui.painter.scene.set_clip(Some(field));
+            let width = ui.text(&self.query, text_x, middle, 13.0, 400, false, theme::TEXT_PRIMARY);
+            ui.painter.scene.set_clip(None);
+            width + line
+        };
+        ui.painter.scene.fill(text_x + caret, middle - ui.px(8.0), line.max(2.0), ui.px(16.0), theme::ACCENT);
+        // Commands.
+        let list = Rect::new(frame.x + ui.px(6.0), field.bottom() + ui.px(10.0), frame.width - ui.px(12.0), list_height);
+        self.list = list;
+        self.rows.clear();
+        let content = self.shown.len() as f32 * row_height;
+        self.scroll = self.scroll.clamp(0.0, (content - list.height).max(0.0));
+        self.selected = self.selected.min(self.shown.len().saturating_sub(1));
+        ui.painter.scene.set_clip(Some(list));
+        let recent_count = if self.query.trim().is_empty() { self.recent.iter().filter(|id| entries.iter().any(|entry| &entry.id == *id)).count() } else { 0 };
+        for (index, &entry_index) in self.shown.iter().enumerate() {
+            let row = Rect::new(list.x, list.y + index as f32 * row_height - self.scroll.round(), list.width, row_height);
+            self.rows.push(row);
+            if row.bottom() < list.y || row.y > list.bottom() {
+                continue;
+            }
+            let entry = &entries[entry_index];
+            if index == self.selected {
+                ui.rounded(row, 6.0, theme::SELECTION);
+            }
+            let middle = row.y + row.height * 0.5;
+            let x = row.x + ui.px(12.0);
+            // "Menu: " dimmed, the title bright; the letters the query matched in the primary color.
+            let category = entry.label.find(": ").map_or(0, |at| at + 2);
+            let shortcut_width = entry.shortcut.as_ref().map_or(0.0, |shortcut| ui.measure(shortcut, 11.5, 400, false) + ui.px(16.0));
+            let tag = if index < recent_count { "recently used" } else { "" };
+            let tag_width = if tag.is_empty() { 0.0 } else { ui.measure(tag, 10.5, 400, false) + ui.px(12.0) };
+            let room = row.right() - ui.px(12.0) - shortcut_width - tag_width - x;
+            let label = ui.fit_middle(&entry.label, room, 13.0, 400, false);
+            let matched = if label == entry.label { subsequence(&label, &self.query) } else { Vec::new() };
+            let characters: Vec<(usize, char)> = label.char_indices().collect();
+            let mut start = 0;
+            while start < characters.len() {
+                let lit = matched.contains(&start);
+                let dim = characters[start].0 < category;
+                let mut end = start + 1;
+                while end < characters.len() && matched.contains(&end) == lit && (characters[end].0 < category) == dim {
+                    end += 1;
+                }
+                let (from, to) = (characters[start].0, characters.get(end).map_or(label.len(), |(offset, _)| *offset));
+                let at = x + if from == 0 { 0.0 } else { ui.measure(&label[..from], 13.0, 400, false) };
+                let color = if lit { theme::rgb(0x7AA7FF) } else if dim { theme::TEXT_SECONDARY } else { theme::TEXT_PRIMARY };
+                ui.text(&label[from..to], at, middle, 13.0, 400, false, color);
+                start = end;
+            }
+            let mut right_edge = row.right() - ui.px(12.0);
+            if let Some(shortcut) = &entry.shortcut {
+                ui.text_right(shortcut, right_edge, middle, 11.5, 400, false, theme::TEXT_SECONDARY);
+                right_edge -= shortcut_width;
+            }
+            if !tag.is_empty() {
+                ui.text_right(tag, right_edge, middle, 10.5, 400, false, faded(theme::rgb(0x7AA7FF), 0.85));
+            }
+        }
+        if self.shown.is_empty() {
+            ui.text("No matching commands", list.x + ui.px(12.0), list.y + ui.px(18.0), 13.0, 400, false, theme::TEXT_SECONDARY);
+        }
+        ui.painter.scene.set_clip(None);
+        if content > list.height {
+            let thumb = (list.height * list.height / content).max(ui.px(24.0));
+            let travel = (list.height - thumb) * self.scroll / (content - list.height);
+            ui.rounded(Rect::new(list.right() - ui.px(3.0), list.y + travel, ui.px(4.0), thumb), 2.0, theme::white(0.16));
+        }
+        // Footer.
+        let separator = list.bottom() + ui.px(8.0);
+        ui.painter.scene.fill(left, separator, right - left, line, theme::SEPARATOR);
+        let y = separator + line + ui.px(9.0 + 6.5);
+        let count = if self.query.trim().is_empty() { format!("{} commands", entries.len()) } else { format!("{} of {} commands", self.shown.len(), entries.len()) };
+        ui.text(&count, left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
+        ui.text_right("\u{2191}\u{2193} to choose \u{b7} Return to run \u{b7} Esc to close", right, y, 10.0, 400, false, faded(theme::TEXT_SECONDARY, 0.8));
+        // The palette has no Done button: a press outside it closes it.
+        self.done = Rect::default();
+    }
+}
+
 /// Which characters of `name` (by index) spell `query` in order, ignoring case: the letters a fuzzy file
 /// match used, preferring runs (a later start that matches more letters in a row wins). Empty when
 /// the query does not fit in the name (it matched folders instead).
@@ -489,6 +670,19 @@ fn match_span(text: &str, query: &str) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn palette_ranks_tight_matches_first_and_recent_commands_when_empty() {
+        let entry = |label: &str, id: &str| PaletteEntry { label: label.into(), id: id.into(), shortcut: None };
+        let entries = vec![entry("File: Save File", "save"), entry("View: Toggle File Browser", "files"), entry("View: Source Control", "git")];
+        // "togfile" spells only "Toggle File Browser".
+        assert_eq!(rank(&entries, "togfile", &[]), vec![1]);
+        assert_eq!(rank(&entries, "source", &[]), vec![2]);
+        // Both spell "file" in one run; the earlier start wins.
+        assert_eq!(rank(&entries, "file", &[]), vec![0, 1]);
+        assert_eq!(rank(&entries, "", &["git".into()]), vec![2, 0, 1]);
+        assert!(rank(&entries, "zzz", &[]).is_empty());
+    }
+
     #[test]
     fn subsequence_prefers_letters_in_a_row() {
         assert_eq!(super::subsequence("workspace.rs", "space"), vec![4, 5, 6, 7, 8]);

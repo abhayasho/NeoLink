@@ -1,9 +1,10 @@
-//! The macOS menu bar, with the Swift app's menus, titles and key equivalents (`WorkspaceCommands`).
-//! A chosen item arrives as a command string: "key:<modifiers>:<character>" runs the same code as the
-//! keyboard shortcut, "editor:<action>" and "repl:<program>" are the Code menu's entries.
+//! The macOS menu bar, built from `commands::menus` (the Swift app's menus, titles and key
+//! equivalents). A chosen item arrives as its command id (see `commands`).
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
+
+use crate::commands::{self, Command, Entry};
 
 fn code(character: char) -> Option<Code> {
     Some(match character {
@@ -31,22 +32,50 @@ fn code(character: char) -> Option<Code> {
     })
 }
 
-/// An item that acts as the shortcut `modifiers` + `character` ("c" command, "s" shift, "x" control).
-fn key(title: &str, modifiers: &str, character: char) -> MenuItem {
-    let mut flags = Modifiers::empty();
-    for modifier in modifiers.chars() {
-        flags |= match modifier {
-            'c' => Modifiers::META,
-            's' => Modifiers::SHIFT,
-            'x' => Modifiers::CONTROL,
-            _ => Modifiers::empty(),
-        };
+/// An item that acts as the shortcut `flags` + `character` ("c" command, "s" shift, "x" control).
+fn item(command: &Command, checked: bool) -> MenuItemKind {
+    let accelerator = command.keys.and_then(|(flags, character)| {
+        let mut modifiers = Modifiers::empty();
+        for flag in flags.chars() {
+            modifiers |= match flag {
+                'c' => Modifiers::META,
+                's' => Modifiers::SHIFT,
+                'x' => Modifiers::CONTROL,
+                _ => Modifiers::empty(),
+            };
+        }
+        code(character).map(|code| Accelerator::new(Some(modifiers), code))
+    });
+    // The terminal panel's keys are not key equivalents; the title names them.
+    let title = match command.id.as_str() {
+        "dock:bottom" => format!("{}  \u{2303}`", command.title),
+        "dock:right" => format!("{}  \u{2303}\u{21e7}`", command.title),
+        _ => command.title.to_string(),
+    };
+    if command.checkable {
+        MenuItemKind::Check(CheckMenuItem::with_id(command.id.as_str(), title, true, checked, accelerator))
+    } else {
+        MenuItemKind::MenuItem(MenuItem::with_id(command.id.as_str(), title, true, accelerator))
     }
-    MenuItem::with_id(format!("key:{modifiers}:{character}"), title, true, code(character).map(|code| Accelerator::new(Some(flags), code)))
 }
 
-fn plain(id: &str, title: &str) -> MenuItem {
-    MenuItem::with_id(id, title, true, None)
+fn append(submenu: &Submenu, entries: &[Entry], pixel_sideways: bool) -> Option<()> {
+    for entry in entries {
+        match entry {
+            Entry::Command(command) => match item(command, command.id == "view:hscroll" && pixel_sideways) {
+                MenuItemKind::Check(check) => submenu.append(&check).ok()?,
+                MenuItemKind::MenuItem(plain) => submenu.append(&plain).ok()?,
+                _ => {}
+            },
+            Entry::Separator => submenu.append(&PredefinedMenuItem::separator()).ok()?,
+            Entry::Submenu(title, entries) => {
+                let inner = Submenu::new(*title, true);
+                append(&inner, entries, pixel_sideways)?;
+                submenu.append(&inner).ok()?;
+            }
+        }
+    }
+    Some(())
 }
 
 /// Builds the menu bar and installs it. The returned menu must be kept alive.
@@ -54,86 +83,38 @@ pub fn install(pixel_sideways: bool, on_command: impl Fn(String) + Send + Sync +
     let separator = PredefinedMenuItem::separator;
     let menu = Menu::new();
     let app = Submenu::new("NeoLink", true);
+    let quit = item(&Command { id: "key:c:q".into(), title: "Quit NeoLink", keys: Some(("c", 'q')), in_palette: true, checkable: false }, false);
+    let MenuItemKind::MenuItem(quit) = quit else { return None };
     app.append_items(&[
         &PredefinedMenuItem::about(Some("About NeoLink"), None),
+        &plain("help:updates", "Check for Updates\u{2026}"),
         &separator(),
         &PredefinedMenuItem::hide(Some("Hide NeoLink")),
         &PredefinedMenuItem::hide_others(Some("Hide Others")),
         &PredefinedMenuItem::show_all(Some("Show All")),
         &separator(),
-        &key("Quit NeoLink", "c", 'q'),
+        &quit,
     ])
     .ok()?;
-    let file = Submenu::new("File", true);
-    file.append_items(&[
-        &key("New Local Tab", "c", 't'),
-        &key("New SSH Connection\u{2026}", "cs", 'n'),
-        &key("Launch Coding Agent\u{2026}", "cx", 'a'),
-        &separator(),
-        &key("Open File\u{2026}", "c", 'o'),
-        &key("Open Project\u{2026}", "cs", 'o'),
-        &key("Save File", "c", 's'),
-        &key("Quick Open\u{2026}", "c", 'p'),
-        &separator(),
-        &key("Close Tab", "c", 'w'),
-        &key("Close Window", "cs", 'w'),
-    ])
-    .ok()?;
-    let edit = Submenu::new("Edit", true);
-    edit.append_items(&[
-        &key("Undo", "c", 'z'),
-        &key("Redo", "cs", 'z'),
-        &separator(),
-        &plain("editor:cut", "Cut"),
-        &key("Copy", "c", 'c'),
-        &key("Paste", "c", 'v'),
-        &key("Select All", "c", 'a'),
-        &separator(),
-        &key("Find\u{2026}", "c", 'f'),
-        &key("Find in Files\u{2026}", "cs", 'f'),
-    ])
-    .ok()?;
-    let code_menu = Submenu::new("Code", true);
-    for (title, action) in [("Go to Definition", "definition"), ("Find References", "references"), ("Show Documentation", "hover"), ("Rename Symbol\u{2026}", "rename"), ("Code Actions\u{2026}", "codeAction"), ("Format Document", "format"), ("Toggle Fold", "fold"), ("Fold All", "foldAll"), ("Unfold All", "unfoldAll"), ("Toggle Inlay Hints", "inlayHints")] {
-        code_menu.append(&plain(&format!("editor:{action}"), title)).ok()?;
+    menu.append(&app).ok()?;
+    for described in commands::menus() {
+        let submenu = Submenu::new(described.title, true);
+        append(&submenu, &described.entries, pixel_sideways)?;
+        match described.title {
+            "Window" => {
+                submenu.append_items(&[&PredefinedMenuItem::maximize(Some("Zoom")), &separator(), &PredefinedMenuItem::bring_all_to_front(Some("Bring All to Front"))]).ok()?;
+                submenu.set_as_windows_menu_for_nsapp();
+            }
+            "Help" => submenu.set_as_help_menu_for_nsapp(),
+            _ => {}
+        }
+        menu.append(&submenu).ok()?;
     }
-    code_menu.append(&separator()).ok()?;
-    let repl = Submenu::new("Open REPL", true);
-    for (title, program) in [("Python", "python3"), ("JavaScript", "node"), ("Swift", "swift"), ("Ruby", "irb"), ("Lua", "lua")] {
-        repl.append(&plain(&format!("repl:{program}"), title)).ok()?;
-    }
-    code_menu.append(&repl).ok()?;
-    let view = Submenu::new("View", true);
-    view.append_items(&[
-        &key("Increase Text Size", "c", '+'),
-        &key("Decrease Text Size", "c", '-'),
-        &key("Reset Text Size", "c", '0'),
-        &separator(),
-        &plain("view:renderer", "Renderer Information\u{2026}"),
-        &plain("view:monitor", "Performance Monitor\u{2026}"),
-        &CheckMenuItem::with_id("view:hscroll", "Pixel-Smooth Sideways Scrolling (Preview)", true, pixel_sideways, None),
-        &separator(),
-        &key("Toggle Connections Sidebar", "cx", 's'),
-        &key("Toggle File Browser", "cs", 'e'),
-        &key("Toggle Agent Panel", "cx", 'b'),
-        &key("Source Control\u{2026}", "cs", 'g'),
-        &plain("dock:bottom", "Terminal Under Code  \u{2303}`"),
-        &plain("dock:right", "Terminal Beside Code  \u{2303}\u{21e7}`"),
-        &separator(),
-        &key("Next Tab", "cs", ']'),
-        &key("Previous Tab", "cs", '['),
-        &separator(),
-        &key("Toggle Full Screen", "cx", 'f'),
-    ])
-    .ok()?;
-    let window = Submenu::new("Window", true);
-    window.append_items(&[&key("Minimize", "c", 'm'), &PredefinedMenuItem::maximize(Some("Zoom")), &separator(), &PredefinedMenuItem::bring_all_to_front(Some("Bring All to Front"))]).ok()?;
-    let help = Submenu::new("Help", true);
-    help.append_items(&[&plain("help:issue", "Report an Issue\u{2026}"), &plain("help:releases", "Release Notes"), &separator(), &plain("help:crashes", "Show Crash Reports")]).ok()?;
-    menu.append_items(&[&app, &file, &edit, &code_menu, &view, &window, &help]).ok()?;
     menu.init_for_nsapp();
-    window.set_as_windows_menu_for_nsapp();
-    help.set_as_help_menu_for_nsapp();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| on_command(event.id.0.clone())));
     Some(menu)
+}
+
+fn plain(id: &str, title: &str) -> MenuItem {
+    MenuItem::with_id(id, title, true, None)
 }
