@@ -4,7 +4,7 @@ What changed in each NeoLink release. Downloads and full notes are on the
 [releases page](https://github.com/abhayasho/NeoLink/releases); each version's notes are also in
 [`docs/releases`](docs/releases).
 
-## Unreleased
+## 2.1.0 (2026-11-18)
 
 - **Welcome screen.** A window with no tabs shows the logo and version, the main ways to start (new
   terminal, open project, Quick Open, Find in Files, coding agent) with their shortcuts, and recent
