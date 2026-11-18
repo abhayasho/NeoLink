@@ -271,6 +271,9 @@ pub struct Workspace {
     on_command: Option<Box<dyn Fn(String) + Send>>,
     /// Commands run from the palette, most recent first.
     recent_commands: Vec<String>,
+    /// Text an input method is composing (Chinese, Japanese, Korean...), drawn at the caret until it
+    /// is committed.
+    preedit: String,
     /// Quitting was asked for and waits on the "Save changes?" answers.
     quitting: bool,
     hover: Option<usize>,
@@ -378,6 +381,7 @@ impl Workspace {
             on_empty: None,
             on_command: None,
             recent_commands: Vec::new(),
+            preedit: String::new(),
             quitting: false,
             hover: None,
             signature: 0,
@@ -718,6 +722,50 @@ impl Workspace {
             return self.agent.terminal();
         }
         self.active()
+    }
+
+    /// The text an input method is composing (empty: none).
+    pub fn set_preedit(&mut self, text: &str) -> bool {
+        if self.preedit == text {
+            return false;
+        }
+        self.preedit = text.to_string();
+        true
+    }
+
+    /// Where the keyboard's text goes on screen (device pixels): the caret of the terminal, editor or
+    /// built-in editor that has the keyboard. `None` while a sheet, menu or text field has it.
+    pub fn ime_caret(&mut self) -> Option<Rect> {
+        let modal = self.menu.is_some() || self.creation.is_some() || self.search.is_some() || self.git.is_some() || self.closing.is_some() || self.launcher.is_some() || self.recent_sheet.is_some() || self.connections.sheet_is_open();
+        if modal || self.explorer.filter_focused || self.connections.search_focused || self.agent.composing() {
+            return None;
+        }
+        if self.keys_go_to_editor() {
+            let path = self.active_document()?;
+            if let Some(native) = self.native.get(&path) {
+                return native.caret;
+            }
+            return self.editor.as_ref().filter(|editor| editor.shows(&path)).and_then(|editor| editor.caret);
+        }
+        self.keyboard_terminal().and_then(|terminal| terminal.caret)
+    }
+
+    /// The composition, over the caret: the text on the editor's background, underlined.
+    fn draw_preedit(&mut self, painter: &mut Painter) {
+        if self.preedit.is_empty() {
+            return;
+        }
+        let Some(caret) = self.ime_caret() else { return };
+        let text = self.preedit.clone();
+        let mut ui = Ui { painter, scale: self.scale };
+        let points = self.font_points;
+        // Whole cells, so the text it covers is hidden cleanly rather than cut through a letter.
+        let measured = ui.measure(&text, points, 400, true) + ui.px(2.0);
+        let width = (measured / caret.width).ceil().max(1.0) * caret.width;
+        ui.fill(Rect::new(caret.x, caret.y, width, caret.height), theme::EDITOR_BACKGROUND);
+        ui.text(&text, caret.x + ui.px(1.0), caret.y + caret.height * 0.5, points, 400, true, theme::TEXT_PRIMARY);
+        let line = ui.px(1.0).max(1.0);
+        ui.painter.scene.fill(caret.x, caret.bottom() - line * 2.0, measured, line, theme::ACCENT);
     }
 
     /// Key presses are the editor's (Neovim notation) rather than a terminal's.
@@ -3544,6 +3592,7 @@ impl Content for Workspace {
             None => {}
         }
         self.draw_notice(painter);
+        self.draw_preedit(painter);
         self.draw_footer(painter);
         self.window = (frame.size.0 as f32, frame.size.1 as f32);
         let mut next = next;
@@ -3700,6 +3749,7 @@ impl Content for Workspace {
         }
         signature.add(self.recent.len() as u64 ^ (self.recent_sheet.is_some() as u64) << 20);
         signature.add(self.tabs.is_empty() as u64).add(self.welcome_hover.map_or(u64::MAX, |index| index as u64));
+        signature.text(&self.preedit);
         signature.add(self.explorer_points.to_bits() as u64).add(self.agent.signature()).add(self.dock.signature());
         if let Some(launcher) = &self.launcher {
             signature.add(0x4C41554E).add(launcher.signature());

@@ -39,6 +39,8 @@ pub enum Effect {
 }
 
 pub struct NativeEditor {
+    /// Where the last frame drew the caret (device pixels), for an input method's candidate window.
+    pub caret: Option<Rect>,
     pub path: String,
     lines: Vec<String>,
     crlf: bool,
@@ -124,6 +126,7 @@ impl NativeEditor {
         let body = text.strip_suffix('\n').unwrap_or(&text);
         let lines: Vec<String> = body.split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line).to_string()).collect();
         Ok(NativeEditor {
+            caret: None,
             path: path.to_string(),
             saved: lines.clone(),
             lines,
@@ -567,6 +570,7 @@ impl NativeEditor {
         let digits = (self.lines.len().max(1) as f64).log10().floor() as usize + 1;
         self.gutter = ((digits.max(3) + 2) as f32 * cell.width).round();
         painter.scene.set_clip(Some(rect));
+        self.caret = None;
         let first = (scroll / cell.height).floor() as usize;
         let count = (rect.height / cell.height).ceil() as usize + 1;
         let selection = self.selection();
@@ -610,6 +614,7 @@ impl NativeEditor {
             if line == self.cursor.line && focused && !self.read_only {
                 let x = rect.x + self.gutter + display_column(text, self.cursor.column) as f32 * cell.width;
                 painter.scene.fill(x, y, (cell.width / 6.0).round().max(2.0), cell.height, theme::ACCENT);
+                self.caret = Some(Rect::new(x, y, cell.width, cell.height));
             }
         }
         painter.scene.set_clip(None);
@@ -713,6 +718,19 @@ mod tests {
         editor.redo();
         editor.redo();
         assert_eq!(editor.text(), "one!\n\ttwo\n\tx");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn composed_text_goes_in_whole_and_undoes_in_one_step() {
+        let path = scratch("composed.txt", b"ab\n");
+        let mut editor = NativeEditor::open(&path, cell()).unwrap();
+        press(&mut editor, NamedKey::ArrowRight);
+        // An input method commits several characters at once, as the text of one key.
+        editor.key(&Key::Character("日本語".into()), Some("日本語"), ModifiersState::empty());
+        assert_eq!(editor.text(), "a日本語b");
+        editor.undo();
+        assert_eq!(editor.text(), "ab");
         let _ = std::fs::remove_file(&path);
     }
 

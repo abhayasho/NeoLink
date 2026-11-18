@@ -14,6 +14,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct Editor {
+    /// Where the last frame drew the cursor (device pixels), for an input method's candidate window.
+    pub caret: Option<Rect>,
     client: Client,
     grid: (usize, usize),
     next_token: u64,
@@ -134,7 +136,7 @@ impl Editor {
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_total: 0, recentered: true, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), pixel_sideways: false, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { caret: None, client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_total: 0, recentered: true, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), pixel_sideways: false, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {
@@ -633,6 +635,9 @@ impl Editor {
             }
             paint_row(painter, &mut scratch, &screen, row, index, cell, focused, true, rect.x, y);
         }
+        let (cursor_row, cursor_column) = screen.cursor;
+        let cursor_y = if smooth && cursor_row == text_rows { rect.y + visible as f32 * cell.height } else { rect.y + cursor_row as f32 * cell.height - shift };
+        self.caret = (cursor_row < screen.rows.len() && cursor_y >= rect.y && cursor_y + cell.height <= rect.bottom() + 0.5).then(|| Rect::new(rect.x + cursor_column as f32 * cell.width, cursor_y, cell.width, cell.height));
         self.scratch = scratch;
         painter.scene.set_clip(None);
     }

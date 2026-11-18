@@ -124,6 +124,8 @@ pub enum ScrollPhase {
 
 pub struct Terminal {
     pub term: Arc<FairMutex<Term<Listener>>>,
+    /// Where the last frame drew the cursor (device pixels), for an input method's candidate window.
+    pub caret: Option<Rect>,
     notifier: Notifier,
     listener: Listener,
     columns: usize,
@@ -310,6 +312,7 @@ impl Terminal {
         };
         Ok(Terminal {
             term,
+            caret: None,
             notifier: Notifier(sender),
             listener,
             columns,
@@ -866,6 +869,8 @@ impl Terminal {
         let show_cursor = term.mode().contains(TermMode::SHOW_CURSOR);
         let cursor_shape = term.cursor_style().shape;
         let first_row = if fraction > 0.0 { -1 } else { 0 };
+        let cursor_y = rect.y + (cursor.line.0 + offset) as f32 * cell.height + fraction + program_offset;
+        self.caret = (show_cursor && cursor_y >= rect.y && cursor_y + cell.height <= rect.bottom() + 0.5).then(|| Rect::new(rect.x + cursor.column.0 as f32 * cell.width, cursor_y, cell.width, cell.height));
         let mut scratch = std::mem::take(&mut self.scratch);
         let mut resolved = std::mem::take(&mut self.resolved);
         // While nothing was written to the grid, a line's key is what it was in the last frame: a

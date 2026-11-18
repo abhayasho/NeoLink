@@ -155,6 +155,37 @@ impl App {
     }
 
     /// Bytes for the active pane (typed, pasted or injected).
+    /// Text an input method committed: where typed text would go (a text field or menu, the
+    /// built-in editor, Neovim, or the terminal with the keyboard).
+    fn commit_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let key = Key::Character(text.into());
+        if self.with_workspace(|workspace, _| workspace.key_for_chrome(&key, Some(text))) == Some(true) {
+            return;
+        }
+        if self.with_workspace(|workspace, _| workspace.native_editor().is_some()) == Some(true) {
+            self.with_workspace(|workspace, _| workspace.native_key(&key, Some(text), ModifiersState::empty()));
+            return;
+        }
+        if self.with_workspace(|workspace, _| workspace.keys_go_to_editor()) == Some(true) {
+            // Neovim's key notation: "<" is written <lt>.
+            let keys = text.replace('<', "<lt>");
+            self.with_workspace(|workspace, _| workspace.editor_input(&keys));
+            return;
+        }
+        self.write(text.as_bytes().to_vec());
+    }
+
+    /// Puts the input method's candidate window beside the caret.
+    fn place_ime_window(&self) {
+        let Some(window) = &self.window else { return };
+        if let Some(Some(caret)) = self.with_workspace(|workspace, _| workspace.ime_caret()) {
+            window.set_ime_cursor_area(winit::dpi::PhysicalPosition::new(caret.x as f64, caret.y as f64), winit::dpi::PhysicalSize::new(caret.width as f64, caret.height as f64));
+        }
+    }
+
     fn write(&self, bytes: Vec<u8>) {
         // No frame for the key itself: the frame belongs to the program's answer, which arrives a
         // moment later and would otherwise find this refresh already taken.
@@ -577,6 +608,10 @@ impl App {
             self.access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, self.proxy.clone()));
         }
         window.set_visible(true);
+        // Input methods (Chinese, Japanese, Korean, dead keys): composed text arrives as Ime events.
+        if self.spike.is_none() {
+            window.set_ime_allowed(true);
+        }
         let gpu = gpu::Gpu::new().unwrap_or_else(|error| fatal(&format!("NeoLink needs a graphics card with Metal, Direct3D 12 or Vulkan support.\n\n{error}")));
         #[cfg(target_os = "macos")]
         let presenter = present::Presenter::new(&gpu, &window).unwrap_or_else(|error| fatal(&format!("NeoLink could not draw to its window.\n\n{error}")));
@@ -770,6 +805,15 @@ impl ApplicationHandler<UserEvent> for App {
                     // A menu bar command by its identifier, e.g. "command:key:c:a".
                     self.menu_command(&name["command:".len()..], event_loop);
                 }
+                // An input method's events, for testing composition without a keyboard.
+                Injected::Control(name) if name.starts_with("ime-preedit:") => {
+                    self.with_workspace(|workspace, _| workspace.set_preedit(&name["ime-preedit:".len()..]));
+                    self.place_ime_window();
+                }
+                Injected::Control(name) if name.starts_with("ime-commit:") => {
+                    self.with_workspace(|workspace, _| workspace.set_preedit(""));
+                    self.commit_text(&name["ime-commit:".len()..]);
+                }
                 Injected::Control(name) => {
                     self.with_workspace(|workspace, _| {
                         if name == "dock-bottom" || name == "dock-right" {
@@ -932,10 +976,31 @@ impl ApplicationHandler<UserEvent> for App {
                 shared.invalidate();
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::Ime(ime) => {
+                shared.note_input();
+                match ime {
+                    winit::event::Ime::Preedit(text, _) => {
+                        if self.with_workspace(|workspace, _| workspace.set_preedit(&text)) == Some(true) {
+                            shared.invalidate();
+                        }
+                    }
+                    winit::event::Ime::Commit(text) => {
+                        self.with_workspace(|workspace, _| workspace.set_preedit(""));
+                        self.commit_text(&text);
+                        shared.invalidate();
+                    }
+                    winit::event::Ime::Enabled | winit::event::Ime::Disabled => {
+                        self.with_workspace(|workspace, _| workspace.set_preedit(""));
+                    }
+                }
+                self.place_ime_window();
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
                     return;
                 }
+                // An input method that starts composing with this key asks where the caret is.
+                self.place_ime_window();
                 if self.shortcut(&event.logical_key, event_loop) {
                     return;
                 }
