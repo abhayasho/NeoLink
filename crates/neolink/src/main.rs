@@ -32,6 +32,7 @@ mod search;
 mod settings;
 mod spike;
 mod term;
+mod update;
 mod text;
 mod theme;
 mod workspace;
@@ -57,6 +58,8 @@ enum UserEvent {
     Injected(Injected),
     /// A command was chosen (the menu bar or the command palette; see `commands`).
     Command(String),
+    /// Help → Check for Updates answered.
+    Update(update::Found),
     /// The workspace wants the native views (PDFs) placed or commanded.
     Layout,
     SpikeChange,
@@ -337,6 +340,11 @@ impl App {
                 let _ = std::fs::create_dir_all(&folder);
                 agents::open_link(&folder.to_string_lossy());
             }
+        } else if command == "help:updates" {
+            let proxy = self.proxy.clone();
+            update::check(move |found| {
+                let _ = proxy.send_event(UserEvent::Update(found));
+            });
         } else if command == "help:releases" {
             agents::open_link("https://github.com/abhayasho/NeoLink/releases");
         }
@@ -833,6 +841,7 @@ impl ApplicationHandler<UserEvent> for App {
                 Injected::Finished => event_loop.exit(),
             },
             UserEvent::Command(command) => self.menu_command(&command, event_loop),
+            UserEvent::Update(found) => show_update(found),
             UserEvent::Layout => self.place_native_views(),
             UserEvent::SpikeChange => {
                 if let Some(shared) = &self.shared {
@@ -1072,6 +1081,33 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(shared) = &self.shared {
             shared.state.lock().quit = true;
             shared.nudge();
+        }
+    }
+}
+
+/// The answer to Help → Check for Updates, in the system's dialog.
+fn show_update(found: update::Found) {
+    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+    let current = env!("CARGO_PKG_VERSION");
+    eprintln!("update check: {found:?}");
+    match found {
+        update::Found::Newer(version, page) => {
+            let how = if cfg!(target_os = "macos") { "Download it from the release page, or quit NeoLink and run the install command from the README." } else { "Download it from the release page and extract it over this folder." };
+            let answer = MessageDialog::new()
+                .set_level(MessageLevel::Info)
+                .set_title("A new version of NeoLink is available")
+                .set_description(format!("NeoLink {version} is available; you have {current}.\n\n{how}"))
+                .set_buttons(MessageButtons::OkCancelCustom("Download".into(), "Later".into()))
+                .show();
+            if matches!(&answer, MessageDialogResult::Ok) || matches!(&answer, MessageDialogResult::Custom(label) if label == "Download") {
+                agents::open_link(&page);
+            }
+        }
+        update::Found::UpToDate => {
+            MessageDialog::new().set_level(MessageLevel::Info).set_title("NeoLink is up to date").set_description(format!("NeoLink {current} is the newest version.")).set_buttons(MessageButtons::Ok).show();
+        }
+        update::Found::Failed(reason) => {
+            MessageDialog::new().set_level(MessageLevel::Warning).set_title("Could not check for updates").set_description(format!("{reason}\n\nCheck your connection, or see the releases page: {}", update::RELEASES)).set_buttons(MessageButtons::Ok).show();
         }
     }
 }

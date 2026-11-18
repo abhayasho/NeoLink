@@ -23,7 +23,9 @@ Knowing this helps judge a report's impact:
   overwrite a file that changed on disk. Remote previews over SFTP are read-only.
 - **Programs it starts.** Your shell, `ssh`, Neovim, Git, ripgrep, language servers and coding agents
   you choose, all with your own permissions. Coding agents act through their own permission prompts.
-- **Network.** NeoLink itself makes no network connections: no telemetry, no update checks. SSH,
-  agents and language servers connect where you point them. The installer downloads the release from
+- **Network.** NeoLink makes no network connections on its own: no telemetry and no automatic
+  update checks. **Help → Check for Updates** asks GitHub's API for the latest release (through the
+  system's `curl`, over HTTPS) only when you choose it. SSH, agents and language servers connect
+  where you point them. The installer downloads the release from
   GitHub and checks its SHA-256 and signature.
 - **Crash reports** stay on your computer (`~/Library/Logs/NeoLink`, `%LOCALAPPDATA%\NeoLink\Logs`).
