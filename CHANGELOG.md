@@ -4,6 +4,18 @@ What changed in each NeoLink release. Downloads and full notes are on the
 [releases page](https://github.com/abhayasho/NeoLink/releases); each version's notes are also in
 [`docs/releases`](docs/releases).
 
+## Unreleased
+
+- **Command palette.** ⇧⌘P or F1 (Ctrl+Shift+Alt+P on Windows) lists every command with its
+  shortcut; type a few letters of it and press Return. Recently used commands come first. On Windows,
+  which has no menu bar, it reaches every command, including those with no shortcut there.
+- **Your files reopen.** NeoLink reopens the files that were open when it last quit, and shows the
+  same tab (unless you name files or a folder on the command line).
+- **Check for Updates** (Help menu, application menu or palette) asks GitHub for the latest release
+  only when you choose it, and offers to open its page.
+- **Intel Macs.** The macOS download is now a universal app for Apple silicon and Intel
+  (`NeoLink-macos-universal.zip`), and the installer accepts Intel Macs.
+
 ## 2.1.0 (2026-11-18)
 
 - **Welcome screen.** A window with no tabs shows the logo and version, the main ways to start (new

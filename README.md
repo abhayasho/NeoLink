@@ -48,13 +48,14 @@ brew install pyright typescript typescript-language-server   # optional language
 - **Terminal under or beside the code.** **⌃`** docks a terminal panel under the editor, **⌃⇧`** beside it; several shells, resizable.
 - **Code editor.** One shared Neovim engine drawn natively, with pixel-smooth scrolling, instant switching between files, syntax highlighting, completion, diagnostics, go to definition, references, rename, code actions, formatting and folding through your installed language servers. **Run** a file or open a REPL from the **Code** menu. Without Neovim, a built-in editor with undo, find and safe saving takes over.
 - **Explorer.** Project tree or Folder List, Git colors and badges, error counts from open files, filter, create, rename, Trash, copy paths, drag files in to copy them, **Follow terminal**, and live updates when files change on disk.
+- **Command palette.** **⇧⌘P** or **F1** finds any command by a few of its letters and shows its shortcut; on Windows it reaches every command.
 - **Search.** **⌘P** fuzzy file search and **⇧⌘F** Find in Files.
 - **Source Control.** **⇧⌘G** shows diffs, stages and unstages files, commits, creates and switches branches, and previews stashes, using your Git identity and hooks.
 - **SSH and SFTP.** Saved connections with passwords in the Keychain (macOS) or Credential Manager (Windows), and a remote file browser over the SSH tab's own connection: browse, create, rename, delete, upload and download.
 - **Coding agents.** Run Claude Code or another CLI agent in a terminal panel, or hold a native ACP conversation with streaming replies, tool previews, permission prompts and modes. [Agent guide](docs/AGENT_GUIDE.md).
 - **PDFs** open in tabs on macOS (Apple's PDF view, with page and zoom controls) and in your system viewer on Windows.
 - **Accessibility.** Screen readers (VoiceOver, Narrator) can read and operate the toolbar, tabs, file tree and the text of the terminal or editor.
-- **Looks after itself.** Remembers your project, recent projects, panel sizes, text size and window position; **View → Performance Monitor** shows frame timing live. If it ever crashes, it keeps a report on your computer and tells you on the next launch; nothing is sent anywhere.
+- **Looks after itself.** Remembers your project, recent projects, open files, panel sizes, text size and window position; **Help → Check for Updates** tells you when a new version is out; **View → Performance Monitor** shows frame timing live. If it ever crashes, it keeps a report on your computer and tells you on the next launch; nothing is sent anywhere.
 
 ## Keyboard shortcuts
 
