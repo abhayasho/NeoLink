@@ -272,6 +272,16 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
     let mut scheduled: Option<f64> = None;
     // `NEOLINK_CAPTURE=file.png`: write the first frame built after `NEOLINK_CAPTURE_AFTER` seconds
     // (default 4) as an image, and quit.
+    // `NEOLINK_RECORD=folder`: every frame whose content changed is also written there as a PNG
+    // (frame-0001.png, ...), from `NEOLINK_RECORD_FROM` seconds after launch, at most
+    // `NEOLINK_RECORD_COUNT` of them. For finding frames that should not have been shown (flicker);
+    // writing them slows the frame loop, so timing measured meanwhile means nothing.
+    let record = std::env::var_os("NEOLINK_RECORD").map(std::path::PathBuf::from);
+    let record_from = env_number("NEOLINK_RECORD_FROM", 0.0);
+    let record_count = env_number("NEOLINK_RECORD_COUNT", 400.0) as u32;
+    let mut recorded = 0u32;
+    // `NEOLINK_RECORD_FAST=1`: append raw gray frames to one file instead of writing PNGs.
+    let record_fast = std::env::var("NEOLINK_RECORD_FAST").as_deref() == Ok("1");
     let capture = std::env::var_os("NEOLINK_CAPTURE").map(|path| (std::path::PathBuf::from(path), env_number("NEOLINK_CAPTURE_AFTER", 4.0)));
     let started_at = clock::now();
     let mut force_present = true;
@@ -391,6 +401,33 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
         let again = built.next;
         stages[0] = ((clock::now() - build_started) * 1000.0) as f32;
         shared.build_cost.store((stages[0] as f64).to_bits(), Ordering::Relaxed);
+        if let Some(folder) = &record {
+            if built.changed && recorded < record_count && clock::now() - started_at >= record_from {
+                recorded += 1;
+                if record_fast {
+                    // Half width, gray, appended raw (no image encoding): fast enough to keep the
+                    // frame rate, so the sequence is what the screen showed.
+                    if let Ok((width, height, pixels)) = crate::capture::read_pixels(&gpu, &mut renderer, &scene, size, background) {
+                        // Every row (motion is measured in whole device pixels), every other column.
+                        let (half_width, half_height) = (width / 2, height);
+                        let mut gray = Vec::with_capacity((half_width * half_height) as usize);
+                        for y in 0..half_height as usize {
+                            let row = y * width as usize * 4;
+                            for x in 0..half_width as usize {
+                                let i = row + x * 2 * 4;
+                                gray.push(((pixels[i] as u16 + pixels[i + 1] as u16 + pixels[i + 2] as u16) / 3) as u8);
+                            }
+                        }
+                        append_fast_frame(folder, half_width, half_height, display, &gray);
+                    }
+                } else {
+                    let path = folder.join(format!("frame-{recorded:04}.png"));
+                    if let Err(error) = crate::capture::write_png(&gpu, &mut renderer, &scene, size, background, &path) {
+                        eprintln!("record failed: {error}");
+                    }
+                }
+            }
+        }
         if let Some((path, after)) = &capture {
             if clock::now() - started_at >= *after {
                 match crate::capture::write_png(&gpu, &mut renderer, &scene, size, background, path) {
@@ -458,4 +495,13 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
             Next::At(at) => scheduled = Some(scheduled.map_or(at, |earlier: f64| earlier.min(at))),
         }
     }
+}
+
+/// Appends a frame recorded by `NEOLINK_RECORD_FAST` to `frames.raw`: a header line
+/// `width height display-time`, then `width * height` gray bytes.
+fn append_fast_frame(folder: &std::path::Path, width: u32, height: u32, display: f64, gray: &[u8]) {
+    use std::io::Write;
+    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(folder.join("frames.raw")) else { return };
+    let _ = writeln!(file, "{width} {height} {display:.6}");
+    let _ = file.write_all(gray);
 }

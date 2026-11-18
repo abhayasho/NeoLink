@@ -55,5 +55,16 @@ Control, ACP and terminal coding agents. Versions 1.x were a Swift app; that cod
   Check `visibleTimingValid` and `displayPath` first: a locked screen or hidden window presents nothing,
   and macOS's composited state adds about two refreshes to every app. Judge smoothness by uneven frames
   and jerk, not by lag alone.
+- The scroll benchmark reports where the app *meant* to draw, not the pixels. To see what reached the
+  screen, record frames: `NEOLINK_RECORD=<folder> NEOLINK_RECORD_FAST=1` appends every changed frame
+  (half width, gray) to `frames.raw` without slowing the frame loop much (`NEOLINK_RECORD_FROM`,
+  `NEOLINK_RECORD_COUNT`); without `_FAST` it writes PNGs (slow: frames end up 100-300 ms apart).
+  Measure the text's motion between frames from the pixels; a stall followed by a jump is what users call
+  flicker. `NEOLINK_DEBUG_SCROLL_CHECK=1` logs editor frames whose rows do not match Neovim's top line and
+  frames where the scroll offset ran past the hidden rows (Neovim answering too late).
+- Scroll smoothing: a new event takes over the unreleased rest of the previous spread in the same
+  direction (side-by-side spreads released two events in one frame and almost nothing in the next;
+  queuing them instead added ~30 ms of lag to slow scrolling). The editor keeps Neovim's window
+  ahead in the direction of travel (8 hidden rows) and re-centers it at rest.
 - Settings and saved connections are not read or written during benchmarks/captures unless
   `NEOLINK_SETTINGS_FILE` / `NEOLINK_SESSIONS_FILE` name files.

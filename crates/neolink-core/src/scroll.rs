@@ -127,10 +127,24 @@ impl ScrollSmoother {
             if duration <= period {
                 step += amount;
             } else {
+                // A new event in the same direction takes over what is left of the one still being
+                // released, and spreads both from this frame. Two spreads released side by side moved
+                // two events' distance in one frame and almost nothing in the next whenever a report came
+                // a little early (recorded frames: steps of 62 then 10 pixels among steps of 35). Queuing
+                // them instead added up to a report interval of delay to slow scrolling.
+                let mut amount = amount;
+                if let Some(last) = self.spreads.back_mut().filter(|last| last.amount.signum() == amount.signum() && last.released != last.amount) {
+                    amount += last.amount - last.released;
+                    last.amount = last.released;
+                }
                 self.spreads.push_back(Spread { amount, released: 0.0, start: frame_time, duration });
             }
         }
         for spread in self.spreads.iter_mut() {
+            // Finished, or taken over by a later spread: nothing more to release.
+            if spread.released == spread.amount {
+                continue;
+            }
             let fraction = (frame_time - spread.start + period) / spread.duration;
             // Frame times are not exact multiples of the period: the last part is not left for a
             // frame of its own.
@@ -146,14 +160,31 @@ impl ScrollSmoother {
     /// changing anything: used to find the next frame in which the content will actually move.
     pub fn peek(&self, frame_time: f64, period: f64) -> f64 {
         let mut step = 0.0;
-        for (amount, duration) in &self.pending {
-            // Not yet anchored: its first frame would be this one.
-            step += if *duration <= period { *amount } else { amount * (period / duration).min(1.0) };
-        }
-        for spread in &self.spreads {
+        let release = |spread: &Spread| {
+            if spread.released == spread.amount {
+                return 0.0;
+            }
             let fraction = (frame_time - spread.start + period) / spread.duration;
             let target = if fraction >= 1.0 - 1e-6 { spread.amount } else { spread.amount * fraction.max(0.0) };
-            step += target - spread.released;
+            target - spread.released
+        };
+        // Not yet anchored: each would start in this frame, taking over what is left of the spread in
+        // the same direction before it (see `advance`).
+        let mut spreads: Vec<Spread> = self.spreads.iter().copied().collect();
+        for (amount, duration) in &self.pending {
+            if *duration <= period {
+                step += amount;
+            } else {
+                let mut amount = *amount;
+                if let Some(last) = spreads.last_mut().filter(|last| last.amount.signum() == amount.signum() && last.released != last.amount) {
+                    amount += last.amount - last.released;
+                    last.amount = last.released;
+                }
+                spreads.push(Spread { amount, released: 0.0, start: frame_time, duration: *duration });
+            }
+        }
+        for spread in &spreads {
+            step += release(spread);
         }
         step
     }
@@ -425,6 +456,52 @@ mod tests {
         assert!((smoother.advance(time, P) - expected).abs() < 1e-12);
         let expected = smoother.peek(time + P, P);
         assert!((smoother.advance(time + P, P) - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn jittered_input_never_steps_backwards_and_loses_nothing() {
+        let period = 1.0 / 120.0;
+        let mut smoother = ScrollSmoother::new(Smoothing::Auto);
+        let times = [0.0, 0.017, 0.031, 0.050, 0.066, 0.079, 0.101, 0.115, 0.134, 0.150, 0.170, 0.181];
+        let (mut frame, mut next, mut total) = (0.0, 0, 0.0);
+        for _ in 0..60 {
+            frame += period;
+            while next < times.len() && times[next] <= frame - period * 0.5 {
+                smoother.push(times[next], 30.0, period);
+                next += 1;
+            }
+            let step = smoother.advance(frame, period);
+            assert!(step >= -1e-9, "a step went backwards: {step}");
+            total += step;
+        }
+        assert!((total - 30.0 * times.len() as f64).abs() < 1e-6, "moved {total}");
+    }
+
+    #[test]
+    fn jittered_sixty_hertz_input_moves_evenly() {
+        // Reports about 16.7 ms apart with 2 ms of jitter, frames every 8.33 ms: every frame of the
+        // gesture after the rate is known moves about the same distance (no double step, no stall).
+        let period = 1.0 / 120.0;
+        let mut smoother = ScrollSmoother::new(Smoothing::Auto);
+        let jitter = [0.0, 0.002, -0.002, 0.0015, -0.001, 0.002, -0.002, 0.001, 0.0, -0.0015, 0.002, -0.002];
+        let mut steps = Vec::new();
+        let mut frame = 0.0;
+        let mut next_event = 0;
+        for _ in 0..90 {
+            frame += period;
+            while next_event < 40 && next_event as f64 / 60.0 + jitter[next_event % jitter.len()] <= frame - period * 0.5 {
+                let time = next_event as f64 / 60.0 + jitter[next_event % jitter.len()];
+                smoother.push(time, 40.0, period);
+                next_event += 1;
+            }
+            steps.push(smoother.advance(frame, period));
+        }
+        // Skip the first events (the rate is not known yet) and the end (the input stopped).
+        let middle = &steps[12..70];
+        let mean = middle.iter().sum::<f64>() / middle.len() as f64;
+        for (index, step) in middle.iter().enumerate() {
+            assert!((step - mean).abs() < mean * 0.35, "frame {index}: step {step:.1} against mean {mean:.1}: {middle:?}");
+        }
     }
 
     #[test]

@@ -10,6 +10,18 @@ use crate::render::{Renderer, Scene};
 use std::path::Path;
 
 pub fn write_png(gpu: &Gpu, renderer: &mut Renderer, scene: &Scene, size: (u32, u32), background: [f64; 3], path: &Path) -> Result<(), String> {
+    let (width, height, pixels) = read_pixels(gpu, renderer, scene, size, background)?;
+    let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+    writer.write_image_data(&pixels).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// The frame's pixels, RGBA, rendered off screen: `(width, height, pixels)`.
+pub fn read_pixels(gpu: &Gpu, renderer: &mut Renderer, scene: &Scene, size: (u32, u32), background: [f64; 3]) -> Result<(u32, u32, Vec<u8>), String> {
     let (width, height) = (size.0.max(1), size.1.max(1));
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("capture"),
@@ -52,11 +64,5 @@ pub fn write_png(gpu: &Gpu, renderer: &mut Renderer, scene: &Scene, size: (u32, 
         }
     }
     drop(mapped);
-    let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-    writer.write_image_data(&pixels).map_err(|error| error.to_string())?;
-    Ok(())
+    Ok((width, height, pixels))
 }
