@@ -42,6 +42,30 @@ impl AccessItem {
     }
 }
 
+/// What a press on the welcome screen does.
+#[derive(Clone, Debug)]
+enum Welcome {
+    NewTerminal,
+    OpenProject,
+    QuickOpen,
+    FindInFiles,
+    Agent,
+    Recent(std::path::PathBuf),
+}
+
+impl Welcome {
+    fn label(&self) -> String {
+        match self {
+            Welcome::NewTerminal => "New Terminal".into(),
+            Welcome::OpenProject => "Open Project".into(),
+            Welcome::QuickOpen => "Quick Open".into(),
+            Welcome::FindInFiles => "Find in Files".into(),
+            Welcome::Agent => "Coding Agent".into(),
+            Welcome::Recent(folder) => format!("Open recent project {}", folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()),
+        }
+    }
+}
+
 enum Pane {
     Terminal(Terminal),
     /// A file in the shared editor.
@@ -118,6 +142,10 @@ pub struct Workspace {
     native: std::collections::HashMap<String, crate::native::NativeEditor>,
     /// Neovim could not start (or `NEOLINK_NO_NVIM=1`): documents open in the native editor.
     native_only: bool,
+    /// The welcome screen's buttons and its logo (shown when no tab is open).
+    welcome_buttons: Vec<(Rect, Welcome)>,
+    welcome_hover: Option<usize>,
+    logo: Option<std::path::PathBuf>,
     /// The overlay scroll indicator of the shown terminal or editor, and the tab it belongs to.
     scroll_indicator: crate::indicator::ScrollIndicator,
     indicator_tab: Option<u64>,
@@ -255,6 +283,9 @@ impl Workspace {
             editor: None,
             native: std::collections::HashMap::new(),
             pixel_sideways: false,
+            welcome_buttons: Vec::new(),
+            welcome_hover: None,
+            logo: crate::connections::logo_path(),
             scroll_indicator: Default::default(),
             indicator_tab: None,
             native_only: std::env::var("NEOLINK_NO_NVIM").is_ok_and(|value| value == "1"),
@@ -1250,6 +1281,9 @@ impl Workspace {
         if let Some(index) = name.strip_prefix("tab:").and_then(|index| index.parse::<usize>().ok()) {
             return self.tab_rects.get(index).copied().map(middle);
         }
+        if let Some(index) = name.strip_prefix("welcome:").and_then(|index| index.parse::<usize>().ok()) {
+            return self.welcome_buttons.get(index).filter(|_| self.tabs.is_empty()).map(|(rect, _)| middle(*rect));
+        }
         if let Some((rect, _)) = self.header_buttons.iter().find(|(_, action)| *action == name) {
             return Some(middle(*rect));
         }
@@ -1497,6 +1531,13 @@ impl Workspace {
                     item.press = Some(middle(rect));
                     items.push(item);
                 }
+            }
+        }
+        if self.tabs.is_empty() {
+            for (index, (rect, action)) in self.welcome_buttons.iter().enumerate() {
+                let mut item = AccessItem::new(&format!("welcome:{index}"), None, Role::Button, &action.label(), *rect);
+                item.press = Some(middle(*rect));
+                items.push(item);
             }
         }
         if self.dock.visible {
@@ -2210,6 +2251,13 @@ impl Workspace {
             }
             return true;
         }
+        if self.tabs.is_empty() {
+            if let Some((_, action)) = self.welcome_buttons.iter().find(|(rect, _)| rect.contains(x, y)).cloned() {
+                self.welcome_hover = None;
+                self.welcome_press(action);
+                return true;
+            }
+        }
         if self.connections.contains(x, y) {
             self.explorer.focused = false;
             self.explorer.filter_focused = false;
@@ -2729,9 +2777,11 @@ impl Workspace {
         }
         let hover = self.tab_rects.iter().position(|rect| rect.contains(x, y));
         let hover_close = self.close_rects.iter().position(|rect| rect.contains(x, y));
-        let mut changed = hover != self.hover || hover_close != self.hover_close;
+        let welcome_hover = if self.tabs.is_empty() { self.welcome_buttons.iter().position(|(rect, _)| rect.contains(x, y)) } else { None };
+        let mut changed = hover != self.hover || hover_close != self.hover_close || welcome_hover != self.welcome_hover;
         self.hover = hover;
         self.hover_close = hover_close;
+        self.welcome_hover = welcome_hover;
         changed |= self.explorer.pointer(x, y);
         changed | std::mem::take(&mut self.tip_changed)
     }
@@ -3104,6 +3154,107 @@ impl Workspace {
         self.toolbar_buttons = buttons;
     }
 
+    /// The welcome screen: what the window shows with no tab open (on launch it opens a shell). The
+    /// logo and version, the main ways to start, and recent projects.
+    fn draw_welcome(&mut self, painter: &mut Painter, area: Rect) {
+        let logo = self.logo.clone().and_then(|path| painter.text.image(painter.queue, &path, (72.0 * self.scale).round() as u32));
+        let mut ui = Ui { painter, scale: self.scale };
+        ui.fill(area, theme::EDITOR_BACKGROUND);
+        self.welcome_buttons.clear();
+        let width = ui.px(440.0).min(area.width - ui.px(48.0)).max(ui.px(200.0));
+        let left = (area.x + (area.width - width) * 0.5).round();
+        let row = ui.px(36.0);
+        // macOS: Command chords. Elsewhere the chord is Control+Shift, Alt marks the Shift variant and
+        // the agent launcher has no shortcut (`main.rs` `shortcut`).
+        let mac = cfg!(target_os = "macos");
+        let actions: [(&str, &str, &str, Welcome); 5] = [
+            ("terminal", "New Terminal", if mac { "\u{2318}T" } else { "Ctrl+Shift+T" }, Welcome::NewTerminal),
+            ("folder", "Open Project\u{2026}", if mac { "\u{21e7}\u{2318}O" } else { "Ctrl+Shift+Alt+O" }, Welcome::OpenProject),
+            ("doc.text.magnifyingglass", "Quick Open", if mac { "\u{2318}P" } else { "Ctrl+Shift+P" }, Welcome::QuickOpen),
+            ("magnifyingglass", "Find in Files", if mac { "\u{21e7}\u{2318}F" } else { "Ctrl+Shift+Alt+F" }, Welcome::FindInFiles),
+            ("sparkles", "Coding Agent\u{2026}", if mac { "\u{2303}\u{2318}A" } else { "" }, Welcome::Agent),
+        ];
+        let root = self.explorer.root().to_path_buf();
+        let recent: Vec<std::path::PathBuf> = self.recent.iter().filter(|path| **path != root).take(5).cloned().collect();
+        let content = ui.px(72.0 + 18.0 + 30.0 + 22.0 + 36.0 + 20.0) + row * actions.len() as f32 + if recent.is_empty() { 0.0 } else { ui.px(28.0 + 20.0) + row * recent.len() as f32 };
+        let mut y = (area.y + ((area.height - content) * 0.42).max(ui.px(32.0))).round();
+        let center = left + width * 0.5;
+        if let Some(sprite) = logo {
+            ui.painter.scene.glyph(sprite, (center - ui.px(36.0)).round(), y, [255, 255, 255, 255]);
+        }
+        y += ui.px(72.0 + 18.0);
+        let title = "NeoLink";
+        let title_width = ui.measure(title, 22.0, 600, false);
+        ui.text(title, center - title_width * 0.5, y + ui.px(13.0), 22.0, 600, false, theme::TEXT_PRIMARY);
+        y += ui.px(30.0);
+        let version = format!("Version {}", env!("CARGO_PKG_VERSION"));
+        let version_width = ui.measure(&version, 11.0, 400, false);
+        ui.text(&version, center - version_width * 0.5, y + ui.px(8.0), 11.0, 400, false, theme::TEXT_SECONDARY);
+        y += ui.px(22.0 + 36.0);
+        let mut index = 0;
+        let section = |ui: &mut Ui, y: &mut f32, label: &str| {
+            ui.text(label, left + ui.px(10.0), *y + ui.px(6.0), 10.0, 600, false, faded(theme::TEXT_SECONDARY, 0.8));
+            *y += ui.px(20.0);
+        };
+        section(&mut ui, &mut y, "START");
+        for (icon, label, shortcut, action) in actions {
+            let rect = Rect::new(left, y, width, row - ui.px(2.0));
+            if self.welcome_hover == Some(index) {
+                ui.rounded(rect, 6.0, theme::white(0.05));
+            }
+            let middle = rect.y + rect.height * 0.5;
+            ui.icon(icon, 13.0, IconWeight::Regular, rect.x + ui.px(10.0 + 9.0), middle, theme::ACCENT);
+            ui.text(label, rect.x + ui.px(10.0 + 18.0 + 12.0), middle, 13.0, 400, false, theme::TEXT_PRIMARY);
+            ui.text_right(shortcut, rect.right() - ui.px(10.0), middle, 11.0, 400, false, theme::TEXT_SECONDARY);
+            self.welcome_buttons.push((rect, action));
+            index += 1;
+            y += row;
+        }
+        if !recent.is_empty() {
+            y += ui.px(28.0);
+            section(&mut ui, &mut y, "RECENT");
+            let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+            for folder in recent {
+                let rect = Rect::new(left, y, width, row - ui.px(2.0));
+                if self.welcome_hover == Some(index) {
+                    ui.rounded(rect, 6.0, theme::white(0.05));
+                }
+                let middle = rect.y + rect.height * 0.5;
+                ui.icon("folder", 13.0, IconWeight::Regular, rect.x + ui.px(10.0 + 9.0), middle, theme::TEXT_SECONDARY);
+                let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| folder.display().to_string());
+                let name_width = ui.text(&name, rect.x + ui.px(40.0), middle, 13.0, 400, false, theme::TEXT_PRIMARY);
+                let shown = match home.as_ref().and_then(|home| folder.parent().and_then(|parent| parent.strip_prefix(home).ok().map(|rest| rest.to_path_buf()))) {
+                    Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+                    Some(rest) => format!("~/{}", rest.display()),
+                    None => folder.parent().map(|parent| parent.display().to_string()).unwrap_or_default(),
+                };
+                let room = rect.right() - ui.px(10.0) - (rect.x + ui.px(40.0) + name_width + ui.px(10.0));
+                if room > ui.px(30.0) {
+                    let fitted = ui.fit_middle(&shown, room, 11.0, 400, false);
+                    ui.text_right(&fitted, rect.right() - ui.px(10.0), middle, 11.0, 400, false, theme::TEXT_SECONDARY);
+                }
+                self.welcome_buttons.push((rect, Welcome::Recent(folder)));
+                index += 1;
+                y += row;
+            }
+        }
+    }
+
+    fn welcome_press(&mut self, action: Welcome) {
+        match action {
+            Welcome::NewTerminal => {
+                if let Some(shared) = self.shared.upgrade() {
+                    let _ = self.new_tab(&shared);
+                }
+            }
+            Welcome::OpenProject => self.folder_request = Some(1),
+            Welcome::QuickOpen => self.open_search(false),
+            Welcome::FindInFiles => self.open_search(true),
+            Welcome::Agent => self.open_launcher(),
+            Welcome::Recent(folder) => self.perform(Action::Project(folder)),
+        }
+    }
+
     /// The window's footer (`WorkspaceFooter`).
     fn draw_footer(&mut self, painter: &mut Painter) {
         let document = self.tabs.get(self.shown).and_then(|tab| match &tab.pane {
@@ -3202,12 +3353,8 @@ impl Content for Workspace {
         if self.tabs.len() != before {
             self.active = active_id.and_then(|id| self.tabs.iter().position(|tab| tab.id == id)).unwrap_or(self.active.min(self.tabs.len().saturating_sub(1)));
             self.shown = shown_id.and_then(|id| self.tabs.iter().position(|tab| tab.id == id)).unwrap_or(self.active);
+            // With the last tab gone the window shows the welcome screen (it no longer quits).
             self.reselect();
-            if self.tabs.is_empty() {
-                if let Some(callback) = &self.on_empty {
-                    callback();
-                }
-            }
         }
         // Which pane to show: the active one, unless it is a document Neovim has not confirmed yet.
         let ready = match self.tabs.get(self.active).map(|tab| &tab.pane) {
@@ -3302,7 +3449,11 @@ impl Content for Workspace {
                 chrome = Some(Some(path.clone()));
                 next
             }
-            None => Next::Idle,
+            None => {
+                let area = Rect::new(self.center.x, self.strip.bottom() + ui_line(self.scale), self.center.width, (self.center.bottom() - self.strip.bottom()).max(1.0));
+                self.draw_welcome(painter, area);
+                Next::Idle
+            }
         };
         // The overlay scroll indicator: shown while the content moves, then faded (not for full-screen
         // programs, which scroll themselves, nor when everything fits).
@@ -3508,6 +3659,7 @@ impl Content for Workspace {
             signature.add((frame.display.max(crate::clock::now()) >= since + 0.8) as u64 + 3).text(text).add(self.pointer.0.to_bits() as u64);
         }
         signature.add(self.recent.len() as u64 ^ (self.recent_sheet.is_some() as u64) << 20);
+        signature.add(self.tabs.is_empty() as u64).add(self.welcome_hover.map_or(u64::MAX, |index| index as u64));
         signature.add(self.explorer_points.to_bits() as u64).add(self.agent.signature()).add(self.dock.signature());
         if let Some(launcher) = &self.launcher {
             signature.add(0x4C41554E).add(launcher.signature());
@@ -3560,4 +3712,9 @@ impl Content for Workspace {
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
+}
+
+/// One device pixel line at `scale`, at least one pixel.
+fn ui_line(scale: f32) -> f32 {
+    scale.round().max(1.0)
 }

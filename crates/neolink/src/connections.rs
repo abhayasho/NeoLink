@@ -97,7 +97,7 @@ fn host_name() -> String {
 }
 
 /// The app's icon, from the bundle's resources or the repository.
-fn logo_path() -> Option<PathBuf> {
+pub fn logo_path() -> Option<PathBuf> {
     let mut starts: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         starts.push(exe);

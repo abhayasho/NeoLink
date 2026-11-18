@@ -402,10 +402,14 @@ impl App {
                 self.invalidate();
             }
             "w" => {
+                // Closing the last tab leaves the welcome screen; ⌘W there closes the window.
                 let empty = self.with_workspace(|workspace, _| {
+                    if workspace.tab_count() == 0 {
+                        return true;
+                    }
                     let index = workspace.active_index();
                     workspace.close_tab(index);
-                    workspace.tab_count() == 0
+                    false
                 });
                 if empty == Some(true) {
                     event_loop.exit();
