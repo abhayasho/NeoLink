@@ -535,6 +535,13 @@ impl Terminal {
         self.drawn
     }
 
+    /// `(lines of scrollback, lines on screen, a full-screen program is showing)`.
+    pub fn extent(&self) -> (usize, usize, bool) {
+        let term = self.term.lock();
+        let grid = term.grid();
+        (grid.history_size(), grid.screen_lines(), term.mode().contains(TermMode::ALT_SCREEN))
+    }
+
     /// Sends bytes to the program, and returns the view to the newest line. Returns `true` if that moved
     /// the view (typing itself changes nothing on screen until the program answers).
     pub fn write(&mut self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>) -> bool {

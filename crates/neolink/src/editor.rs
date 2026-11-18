@@ -38,6 +38,8 @@ pub struct Editor {
     position_path: String,
     commanded_top: u64,
     last_wheel: f64,
+    /// Lines in the buffer the last frame showed.
+    drawn_total: u64,
     /// Neovim's window was moved back to the middle of the hidden rows after the last scroll.
     recentered: bool,
     /// The shift the last frame drew the text with, and the rows it showed.
@@ -132,7 +134,7 @@ impl Editor {
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, recentered: true, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), pixel_sideways: false, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_total: 0, recentered: true, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), pixel_sideways: false, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {
@@ -477,6 +479,11 @@ impl Editor {
         lines.join("\n")
     }
 
+    /// `(top of the view in pixels, lines in the buffer, rows shown)` as the last frame drew them.
+    pub fn extent(&self) -> (f64, u64, usize) {
+        (self.drawn_position, self.drawn_total, self.grid.1.saturating_sub(1 + if self.smooth { EXTRA_ROWS } else { 0 }))
+    }
+
     /// Generation of the live screen (changes with every published redraw).
     pub fn generation(&self) -> u64 {
         self.client.with_state(|state| state.screen.generation)
@@ -588,6 +595,7 @@ impl Editor {
         self.drawn_shift = shift;
         // What this frame shows, as a position in the buffer (the benchmark compares it with the input).
         self.drawn_position = (shown_view.0 - 1) as f64 * cell.height as f64 + shift as f64;
+        self.drawn_total = shown_view.1;
         if self.smooth && std::env::var_os("NEOLINK_DEBUG_SCROLL_CHECK").is_some() {
             check_rows(&screen, shown_view.0, text_rows);
         }

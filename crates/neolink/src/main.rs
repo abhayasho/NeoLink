@@ -16,6 +16,7 @@ mod gitview;
 mod gpu;
 mod horizontal;
 mod icons;
+mod indicator;
 mod input;
 mod menu;
 #[cfg(target_os = "macos")]

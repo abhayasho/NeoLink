@@ -659,6 +659,11 @@ impl NativeEditor {
         self.lines[first..(first + count).min(self.lines.len())].join("\n")
     }
 
+    /// `(pixels scrolled, lines in the document)`.
+    pub fn extent(&self) -> (f64, usize) {
+        (self.scroll, self.lines.len())
+    }
+
     pub fn cursor_label(&self) -> String {
         format!("Ln {}, Col {}", self.cursor.line + 1, display_column(&self.lines[self.cursor.line], self.cursor.column) + 1)
     }

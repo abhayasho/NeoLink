@@ -118,6 +118,9 @@ pub struct Workspace {
     native: std::collections::HashMap<String, crate::native::NativeEditor>,
     /// Neovim could not start (or `NEOLINK_NO_NVIM=1`): documents open in the native editor.
     native_only: bool,
+    /// The overlay scroll indicator of the shown terminal or editor, and the tab it belongs to.
+    scroll_indicator: crate::indicator::ScrollIndicator,
+    indicator_tab: Option<u64>,
     /// View > Pixel-Smooth Sideways Scrolling.
     pixel_sideways: bool,
     pub explorer: Explorer,
@@ -252,6 +255,8 @@ impl Workspace {
             editor: None,
             native: std::collections::HashMap::new(),
             pixel_sideways: false,
+            scroll_indicator: Default::default(),
+            indicator_tab: None,
             native_only: std::env::var("NEOLINK_NO_NVIM").is_ok_and(|value| value == "1"),
             explorer: Explorer::new(project_directory()),
             sidebar: Rect::default(),
@@ -3251,6 +3256,48 @@ impl Content for Workspace {
             }
             None => Next::Idle,
         };
+        // The overlay scroll indicator: shown while the content moves, then faded (not for full-screen
+        // programs, which scroll themselves, nor when everything fits).
+        let shown_id = self.tabs.get(self.shown).map(|tab| tab.id);
+        if shown_id != self.indicator_tab {
+            // A switch is not a scroll.
+            self.scroll_indicator = Default::default();
+            self.indicator_tab = shown_id;
+        }
+        let height = self.cell.height as f64;
+        let measured: Option<(Rect, f64, f64, f64)> = match self.tabs.get(self.shown).map(|tab| &tab.pane) {
+            Some(Pane::Terminal(terminal)) => {
+                let (history, lines, full_screen) = terminal.extent();
+                (!full_screen).then(|| (pane, history as f64 * height - terminal.scroll(), (history + lines) as f64 * height, lines as f64 * height))
+            }
+            Some(Pane::Document { path, .. }) if crate::pdf::is_pdf(path) => None,
+            Some(Pane::Document { path, .. }) => match (self.native.get(path.as_str()), &self.editor) {
+                (Some(native), _) => {
+                    let (scroll, lines) = native.extent();
+                    Some((editor_pane, scroll, lines as f64 * height, editor_pane.height as f64))
+                }
+                (None, Some(editor)) => {
+                    let (position, total, rows) = editor.extent();
+                    let view = rows as f64 * height;
+                    Some((Rect::new(editor_pane.x, editor_pane.y, editor_pane.width, view as f32), position, total as f64 * height, view))
+                }
+                _ => None,
+            },
+            None => None,
+        };
+        let next = match measured {
+            Some((area, position, content, view)) => {
+                self.scroll_indicator.note(position, frame.display);
+                let indicator = self.scroll_indicator.draw(painter.scene, area, position, content, view, frame.display, self.scale, period);
+                match (next, indicator) {
+                    (Next::Soon, _) | (_, Next::Soon) => Next::Soon,
+                    (Next::At(a), Next::At(b)) => Next::At(a.min(b)),
+                    (Next::At(a), Next::Idle) | (Next::Idle, Next::At(a)) => Next::At(a),
+                    (Next::Idle, Next::Idle) => Next::Idle,
+                }
+            }
+            None => next,
+        };
         match chrome {
             Some(None) => self.draw_status_bar(painter, true),
             Some(Some(path)) if crate::pdf::is_pdf(&path) => self.draw_pdf_chrome(painter, &path),
@@ -3391,6 +3438,10 @@ impl Content for Workspace {
         if let Some(editor) = &self.editor {
             // A scroll within one line changes no cell, only where the text is drawn.
             signature.text(editor.mode_label()).add(editor.drawn_position.to_bits()).add(editor.horizontal_signature());
+        }
+        {
+            // The scroll indicator fades without anything else changing.
+            signature.add(self.scroll_indicator.level(frame.display));
         }
         signature.add(output).text(self.notice.as_deref().unwrap_or(""));
         signature.add(self.explorer.signature());
