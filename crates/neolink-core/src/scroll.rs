@@ -14,6 +14,8 @@ use std::collections::VecDeque;
 pub const MAX_SPREAD: f64 = 0.150;
 /// Reports further apart than this belong to different movements when measuring the report interval.
 pub const SAME_GESTURE_GAP: f64 = 0.3;
+/// How long a mouse wheel notch takes to scroll its distance.
+pub const WHEEL_GLIDE: f64 = 0.1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Smoothing {
@@ -113,6 +115,34 @@ impl ScrollSmoother {
             (Smoothing::Auto, Some(interval)) if interval >= 1.5 * period => interval.min(MAX_SPREAD),
             _ => 0.0,
         };
+        if duration > period {
+            self.spread_events += 1;
+            self.max_delay = self.max_delay.max(duration - period);
+        }
+        self.pending.push((delta, duration));
+    }
+
+    /// A scroll report from either kind of device: `wheel` says it is a mouse wheel notch, which
+    /// glides (see [`push_glide`](Self::push_glide)); anything else goes through [`push`](Self::push).
+    pub fn push_input(&mut self, time: f64, delta: f64, period: f64, wheel: bool) {
+        if wheel {
+            self.push_glide(time, delta, WHEEL_GLIDE, period);
+        } else {
+            self.push(time, delta, period);
+        }
+    }
+
+    /// A mouse wheel notch: a whole step (three lines) in one report, with no report rate to measure.
+    /// Drawn whole it is a jump; its distance is instead released over `duration`, starting with the
+    /// next frame. Notches in quick succession take over what the previous one has not yet released
+    /// (as spreads do), so a spinning wheel scrolls continuously at the speed it turns.
+    pub fn push_glide(&mut self, time: f64, delta: f64, duration: f64, period: f64) {
+        let _ = time;
+        if delta == 0.0 {
+            return;
+        }
+        self.events += 1;
+        let duration = if self.smoothing == Smoothing::Off { 0.0 } else { duration.min(MAX_SPREAD) };
         if duration > period {
             self.spread_events += 1;
             self.max_delay = self.max_delay.max(duration - period);
@@ -351,6 +381,43 @@ mod tests {
             steps.push(smoother.advance(frame_time, P));
         }
         (steps, smoother)
+    }
+
+    #[test]
+    fn a_wheel_notch_glides_over_several_frames_and_arrives_whole() {
+        let mut smoother = ScrollSmoother::new(Smoothing::Auto);
+        smoother.push_input(0.0, 90.0, P, true);
+        let steps: Vec<f64> = (0..20).map(|frame| smoother.advance(0.001 + frame as f64 * P, P)).collect();
+        let moving = steps.iter().filter(|step| **step > 0.0).count();
+        assert!(moving >= 10, "a notch moves over ~0.1 s, not in one frame: {steps:?}");
+        assert!(steps[0] > 0.0, "the first part is drawn in the next frame");
+        assert!(steps.iter().all(|step| *step <= 90.0 / 8.0), "no frame takes most of it: {steps:?}");
+        assert!((steps.iter().sum::<f64>() - 90.0).abs() < 1e-9);
+        assert!(!smoother.is_active());
+    }
+
+    #[test]
+    fn a_spinning_wheel_scrolls_continuously() {
+        let mut smoother = ScrollSmoother::new(Smoothing::Auto);
+        let mut steps = Vec::new();
+        // A notch every 40 ms for half a second.
+        for frame in 0..90 {
+            let time = 0.001 + frame as f64 * P;
+            if frame % 5 == 0 && frame < 60 {
+                smoother.push_input(time - 0.0005, 90.0, P, true);
+            }
+            steps.push(smoother.advance(time, P));
+        }
+        // Once going, no frame stands still until the wheel stops.
+        assert!(steps[1..60].iter().all(|step| *step > 0.0), "{steps:?}");
+        assert!((steps.iter().sum::<f64>() - 12.0 * 90.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wheel_notches_without_smoothing_are_drawn_whole() {
+        let mut smoother = ScrollSmoother::new(Smoothing::Off);
+        smoother.push_input(0.0, 90.0, P, true);
+        assert_eq!(smoother.advance(0.001, P), 90.0);
     }
 
     #[test]

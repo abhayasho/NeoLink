@@ -15,8 +15,8 @@ env:
   CARGO_TERM_COLOR: always
 jobs:
   # On Windows this establishes that the app compiles and links with MSVC, the tests pass (the editor
-  # client's against a real Neovim) and the download is packaged. It opens no window, so it says
-  # nothing about rendering, input or latency there.
+  # client's against a real Neovim), the downloads are packaged and both installers work, including a
+  # launch of the installed app that draws a frame. It says nothing about smoothness or latency there.
   build-and-test:
     strategy:
       fail-fast: false
@@ -65,6 +65,27 @@ jobs:
       - name: Package for Windows
         if: runner.os == 'Windows'
         run: python scripts/package-windows.py
+      - name: Setup program for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) { choco install innosetup -y --no-progress }
+            $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          } else { $iscc = $iscc.Source }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          Expand-Archive target\NeoLink-windows-x64.zip target\windows-package -Force
+          & $iscc /Q "/DAppVersion=$version" "/DSourceDir=$PWD\target\windows-package\NeoLink" "/DOutputDir=$PWD\target" scripts\windows\NeoLink.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/package-windows.py --checksum-only target/NeoLink-Setup-x64.exe
+      # Both installers, end to end on the runner: install (install.ps1 through `irm | iex`), launch the
+      # installed app and capture a frame from its window, update, uninstall; then the same with the
+      # setup program.
+      - name: Windows installer tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/test-windows-installer.ps1 -Archive target/NeoLink-windows-x64.zip -Setup target/NeoLink-Setup-x64.exe
       - name: Package for macOS and test the installer
         if: runner.os == 'macOS'
         run: |
@@ -83,5 +104,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: NeoLink-windows-x64
-          path: target/NeoLink-windows-x64.zip
+          path: |
+            target/NeoLink-windows-x64.zip
+            target/NeoLink-windows-x64.zip.sha256
+            target/NeoLink-Setup-x64.exe
+            target/NeoLink-Setup-x64.exe.sha256
           if-no-files-found: error

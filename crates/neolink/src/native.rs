@@ -543,12 +543,13 @@ impl NativeEditor {
         self.revision += 1;
     }
 
-    pub fn scroll_input(&mut self, time: f64, delta: f64, began: bool, period: f64) {
-        if began {
+    pub fn scroll_input(&mut self, time: f64, delta: f64, phase: crate::term::ScrollPhase, period: f64) {
+        use crate::term::ScrollPhase;
+        if phase == ScrollPhase::Began {
             self.smoother.begin_gesture();
         }
         // Fingers moving down show earlier lines.
-        self.smoother.push(time, -delta, period);
+        self.smoother.push_input(time, -delta, period, phase == ScrollPhase::Wheel);
     }
 
     /// Draws the text in `rect` and says when the next frame is needed.

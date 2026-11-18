@@ -33,6 +33,8 @@ mod spike;
 mod term;
 mod text;
 mod theme;
+#[cfg(windows)]
+mod win;
 mod workspace;
 
 use bench::{BenchState, Injected, KeyRecord};
@@ -96,9 +98,34 @@ struct App {
     access_at: f64,
     /// Frames drawn when the tree was last described: nothing on screen changes without one.
     access_frames: u64,
+    /// When the last wheel report of a fraction of a notch came (a precision touchpad).
+    fine_wheel_at: std::cell::Cell<f64>,
+}
+
+/// Lines per wheel notch (`None`: a screen) and columns per sideways notch.
+#[cfg(windows)]
+fn wheel_settings() -> (Option<f64>, f64) {
+    win::wheel_settings()
+}
+
+#[cfg(not(windows))]
+fn wheel_settings() -> (Option<f64>, f64) {
+    (Some(3.0), 3.0)
+}
+
+/// The GDI name of the display showing the window (`\.\DISPLAY1`), for the vblank clock and the
+/// choice of GPU.
+#[cfg(windows)]
+fn display_device(window: &Window) -> Option<String> {
+    use winit::platform::windows::MonitorHandleExtWindows;
+    window.current_monitor().map(|monitor| monitor.native_id())
 }
 
 fn display_period(window: &Window) -> f64 {
+    #[cfg(windows)]
+    if let Some(device) = display_device(window) {
+        win::vblank().set_display(device);
+    }
     window
         .current_monitor()
         .and_then(|monitor| monitor.refresh_rate_millihertz())
@@ -564,7 +591,11 @@ impl App {
             self.access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, self.proxy.clone()));
         }
         window.set_visible(true);
-        let gpu = gpu::Gpu::new().unwrap_or_else(|error| fatal(&format!("NeoLink needs a graphics card with Metal, Direct3D 12 or Vulkan support.\n\n{error}")));
+        #[cfg(windows)]
+        let preferred_adapter = display_device(&window).and_then(|device| win::adapter_for_display(&device));
+        #[cfg(not(windows))]
+        let preferred_adapter: Option<String> = None;
+        let gpu = gpu::Gpu::new(preferred_adapter.as_deref()).unwrap_or_else(|error| fatal(&format!("NeoLink needs a graphics card with Metal, Direct3D 12 or Vulkan support.\n\n{error}")));
         #[cfg(target_os = "macos")]
         let presenter = present::Presenter::new(&gpu, &window).unwrap_or_else(|error| fatal(&format!("NeoLink could not draw to its window.\n\n{error}")));
         #[cfg(not(target_os = "macos"))]
@@ -952,12 +983,22 @@ impl ApplicationHandler<UserEvent> for App {
                     TouchPhase::Moved => ScrollPhase::Changed,
                     TouchPhase::Ended | TouchPhase::Cancelled => ScrollPhase::Ended,
                 });
-                let (delta_x, delta_y) = match delta {
-                    MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
+                let (delta_x, delta_y, phase) = match delta {
+                    MouseScrollDelta::PixelDelta(position) => (position.x, position.y, phase),
                     MouseScrollDelta::LineDelta(x, y) => {
-                        // A wheel notch: three lines.
-                        let cell = self.with_workspace(|workspace, _| workspace.cell).map(|cell| cell.height as f64).unwrap_or(30.0);
-                        (x as f64 * 3.0 * cell, y as f64 * 3.0 * cell)
+                        let (cell, rows) = self.with_workspace(|workspace, _| (workspace.cell, workspace.grid.1)).map(|(cell, rows)| ((cell.width as f64, cell.height as f64), rows as f64)).unwrap_or(((15.0, 30.0), 30.0));
+                        let (lines, columns) = wheel_settings();
+                        let lines = lines.unwrap_or((rows - 1.0).max(1.0));
+                        // Whole notches come from a wheel and glide. Fractions of a notch come from a
+                        // precision touchpad or a free-spinning wheel, many per second: those are already
+                        // smooth and are drawn as they come, as on macOS.
+                        let fractional = x.fract() != 0.0 || y.fract() != 0.0;
+                        if fractional {
+                            self.fine_wheel_at.set(time);
+                        }
+                        let touchpad = fractional || time - self.fine_wheel_at.get() < 0.5;
+                        let phase = if touchpad || phase != ScrollPhase::Changed { phase } else { ScrollPhase::Wheel };
+                        (x as f64 * columns * cell.0, y as f64 * lines * cell.1, phase)
                     }
                 };
                 self.scroll(time, delta_x, delta_y, phase);
@@ -1069,6 +1110,9 @@ fn fatal(message: &str) -> ! {
 }
 
 fn main() {
+    // Tools installed since Windows signed in (by NeoLink's installer, say) are found without signing out.
+    #[cfg(windows)]
+    win::refresh_path();
     let spike = std::env::args().any(|argument| argument == "--spike").then(|| std::env::var("SPIKE_MODE").unwrap_or_else(|_| "sparse".into()));
     let spike_seconds: f64 = std::env::var("SPIKE_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(8.0);
     if spike.is_some() {
@@ -1100,6 +1144,7 @@ fn main() {
         access_sent: 0,
         access_at: 0.0,
         access_frames: u64::MAX,
+        fine_wheel_at: std::cell::Cell::new(f64::NEG_INFINITY),
     };
     event_loop.run_app(&mut app).expect("the event loop");
 }

@@ -120,6 +120,8 @@ pub enum ScrollPhase {
     /// The system's momentum after a lift.
     Momentum,
     MomentumEnded,
+    /// A mouse wheel notch (no fingers, no phases): its distance glides instead of jumping.
+    Wheel,
 }
 
 pub struct Terminal {
@@ -595,7 +597,7 @@ impl Terminal {
         let full_screen = mode.contains(TermMode::ALT_SCREEN) || mode.intersects(TermMode::MOUSE_MODE);
         if full_screen && std::env::var("NEOLINK_PROGRAM_SMOOTH").as_deref() != Ok("0") && (mode.intersects(TermMode::MOUSE_MODE) || mode.contains(TermMode::ALTERNATE_SCROLL)) {
             // Applied at the display's cadence in `build`, which sends the program whole lines.
-            self.smoother.push(time, delta, period);
+            self.smoother.push_input(time, delta, period, phase == ScrollPhase::Wheel);
             return;
         }
         if full_screen {
@@ -634,7 +636,7 @@ impl Terminal {
             }
             return;
         }
-        self.smoother.push(time, delta, period);
+        self.smoother.push_input(time, delta, period, phase == ScrollPhase::Wheel);
     }
 
     /// Sends `lines` wheel steps to a full-screen program (positive: towards earlier content).

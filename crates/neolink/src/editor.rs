@@ -384,15 +384,16 @@ impl Editor {
         if dy != 0.0 {
             self.horizontal.finish(&self.client);
             self.horizontal.clear();
-            self.scroll(time, dy, period, cell, row, column, path);
+            self.scroll(time, dy, period, cell, row, column, path, phase == ScrollPhase::Wheel);
         }
     }
 
-    pub fn scroll(&mut self, time: f64, delta: f64, period: f64, cell: CellMetrics, row: usize, column: usize, path: &str) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn scroll(&mut self, time: f64, delta: f64, period: f64, cell: CellMetrics, row: usize, column: usize, path: &str, wheel: bool) {
         if self.smooth && self.shows(path) {
             // Fingers moving down show earlier lines.
             self.received += delta;
-            self.smoother.push(time, -delta, period);
+            self.smoother.push_input(time, -delta, period, wheel);
             self.last_wheel = crate::clock::now();
             return;
         }
@@ -806,7 +807,7 @@ mod horizontal_pixel_tests {
 
     #[test]
     fn cached_horizontal_bands_equal_direct_text_pixels_including_unicode() {
-        let Ok(gpu) = Gpu::new() else { eprintln!("No GPU: horizontal pixel comparison skipped"); return };
+        let Ok(gpu) = Gpu::new(None) else { eprintln!("No GPU: horizontal pixel comparison skipped"); return };
         let mut text = TextSystem::new(&gpu.device, 13.0, 2.0);
         let cell = text.cell;
         let mut renderer = Renderer::new(&gpu.device, &text, crate::present::FORMAT);

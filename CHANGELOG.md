@@ -4,6 +4,28 @@ What changed in each NeoLink release. Downloads and full notes are on the
 [releases page](https://github.com/abhayasho/NeoLink/releases); each version's notes are also in
 [`docs/releases`](docs/releases).
 
+## Unreleased
+
+- **Smooth on Windows.** Frames were timed against a clock of their own that slowly slid across the
+  display's real refreshes, so at regular intervals one refresh got two frames and the next none (and
+  on a 280 Hz display about half the refreshes got none). NeoLink now measures the vertical blank of
+  the display the window is on and draws exactly one frame per refresh: on a 280 Hz monitor the median
+  time between frames went from 7.4 ms to 3.6 ms and the scroll's typical jerk halved. Short waits use
+  a high-resolution timer instead of Windows' 15.6 ms tick, and the drawing thread runs at high priority.
+- **The right GPU, through Direct3D 12.** On a PC with both integrated and dedicated graphics, NeoLink
+  draws on the one that drives the window's monitor instead of always the integrated one (which copied
+  every frame across), and uses Direct3D 12 rather than Vulkan, whose windows are often presented
+  through an extra copy.
+- **Mouse wheels glide.** Each notch scrolls over about a tenth of a second instead of jumping three
+  lines in one frame; a spinning wheel scrolls continuously; the distance follows Windows' "lines to
+  scroll" setting. Precision touchpads are drawn as they move, as before.
+- **Windows installers.** `NeoLink-Setup-x64.exe` and a PowerShell one-liner
+  (`irm https://raw.githubusercontent.com/abhayasho/NeoLink/main/scripts/install.ps1 | iex`) install
+  for the current user without administrator rights: Start menu and desktop icons, "Open in NeoLink" on
+  folders, a `neolink` command, an uninstall entry in Settings → Apps, and Neovim, Git and ripgrep via
+  winget if missing. The Windows downloads now come with `.sha256` files.
+- Tools installed after Windows signed in (Neovim, Git, ripgrep) are found without signing out.
+
 ## 2.1.0 (2026-11-18)
 
 - **Welcome screen.** A window with no tabs shows the logo and version, the main ways to start (new

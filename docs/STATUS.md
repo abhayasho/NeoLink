@@ -7,8 +7,10 @@
   disk, Git, a private SSH/SFTP server on 127.0.0.1 and a throwaway Keychain entry. Timing comes from
   the release benchmark with the window frontmost and the screen unlocked.
 - **Windows (x64):** CI compiles and links with MSVC, runs every test (the editor client against a
-  real Neovim) and packages the ZIP. No window has been opened on Windows by the maintainers' tools;
-  rendering, input, credentials and accessibility there still need checking on a real machine.
+  real Neovim), packages the ZIP and setup program, and runs `scripts/test-windows-installer.ps1`
+  (both installers: install, launch and capture a frame, update, uninstall). Frame pacing was measured
+  on a Windows 10 desktop (RTX 4070 SUPER, 280 Hz monitor) with the release benchmark;
+  wheel and touchpad feel, credentials and accessibility still need checking by hand.
 
 ## Opt-in
 

@@ -233,8 +233,45 @@ fn raise_priority() {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn raise_priority() {
+    crate::win::raise_thread_priority();
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn raise_priority() {}
+
+/// The refresh grid measured from the display's vertical blanks (Windows), while frames are drawn.
+#[cfg(windows)]
+fn measured_refresh(now: f64) -> Option<(f64, f64)> {
+    crate::win::vblank().sample(now)
+}
+
+#[cfg(not(windows))]
+fn measured_refresh(_now: f64) -> Option<(f64, f64)> {
+    None
+}
+
+/// A finer system timer while frames are drawn (Windows); nothing elsewhere.
+#[cfg(windows)]
+fn fine_timer(on: bool) {
+    crate::win::fine_timer(on);
+}
+
+#[cfg(not(windows))]
+fn fine_timer(_on: bool) {}
+
+/// Waits until `until` for a latch to pass. Nothing that happens meanwhile changes what is drawn next, so
+/// on Windows this is a high-resolution sleep (about 0.5 ms late at most) rather than a park, which wakes
+/// on the coarser system tick.
+fn wait_for_latch(until: f64) {
+    let wait = (until - clock::now()).max(0.0);
+    if cfg!(windows) {
+        std::thread::sleep(Duration::from_secs_f64(wait));
+    } else {
+        std::thread::park_timeout(Duration::from_secs_f64(wait));
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn with_pool<R>(body: impl FnOnce() -> R) -> R {
@@ -313,9 +350,19 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
             if state.quit {
                 return;
             }
-            pacer.set_period(state.period);
             (state.visible, state.size, state.scale as f32)
         };
+        // Windows: the display's own refresh grid, measured. It replaces the stated rate (whole hertz,
+        // which drifts across the real refreshes) for the pacer and for everything timed by it.
+        if let Some((vblank, measured)) = if visible { measured_refresh(clock::now()) } else { None } {
+            pacer.align(vblank, measured);
+            let mut state = shared.state.lock();
+            if (state.period - measured).abs() > 1e-6 {
+                state.period = measured;
+            }
+        } else {
+            pacer.set_period(shared.state.lock().period);
+        }
         if let Some(at) = scheduled {
             // A frame the content asked for: start it just after the latch before its own, so it is
             // displayed when the content said it changes.
@@ -353,6 +400,7 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
                     std::thread::park_timeout(Duration::from_millis(50));
                 } else {
                     latches.clear();
+                    fine_timer(false);
                     std::thread::park();
                 }
                 continue;
@@ -362,10 +410,12 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
         let (latch, display) = match pacer.plan(now) {
             Plan::Draw { latch, display } => (latch, display),
             Plan::Wait { until } => {
-                std::thread::park_timeout(Duration::from_secs_f64((until - now).max(0.0)));
+                fine_timer(true);
+                wait_for_latch(until);
                 continue;
             }
         };
+        fine_timer(true);
         if size != last_size {
             // A resize (or entering full screen) changes what the system does with a frame.
             last_size = size;

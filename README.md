@@ -31,7 +31,13 @@ curl -fsSL https://raw.githubusercontent.com/abhayasho/NeoLink/main/scripts/inst
 
 The installer checks the download's SHA-256 and signature, installs to `/Applications` (or `~/Applications`), keeps the previous app as a backup, and updates an existing NeoLink, including 1.x. [Read it first](scripts/install.sh) if you like.
 
-**Windows** (x64, Windows 10+): **[NeoLink-windows-x64.zip](https://github.com/abhayasho/NeoLink/releases/latest/download/NeoLink-windows-x64.zip)**. Extract the whole folder and run `NeoLink.exe`.
+**Windows** (x64, Windows 10+): run **NeoLink-Setup-x64.exe** from the [latest release](https://github.com/abhayasho/NeoLink/releases/latest), or paste this into PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/abhayasho/NeoLink/main/scripts/install.ps1 | iex
+```
+
+Both install for your user account without administrator rights, add NeoLink to the Start menu and the desktop, add **Open in NeoLink** when you right-click a folder in File Explorer, add a `neolink` command to terminals, and list NeoLink in **Settings → Apps** to uninstall. They also install Neovim, Git and ripgrep with winget if they are missing. The PowerShell installer checks the download's SHA-256; run it again to update (settings are kept). [Read it first](scripts/install.ps1) if you like. The portable [NeoLink-windows-x64.zip](https://github.com/abhayasho/NeoLink/releases/latest/download/NeoLink-windows-x64.zip) still works too: extract the whole folder and run `NeoLink.exe`.
 
 Neither build is notarized or code-signed by a certificate authority yet. macOS may ask you to allow the first launch in **System Settings → Privacy & Security** ([Apple's instructions](https://support.apple.com/en-us/102445)); Windows SmartScreen may ask the same.
 

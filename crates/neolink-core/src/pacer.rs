@@ -146,6 +146,27 @@ impl Pacer {
         }
     }
 
+    /// The system reported a refresh at `vblank` and measured the refresh interval as `period`
+    /// (Windows, where no frame reports its display time). Moves the grid onto it, keeping what was
+    /// learned unless the rate itself changed (another display, a new mode).
+    pub fn align(&mut self, vblank: f64, period: f64) {
+        if !(period > 0.0) || !(vblank > 0.0) {
+            return;
+        }
+        if (period - self.period).abs() > self.period * 0.01 {
+            self.set_period(period);
+        } else {
+            // A finer measurement of the same rate: a whole-hertz figure (143 for 143.86 Hz) drifts a
+            // refresh off the display's grid within a few seconds, so the measured one replaces it.
+            self.period = period;
+        }
+        if let Some(last) = self.last_latch {
+            let offset = ((last - vblank) / self.period).round();
+            self.last_latch = Some(vblank + offset * self.period);
+        }
+        self.anchor = vblank;
+    }
+
     /// The first refresh strictly after `time`.
     pub fn next_refresh(&self, time: f64) -> f64 {
         let periods = ((time - self.anchor) / self.period).floor() + 1.0;
@@ -546,6 +567,49 @@ mod tests {
         let late_before = pacer.counters().1;
         run_motion(&mut pacer, 200.0 * P + 0.001, 20, |latch| latch + 2.0 * P);
         assert_eq!(pacer.counters().1, late_before, "the new depth is no longer late");
+    }
+
+    #[test]
+    fn aligning_to_reported_refreshes_keeps_one_frame_per_refresh() {
+        // The display really runs at 143.86 Hz; the system first said 143. Without alignment the
+        // planned grid drifts across the real one and a refresh periodically gets two frames.
+        let real = 1.0 / 143.86;
+        let mut pacer = Pacer::new(1.0 / 143.0, 0.001);
+        pacer.align(1.0 + 0.0021, real);
+        assert!((pacer.period() - real).abs() < 1e-12);
+        let mut latches = Vec::new();
+        let mut now = 1.0 + 0.0025;
+        while latches.len() < 600 {
+            // A refresh is reported every frame, as the Windows vblank clock does.
+            let vblank = 1.0 + 0.0021 + ((now - 1.0021) / real).floor() * real;
+            pacer.align(vblank, real);
+            match pacer.plan(now) {
+                Plan::Draw { latch, .. } => {
+                    pacer.submitted(now, now + 0.0004, latch);
+                    latches.push(latch);
+                    now += 0.0005;
+                }
+                Plan::Wait { until } => now = until.max(now + 1e-5),
+            }
+        }
+        for pair in latches.windows(2) {
+            let gap = (pair[1] - pair[0]) / real;
+            assert!((gap - 1.0).abs() < 1e-6, "refresh gap {gap}");
+        }
+        // Every latch is on the real grid.
+        for latch in &latches {
+            let phase = ((latch - 1.0021) / real).fract();
+            assert!(phase < 1e-6 || phase > 1.0 - 1e-6, "latch {latch} off the grid by {phase}");
+        }
+    }
+
+    #[test]
+    fn aligning_to_another_rate_starts_over() {
+        let mut pacer = pacer();
+        draw(&mut pacer, 10.0 * P + 0.001);
+        pacer.align(2.0, 1.0 / 60.0);
+        assert!((pacer.period() - 1.0 / 60.0).abs() < 1e-12);
+        assert!((pacer.next_refresh(2.001) - (2.0 + 1.0 / 60.0)).abs() < 1e-9);
     }
 
     #[test]

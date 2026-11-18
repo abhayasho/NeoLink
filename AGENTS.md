@@ -11,7 +11,9 @@ Control, ACP and terminal coding agents. Versions 1.x were a Swift app; that cod
   `Cargo.toml`, ad-hoc signed unless `NEOLINK_SIGNING_IDENTITY` is set). `scripts/package-release.sh`
   makes the release zip + `.sha256`; `python3 scripts/test-installer.py` checks `scripts/install.sh`
   against it. Windows: `cargo build --release -p neolink` then `python scripts/package-windows.py`;
-  the archive must hold `Resources/Editor`, not just the `.exe`.
+  the archive must hold `Resources/Editor`, not just the `.exe`. Installers: `scripts/install.ps1`
+  (`irm | iex`) and `scripts/windows/NeoLink.iss` (Inno Setup, `NeoLink-Setup-x64.exe`); both are
+  per-user and tested end to end by `scripts/test-windows-installer.ps1 -Archive <zip> [-Setup <exe>]`.
 - `cargo check -p neolink --target x86_64-pc-windows-msvc` type-checks Windows code from a Mac.
 - Releasing: `docs/RELEASING.md` (tag `v*` → draft release with both downloads; publishing is manual).
 
@@ -31,6 +33,11 @@ Control, ACP and terminal coding agents. Versions 1.x were a Swift app; that cod
   that changes pixels (scroll positions, composition offsets, notices) must feed the signature, or it
   is drawn but never shown. An idle window must use no CPU (`scripts/compare-editors.py` measures it).
 - Never return `Next::At(t)` for a time already past the display time (it busy-loops).
+- Windows pacing (`win.rs`): no frame reports its display time there, so a thread waits for the window's
+  display's vertical blank (D3DKMT, only while frames are drawn) and `Pacer::align` follows the fitted
+  grid; Windows' stated refresh rate is whole hertz and drifts. `NEOLINK_VBLANK=0` turns it off. The
+  1 ms system timer is on only while drawing. Wheel notches glide (`ScrollPhase::Wheel`,
+  `WHEEL_GLIDE`); fractional wheel deltas are touchpads and are drawn as they come.
 - Accessibility (`access.rs`) builds its tree only while a client listens and only after a frame was drawn.
 - Scrolling: input goes through `ScrollSmoother` at display cadence; trackpad gestures lock to one axis
   (`AxisLock`) and never forward sideways drift of a vertical gesture to Neovim.

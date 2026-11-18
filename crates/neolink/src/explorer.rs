@@ -812,7 +812,7 @@ impl Explorer {
             self.smoother.begin_gesture();
         }
         // Fingers moving down bring earlier rows into view.
-        self.smoother.push(time, -delta, period);
+        self.smoother.push_input(time, -delta, period, phase == ScrollPhase::Wheel);
     }
 
     /// What decides the sidebar's pixels, apart from the active file.

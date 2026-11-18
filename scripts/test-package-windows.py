@@ -30,6 +30,9 @@ class PackagingTests(unittest.TestCase):
                 self.assertEqual(archive.read("NeoLink/Resources/Editor/neolink.lua"), b"-- fixture")
                 self.assertIn("NeoLink/README.txt", archive.namelist())
                 self.assertIsNone(archive.testzip())
+            digest, name = (output.parent / "app.zip.sha256").read_text().split()
+            self.assertEqual(name, "app.zip")
+            self.assertEqual(digest, __import__("hashlib").sha256(output.read_bytes()).hexdigest())
             (editor / "neolink.lua").unlink()
             with self.assertRaisesRegex(ValueError, "Missing"):
                 packager.package(binary, root, output)

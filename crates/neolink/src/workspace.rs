@@ -171,7 +171,7 @@ pub struct Workspace {
     scale: f32,
     period: f64,
     /// The terminal pane's grid, from the last layout.
-    grid: (usize, usize),
+    pub grid: (usize, usize),
     /// The editor's grid: its pane has a toolbar above and a footer below instead of a status bar.
     editor_grid: (usize, usize),
     pub benchmark_horizontal: bool,
@@ -1218,7 +1218,7 @@ impl Workspace {
             return;
         }
         if let Some(editor) = self.native_editor() {
-            editor.scroll_input(time, delta_y, phase == ScrollPhase::Began, period);
+            editor.scroll_input(time, delta_y, phase, period);
         } else if self.active_is_document() {
             let (row, column) = self.pointer_cell();
             let path = self.active_document().unwrap_or_default();
