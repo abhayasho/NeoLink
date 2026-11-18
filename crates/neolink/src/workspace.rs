@@ -2975,9 +2975,10 @@ impl Workspace {
         let line = ui.px(1.0).max(1.0);
         ui.painter.scene.fill(rect.x, rect.y, rect.width, line, theme::SEPARATOR);
         let middle = rect.y + line + (rect.height - line) * 0.5;
-        let dot = ui.px(5.0);
         let x = rect.x + ui.px(12.0);
-        ui.painter.scene.fill(x, middle - dot * 0.5, dot, dot, if running { theme::ACCENT } else { theme::TEXT_SECONDARY });
+        // A round light: green while the shell runs, gray once it has ended.
+        let dot = ui.px(6.0);
+        ui.rounded(Rect::new(x, middle - dot * 0.5, dot, dot), 3.0, if running { theme::rgb(0x8FBF7F) } else { theme::TEXT_SECONDARY });
         let remote = self.tabs.get(self.shown).and_then(Tab::terminal).and_then(|terminal| terminal.remote.clone());
         ui.text(if !running { "Session ended" } else if remote.is_some() { "SSH" } else { "Local shell" }, x + dot + ui.px(7.0), middle, 10.0, 500, false, theme::TEXT_SECONDARY);
         if let Some(remote) = remote {
@@ -3082,7 +3083,23 @@ impl Workspace {
             ),
             None => (format!("Neovim \u{b7} {mode}"), if cfg!(target_os = "macos") { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   \u{2318}S  Save" } else { "Esc  Normal mode   \u{b7}   i  Insert   \u{b7}   Ctrl+Shift+S  Save" }),
         };
-        ui.text(&status, footer.x + ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+        if self.native.contains_key(path) {
+            ui.text(&status, footer.x + ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+        } else {
+            // Neovim's mode as a small pill in its own color: it decides what every key does.
+            let x = footer.x + ui.px(12.0);
+            let name = ui.text("Neovim", x, middle, 10.0, 400, false, theme::TEXT_SECONDARY);
+            let (fill, text) = match mode {
+                "Insert" => (faded(theme::PRIMARY, 0.28), theme::rgb(0xB9D0FF)),
+                "Normal" => (theme::white(0.09), theme::TEXT_PRIMARY),
+                _ => (theme::rgb(0x4A3A5E), theme::rgb(0xD9C4F2)),
+            };
+            let label = mode.to_uppercase();
+            let label_width = ui.measure(&label, 8.5, 700, false);
+            let pill = Rect::new((x + name + ui.px(8.0)).round(), (middle - ui.px(7.5)).round(), (label_width + ui.px(12.0)).round(), ui.px(15.0).round());
+            ui.rounded(pill, 4.0, fill);
+            ui.text(&label, pill.x + ui.px(6.0), middle, 8.5, 700, false, text);
+        }
         ui.text_right(hints, footer.right() - ui.px(12.0), middle, 10.0, 400, false, theme::TEXT_SECONDARY);
         self.toolbar_buttons = buttons;
     }
