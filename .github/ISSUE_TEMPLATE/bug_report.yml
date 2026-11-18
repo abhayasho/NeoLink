@@ -1,0 +1,53 @@
+name: Bug report
+description: Something does not work or looks wrong.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: NeoLink version
+      description: NeoLink → About NeoLink on macOS; the release you downloaded on Windows.
+      placeholder: "2.0.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - macOS (Apple silicon)
+        - Windows x64
+        - Other (built from source)
+    validations:
+      required: true
+  - type: input
+    id: system-version
+    attributes:
+      label: System version
+      placeholder: "macOS 15.4 / Windows 11 24H2"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a project
+        2. ...
+  - type: textarea
+    id: crash-report
+    attributes:
+      label: Crash report
+      description: If NeoLink crashed, paste or attach the newest report from Help → Show Crash Reports (macOS `~/Library/Logs/NeoLink`, Windows `%LOCALAPPDATA%\NeoLink\Logs`).
+      render: text
+  - type: input
+    id: tools
+    attributes:
+      label: Related tools
+      description: Neovim, shell, language server or agent versions, if the problem involves them.
+      placeholder: "Neovim 0.11.4, zsh 5.9"

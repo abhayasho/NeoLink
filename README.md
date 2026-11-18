@@ -54,7 +54,7 @@ brew install pyright typescript typescript-language-server   # optional language
 - **Coding agents.** Run Claude Code or another CLI agent in a terminal panel, or hold a native ACP conversation with streaming replies, tool previews, permission prompts and modes. [Agent guide](docs/AGENT_GUIDE.md).
 - **PDFs** open in tabs on macOS (Apple's PDF view, with page and zoom controls) and in your system viewer on Windows.
 - **Accessibility.** Screen readers (VoiceOver, Narrator) can read and operate the toolbar, tabs, file tree and the text of the terminal or editor.
-- **Looks after itself.** Remembers your project, recent projects, panel sizes, text size and window position; **View → Performance Monitor** shows frame timing live.
+- **Looks after itself.** Remembers your project, recent projects, panel sizes, text size and window position; **View → Performance Monitor** shows frame timing live. If it ever crashes, it keeps a report on your computer and tells you on the next launch; nothing is sent anywhere.
 
 ## Keyboard shortcuts
 
@@ -80,12 +80,15 @@ The editor starts in Neovim's Insert mode; **Esc** for Normal mode.
 
 ## Performance
 
-Measured on an M2 Max MacBook Pro against VS Code 1.146 with a fresh profile and no extensions, on the same folder and file ([script](scripts/compare-editors.py)):
+Measured on an M2 Max MacBook Pro against VS Code 1.146 with a fresh profile and no extensions, on the same folder and file:
 
 | | NeoLink (app, Neovim and shell) | VS Code |
 | --- | --- | --- |
 | Memory (physical footprint) | 112–115 MiB | 849–1,299 MiB |
 | CPU while idle, a minute after launch | 0.0% | 5.7% |
+| Terminal output: 1,000,000 lines (77 MiB) written to the terminal | 0.63–0.64 s (121–123 MiB/s) | 7.86–7.99 s (9.7–9.8 MiB/s) |
+
+That is about **12× faster terminal output** (92% less time), with **86–91% less memory**. Memory and CPU: [compare-editors.py](scripts/compare-editors.py); output: [compare-terminal-throughput.sh](scripts/compare-terminal-throughput.sh), three alternating runs each, 10,000 lines of scrollback in both, at each app's default window size (127×41 and 108×55 cells). The output test times how fast the terminal takes the text in, not when the last frame reaches the screen.
 
 NeoLink's own benchmark (`NEOLINK_BENCHMARK`, synthetic input with real timestamps, release build, full screen) measured about 5–7 ms from key press to the frame on screen while macOS presents the window directly (when it composites, every app gains about two refreshes), and steady trackpad scrolling with 1–4 uneven frames in about 300 for the terminal, the editor and full-screen programs; fast flicks are less even. Details, method and raw numbers: [docs/PLAN.md](docs/PLAN.md) and [docs/HORIZONTAL_SCROLL.md](docs/HORIZONTAL_SCROLL.md). Typing latency was not compared with VS Code.
 
@@ -101,7 +104,7 @@ scripts/build-app.sh                                  # macOS: target/NeoLink.ap
 python scripts/package-windows.py                     # Windows, after cargo build --release
 ```
 
-Tests: `cargo test --workspace` (the editor tests use a real Neovim when it is installed), plus `python3 scripts/test-editor.py` for the editor's Lua runtime. [Releasing](docs/RELEASING.md).
+Tests: `cargo test --workspace` (the editor tests use a real Neovim when it is installed), plus `python3 scripts/test-editor.py` for the editor's Lua runtime. [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Releasing](docs/RELEASING.md).
 
 ## How it is built
 
