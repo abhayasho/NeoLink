@@ -525,7 +525,7 @@ impl GitSheet {
     fn button(&mut self, ui: &mut Ui, label: &str, right: f32, middle: f32, what: &'static str, enabled: bool, prominent: bool) -> f32 {
         let width = ui.measure(label, 11.0, 500, false) + ui.px(18.0);
         let rect = Rect::new(right - width, middle - ui.px(10.0), width, ui.px(20.0));
-        ui.rounded(rect, 5.0, if prominent && enabled { theme::rgb(0x2F6FDB) } else { theme::rgb(0x343434) });
+        ui.rounded(rect, 5.0, if prominent && enabled { theme::PRIMARY } else { theme::rgb(0x343434) });
         ui.text(label, rect.x + ui.px(9.0), middle, 11.0, 500, false, if !enabled { faded(theme::TEXT_SECONDARY, 0.6) } else if prominent { theme::rgb(0xFFFFFF) } else { theme::TEXT_PRIMARY });
         if enabled {
             self.buttons.push((rect, what));
@@ -626,7 +626,7 @@ impl GitSheet {
         let commit_width = self.button(ui, &label, frame.right() - ui.px(12.0), commit_top + ui.px(11.0), "commit", can_commit, true);
         let field = Rect::new(frame.x + ui.px(12.0), commit_top, frame.width - ui.px(24.0 + 12.0) - commit_width, ui.px(40.0));
         ui.rounded(field, 5.0, theme::rgb(0x1E1E1E));
-        ui.outline(field, 5.0, if self.focus == Focus::Commit { theme::rgb(0x2F6FDB) } else { theme::white(0.12) });
+        ui.outline(field, 5.0, if self.focus == Focus::Commit { theme::PRIMARY } else { theme::white(0.12) });
         ui.painter.scene.set_clip(Some(field));
         let text_middle = field.y + ui.px(12.0);
         let caret = if self.commit_message.is_empty() {
@@ -794,7 +794,7 @@ impl GitSheet {
             }
             let field = Rect::new(alert.x + pad, alert.y + pad + ui.px(62.0), alert.width - 2.0 * pad, ui.px(22.0));
             ui.rounded(field, 5.0, theme::rgb(0x1A1A1A));
-            ui.outline(field, 5.0, theme::rgb(0x2F6FDB));
+            ui.outline(field, 5.0, theme::PRIMARY);
             let middle = field.y + field.height * 0.5;
             let caret = if self.branch_name.is_empty() {
                 ui.text("Branch name", field.x + ui.px(6.0), middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));

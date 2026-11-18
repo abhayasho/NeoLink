@@ -944,7 +944,7 @@ impl Workspace {
         }
         let done_width = ui.measure("Done", 12.0, 500, false) + ui.px(24.0);
         let done = Rect::new(right - done_width, button_y, done_width, ui.px(22.0));
-        ui.rounded(done, 5.0, theme::rgb(0x2F6FDB));
+        ui.rounded(done, 5.0, theme::PRIMARY);
         ui.text("Done", done.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, theme::rgb(0xFFFFFF));
         buttons.push((done, "done".into()));
         self.recent_sheet = Some(buttons);
@@ -1698,7 +1698,7 @@ impl Workspace {
         }
         let field = Rect::new(left, y, width - 2.0 * pad, ui.px(22.0));
         ui.rounded(field, 5.0, theme::rgb(0x1A1A1A));
-        ui.outline(field, 5.0, theme::rgb(0x2F6FDB));
+        ui.outline(field, 5.0, theme::PRIMARY);
         let middle = field.y + field.height * 0.5;
         if creation.name.is_empty() {
             ui.text(if renaming { "Name" } else if creation.is_directory { "Folder name" } else { "File name, e.g. main.py" }, field.x + ui.px(6.0), middle, 12.0, 400, false, faded(theme::TEXT_SECONDARY, 0.7));
@@ -1712,7 +1712,7 @@ impl Workspace {
         let confirm = if renaming { "Rename" } else { "Create" };
         let create_width = ui.measure(confirm, 12.0, 500, false) + ui.px(24.0);
         creation.create = Rect::new(sheet.right() - pad - create_width, button_y, create_width, ui.px(22.0));
-        ui.rounded(creation.create, 5.0, if valid { theme::rgb(0x2F6FDB) } else { theme::rgb(0x333333) });
+        ui.rounded(creation.create, 5.0, if valid { theme::PRIMARY } else { theme::rgb(0x333333) });
         ui.text(confirm, creation.create.x + ui.px(12.0), button_y + ui.px(11.0), 12.0, 500, false, if valid { theme::rgb(0xFFFFFF) } else { theme::TEXT_SECONDARY });
         let cancel_width = ui.measure("Cancel", 12.0, 500, false) + ui.px(24.0);
         creation.cancel = Rect::new(creation.create.x - ui.px(8.0) - cancel_width, button_y, cancel_width, ui.px(22.0));
@@ -1988,7 +1988,7 @@ impl Workspace {
         let mut y = alert.y + pad + ui.px(72.0);
         for (label, what, prominent) in [("Save", "save", true), ("Cancel", "cancel", false), ("Don\u{2019}t Save", "discard", false)] {
             let button = Rect::new(alert.x + pad, y, width - 2.0 * pad, ui.px(28.0));
-            ui.rounded(button, 6.0, if prominent { theme::rgb(0x2F6FDB) } else { theme::rgb(0x3A3A3A) });
+            ui.rounded(button, 6.0, if prominent { theme::PRIMARY } else { theme::rgb(0x3A3A3A) });
             let label_width = ui.measure(label, 13.0, 500, false);
             ui.text(label, button.x + (button.width - label_width) * 0.5, button.y + button.height * 0.5, 13.0, 500, false, if prominent { theme::rgb(0xFFFFFF) } else { theme::TEXT_PRIMARY });
             closing.buttons.push((button, what));
@@ -2573,7 +2573,7 @@ impl Workspace {
         let bar = Rect::new(pane.right() - width - ui.px(12.0), pane.y + ui.px(6.0), width, ui.px(28.0));
         ui.shadow(bar, 6.0);
         ui.rounded(bar, 6.0, theme::rgb(0x262626));
-        ui.outline(bar, 6.0, if found { theme::rgb(0x2F6FDB) } else { theme::rgb(0xCC9595) });
+        ui.outline(bar, 6.0, if found { theme::PRIMARY } else { theme::rgb(0xCC9595) });
         let middle = bar.y + bar.height * 0.5;
         let glass = ui.icon("magnifyingglass", 11.0, IconWeight::Regular, bar.x + ui.px(9.0 + 6.0), middle, theme::TEXT_SECONDARY).max(ui.px(12.0));
         let text_x = bar.x + ui.px(9.0) + glass + ui.px(7.0);
@@ -2851,7 +2851,9 @@ impl Workspace {
     fn draw_strip(&mut self, painter: &mut Painter) {
         let mut ui = Ui { painter, scale: self.scale };
         let strip = self.strip;
-        ui.fill(strip, theme::EDITOR_BACKGROUND);
+        // The strip is the sidebar's darker gray; the shown tab is the editor's color with no line under
+        // it, so it reads as the top of the page below rather than a label floating above it.
+        ui.fill(strip, theme::SIDEBAR_BACKGROUND);
         self.tab_rects.clear();
         self.close_rects.clear();
         let middle = strip.y + strip.height * 0.5;
@@ -2891,6 +2893,7 @@ impl Workspace {
         }
         self.strip_scroll = self.strip_scroll.clamp(0.0, (content - viewport).max(0.0)).round();
         let mut x = strip.x - self.strip_scroll;
+        let mut selected_span: Option<(f32, f32)> = None;
         for (index, (title, is_document, modified)) in tabs.iter().enumerate() {
             let (fitted, context, _, width) = &layout[index];
             let width = *width;
@@ -2901,8 +2904,10 @@ impl Workspace {
             self.tab_rects.push(Rect::new(visible_left, rect.y, (visible_right - visible_left).max(0.0), rect.height));
             let selected = index == self.shown;
             let hovered = self.hover == Some(index);
-            if !selected && hovered {
-                ui.fill(rect, theme::HOVER);
+            if selected {
+                ui.fill(rect, theme::EDITOR_BACKGROUND);
+            } else if hovered {
+                ui.fill(rect, theme::white(0.035));
             }
             let icon = if *is_document { if title.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" } } else { "terminal" };
             ui.icon(icon, 12.0, IconWeight::Regular, rect.x + ui.px(11.0 + 7.0), middle, if selected { theme::ACCENT } else { theme::TEXT_SECONDARY });
@@ -2921,13 +2926,15 @@ impl Workspace {
             self.close_rects.push(if close.x >= strip.x && close.right() <= strip.x + viewport { close } else { Rect::default() });
             ui.painter.scene.fill(rect.right() - line, rect.y, line, rect.height, theme::SEPARATOR);
             if selected {
-                ui.painter.scene.fill(rect.x, rect.bottom() - line, rect.width, line, theme::ACCENT);
+                // A hairline on top in the accent: where the eye looks for the shown tab.
+                ui.painter.scene.fill(rect.x, rect.y, rect.width - line, line, faded(theme::ACCENT, 0.55));
+                selected_span = Some((rect.x.max(strip.x), rect.right().min(strip.x + viewport)));
             }
             x += width;
         }
         // Tabs hidden past an edge: that edge fades out, so the strip reads as scrollable.
         let fade = ui.px(44.0);
-        let [r, g, b, _] = theme::EDITOR_BACKGROUND;
+        let [r, g, b, _] = theme::SIDEBAR_BACKGROUND;
         const STEPS: usize = 14;
         for (hidden, left) in [(self.strip_scroll > 0.5, true), (content - self.strip_scroll > viewport + 0.5, false)] {
             if !hidden {
@@ -2946,7 +2953,14 @@ impl Workspace {
         // New local terminal.
         self.plus_rect = Rect::new((x + ui.px(5.0)).min(strip.right() - ui.px(39.0)), middle - ui.px(15.0), ui.px(34.0), ui.px(30.0));
         ui.icon("plus", 12.0, IconWeight::Semibold, self.plus_rect.x + self.plus_rect.width * 0.5, middle, theme::TEXT_SECONDARY);
-        ui.painter.scene.fill(strip.x, strip.bottom(), strip.width, line, theme::SEPARATOR);
+        // The line under the strip stops under the shown tab.
+        match selected_span {
+            Some((start, end)) => {
+                ui.painter.scene.fill(strip.x, strip.bottom(), (start - strip.x).max(0.0), line, theme::SEPARATOR);
+                ui.painter.scene.fill(end, strip.bottom(), (strip.right() - end).max(0.0), line, theme::SEPARATOR);
+            }
+            None => ui.painter.scene.fill(strip.x, strip.bottom(), strip.width, line, theme::SEPARATOR),
+        }
     }
 
     /// The bar under a terminal (`TerminalStatusBar`).

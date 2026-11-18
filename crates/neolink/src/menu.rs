@@ -139,7 +139,7 @@ impl Menu {
                     let rect = Rect::new(x, top, width, row);
                     self.rects.push(rect);
                     if self.hover == Some(index) {
-                        ui.rounded(Rect::new(x + ui.px(5.0), top, width - ui.px(10.0), row), 4.0, theme::rgb(0x2F6FDB));
+                        ui.rounded(Rect::new(x + ui.px(5.0), top, width - ui.px(10.0), row), 4.0, theme::PRIMARY);
                     }
                     let middle = top + row * 0.5;
                     if *checked {

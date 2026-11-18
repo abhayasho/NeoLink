@@ -20,6 +20,8 @@ pub const TEXT_PRIMARY: Rgba = rgb(0xD8D8D8);
 pub const TEXT_SECONDARY: Rgba = rgb(0x969696);
 pub const ACCENT: Rgba = rgb(0xC4C4C4);
 pub const TERMINAL_SELECTION: Rgba = rgb(0x3A3F4A);
+/// The one strong color: default buttons, focus rings, the highlighted menu item.
+pub const PRIMARY: Rgba = rgb(0x2F6FDB);
 
 /// ANSI colours 0-15: recognisable meanings without bright primaries.
 pub const ANSI: [u32; 16] = [

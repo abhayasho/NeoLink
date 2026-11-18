@@ -60,7 +60,8 @@ for group, colors in pairs({
   CursorLine={bg='#1e1e1e'}, Cursor={fg='#181818',bg='#d8d8d8'},
   FoldColumn={fg='#686868',bg='#181818'}, Folded={fg='#969696',bg='#232323'},
   SignColumn={bg='#181818'}, EndOfBuffer={fg='#383838',bg='#181818'},
-  StatusLine={fg='#a0a0a0',bg='#1c1c1c'}, StatusLineNC={fg='#787878',bg='#1c1c1c'},
+  -- Quiet: the editor's own background and dim text; the app draws a hairline above it.
+  StatusLine={fg='#7c7c7c',bg='#181818'}, StatusLineNC={fg='#5c5c5c',bg='#181818'},
   WinSeparator={fg='#303030',bg='#181818'}, VertSplit={fg='#303030',bg='#181818'},
   Visual={bg='#343434'}, Comment={fg='#858585',italic=true}, String={fg='#d6b3d2'},
   Statement={fg='#a8ccdf'}, Type={fg='#a8ccdf'}, Function={fg='#d6d6a4'},

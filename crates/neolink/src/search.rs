@@ -291,7 +291,7 @@ impl SearchSheet {
         y += ui.px(11.0 + 12.0);
         let field = Rect::new(left, y, right - left, ui.px(24.0));
         ui.rounded(field, 5.0, theme::rgb(0x1E1E1E));
-        ui.outline(field, 5.0, theme::rgb(0x2F6FDB));
+        ui.outline(field, 5.0, theme::PRIMARY);
         let middle = field.y + field.height * 0.5;
         let line = ui.px(1.0).max(1.0);
         let caret = if self.query.is_empty() {

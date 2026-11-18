@@ -597,9 +597,12 @@ impl Editor {
         let mut scratch = std::mem::take(&mut self.scratch);
         for (index, row) in screen.rows.iter().enumerate() {
             let y = if smooth && index == text_rows {
-                // The status line.
+                // The status line, under a hairline (it shares the editor's background).
                 painter.scene.set_clip(Some(rect));
-                rect.y + visible as f32 * cell.height
+                let y = rect.y + visible as f32 * cell.height;
+                let line = (cell.font_pixels / 14.0).round().max(1.0);
+                painter.scene.fill(rect.x, y - line, rect.width, line, theme::SEPARATOR);
+                y
             } else {
                 rect.y + index as f32 * cell.height - shift
             };

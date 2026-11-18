@@ -731,9 +731,9 @@ impl Launcher {
                 let enabled = self.can_launch();
                 let launch_width = ui.measure(label, 12.0, 600, false) + ui.px(20.0);
                 let launch = Rect::new(right - launch_width, y, launch_width, ui.px(22.0));
-                // `.tint(accent)` with the label in the editor background colour.
-                ui.rounded(launch, 5.0, if enabled { theme::ACCENT } else { theme::rgb(0x333333) });
-                ui.text(label, launch.x + ui.px(10.0), middle, 12.0, 600, false, if enabled { theme::EDITOR_BACKGROUND } else { theme::TEXT_SECONDARY });
+                // The default button, as in every sheet: the primary color with white text.
+                ui.rounded(launch, 5.0, if enabled { theme::PRIMARY } else { theme::rgb(0x333333) });
+                ui.text(label, launch.x + ui.px(10.0), middle, 12.0, 600, false, if enabled { theme::rgb(0xFFFFFF) } else { theme::TEXT_SECONDARY });
                 if enabled {
                     self.buttons.push((launch, "launch"));
                 }
@@ -767,7 +767,7 @@ impl Launcher {
         }
         let focused = self.focus == Some(field);
         ui.rounded(rect, 5.0, theme::rgb(0x1E1E1E));
-        ui.outline(rect, 5.0, if focused { theme::rgb(0x2F6FDB) } else { theme::white(0.12) });
+        ui.outline(rect, 5.0, if focused { theme::PRIMARY } else { theme::white(0.12) });
         self.buttons.push((rect, what));
         let line = ui.px(1.0).max(1.0);
         let (points, monospace) = if multiline { (12.0, true) } else { (13.0, false) };

@@ -440,7 +440,7 @@ impl RemoteBrowser {
         if let Some((prompt, name)) = &self.prompt {
             let field = Rect::new(rect.x + inset, y, rect.width - 2.0 * inset, ui.px(27.0));
             ui.rounded(field, 4.0, theme::rgb(0x161616));
-            ui.outline(field, 4.0, theme::rgb(0x2F6FDB));
+            ui.outline(field, 4.0, theme::PRIMARY);
             let field_middle = field.y + field.height * 0.5;
             let end = if name.is_empty() {
                 ui.text(match prompt {

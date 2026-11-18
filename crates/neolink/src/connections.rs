@@ -534,7 +534,7 @@ impl Connections {
             ui.text(title, x, y + ui.px(7.0), 11.0, 500, false, theme::TEXT_SECONDARY);
             let rect = Rect::new(x, y + ui.px(14.0 + 7.0), width, ui.px(22.0));
             ui.rounded(rect, 5.0, theme::rgb(0x1E1E1E));
-            ui.outline(rect, 5.0, if sheet.focus == which { theme::rgb(0x2F6FDB) } else { theme::white(0.12) });
+            ui.outline(rect, 5.0, if sheet.focus == which { theme::PRIMARY } else { theme::white(0.12) });
             let middle = rect.y + rect.height * 0.5;
             ui.painter.scene.set_clip(Some(rect));
             let end = if value.is_empty() {
@@ -588,8 +588,9 @@ impl Connections {
         let valid = Self::sheet_valid(&sheet);
         let save_width = ui.measure(label, 12.0, 600, false) + ui.px(20.0);
         let save_rect = Rect::new(right - save_width, y, save_width, ui.px(22.0));
-        ui.rounded(save_rect, 5.0, if valid { theme::ACCENT } else { theme::rgb(0x333333) });
-        ui.text(label, save_rect.x + ui.px(10.0), middle, 12.0, 600, false, if valid { theme::EDITOR_BACKGROUND } else { theme::TEXT_SECONDARY });
+        // The default button, as in every sheet: the primary color with white text.
+        ui.rounded(save_rect, 5.0, if valid { theme::PRIMARY } else { theme::rgb(0x333333) });
+        ui.text(label, save_rect.x + ui.px(10.0), middle, 12.0, 600, false, if valid { theme::rgb(0xFFFFFF) } else { theme::TEXT_SECONDARY });
         if valid {
             sheet.buttons.push((save_rect, "save"));
         }
