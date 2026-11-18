@@ -9,8 +9,12 @@
    report says `visibleTimingValid: false` (locked screen, hidden window) shows nothing about timing.
 3. Write the notes in `docs/releases/v<version>.md` and commit.
 4. Push to `main`, then push the tag: `git tag -a v<version> -m "NeoLink <version>" && git push origin v<version>`.
-   The Release workflow tests and packages both systems and attaches `NeoLink-macos-arm64.zip`, its
-   `.sha256` and `NeoLink-windows-x64.zip` to a **draft** release with those notes.
+   The Release workflow tests and packages both systems and attaches the universal macOS app
+   (Apple silicon and Intel) as `NeoLink-macos-universal.zip`, the same archive as
+   `NeoLink-macos-arm64.zip` (for older installers and links), their `.sha256` files and
+   `NeoLink-windows-x64.zip` to a **draft** release with those notes. Locally,
+   `NEOLINK_UNIVERSAL=1 scripts/build-app.sh` builds the universal app; `arch -x86_64` runs its
+   Intel half under Rosetta.
 5. Check the draft's assets (download, verify the checksum, open the app), then publish it and mark it
    latest. `scripts/install.sh` and the README's links download from the latest release, so keep the
    asset names.

@@ -30,5 +30,8 @@ announcements of terminal output are not implemented.
 IME (input methods for Chinese, Japanese, Korean and others); PDF tabs on Windows (they open in the
 system viewer); editing remote files in place (remote previews are read-only); restoring unsaved work
 after a crash; two documents side by side; progress and cancellation for remote transfers and project
-search; Developer ID signing and notarization on macOS, code signing on Windows; Intel Macs (build from
-source).
+search; Developer ID signing and notarization on macOS, code signing on Windows.
+
+**Intel Macs:** releases from 2.2 are universal. The Intel half has been run under Rosetta on Apple
+silicon (it draws and works through the capture harness), not yet on an Intel Mac with Intel or AMD
+graphics.

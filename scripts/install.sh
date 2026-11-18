@@ -10,7 +10,7 @@ neolink_arch=$(uname -m)
 if [[ "$neolink_arch" == x86_64 ]] && [[ "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" == 1 ]]; then
   neolink_arch=arm64
 fi
-[[ "$neolink_arch" == arm64 ]] || fail 'The prebuilt app currently supports Apple silicon (M1 or later). Intel Macs require a source build.'
+[[ "$neolink_arch" == arm64 || "$neolink_arch" == x86_64 ]] || fail "Unsupported processor: $neolink_arch."
 neolink_major=$(sw_vers -productVersion | cut -d. -f1)
 [[ "$neolink_major" -ge 13 ]] || fail 'macOS 13 or later is required.'
 if pgrep -x NeoLink >/dev/null; then
@@ -40,13 +40,25 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-neolink_asset=NeoLink-macos-arm64.zip
 neolink_url=https://github.com/abhayasho/NeoLink/releases/latest/download
-printf 'Downloading NeoLink for Apple silicon…\n'
-curl --fail --location --show-error --silent --retry 3 --connect-timeout 20 --max-time 300 \
-  --proto '=https' --proto-redir '=https' "$neolink_url/$neolink_asset" -o "$neolink_tmp/$neolink_asset"
-curl --fail --location --show-error --silent --retry 3 --connect-timeout 20 --max-time 60 \
-  --proto '=https' --proto-redir '=https' "$neolink_url/$neolink_asset.sha256" -o "$neolink_tmp/checksum"
+neolink_download() {
+  curl --fail --location --show-error --silent --retry 3 --connect-timeout 20 --max-time "$3" \
+    --proto '=https' --proto-redir '=https' "$neolink_url/$1" -o "$2"
+}
+# The universal app runs on Apple silicon and Intel. Releases before it have only the Apple silicon
+# download, which Apple silicon falls back to.
+neolink_asset=NeoLink-macos-universal.zip
+if [[ "$neolink_arch" == arm64 ]]; then
+  printf 'Downloading NeoLink for Apple silicon…\n'
+else
+  printf 'Downloading NeoLink for Intel…\n'
+fi
+if ! neolink_download "$neolink_asset.sha256" "$neolink_tmp/checksum" 60 2>/dev/null; then
+  [[ "$neolink_arch" == arm64 ]] || fail 'The latest release has no Intel build yet. Build NeoLink from source (see the README).'
+  neolink_asset=NeoLink-macos-arm64.zip
+  neolink_download "$neolink_asset.sha256" "$neolink_tmp/checksum" 60
+fi
+neolink_download "$neolink_asset" "$neolink_tmp/$neolink_asset" 300
 neolink_expected=$(awk -v name="$neolink_asset" '$2 == name && length($1) == 64 && $1 !~ /[^0-9a-f]/ {print $1}' "$neolink_tmp/checksum")
 [[ ${#neolink_expected} -eq 64 ]] || fail 'Invalid release checksum.'
 neolink_actual=$(shasum -a 256 "$neolink_tmp/$neolink_asset" | awk '{print $1}')
@@ -56,6 +68,7 @@ neolink_app="$neolink_tmp/unpacked/NeoLink.app"
 [[ -d "$neolink_app" && ! -L "$neolink_app" ]] || fail 'The release does not contain NeoLink.app.'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$neolink_app/Contents/Info.plist")" == com.neolink.app ]] || fail 'Unexpected app identity.'
 [[ -x "$neolink_app/Contents/MacOS/NeoLink" ]] || fail 'App executable is missing.'
+[[ " $(lipo -archs "$neolink_app/Contents/MacOS/NeoLink") " == *" $neolink_arch "* ]] || fail "The download does not run on this Mac ($neolink_arch)."
 codesign --verify --deep --strict "$neolink_app"
 # Stage on the destination filesystem before replacing the old app; keep a rollback copy.
 neolink_stage=$(mktemp -d "$neolink_parent/.neolink-install.XXXXXX")

@@ -65,9 +65,14 @@ jobs:
       - name: Package for Windows
         if: runner.os == 'Windows'
         run: python scripts/package-windows.py
+      # A universal app: Apple silicon and Intel.
       - name: Package for macOS and test the installer
         if: runner.os == 'macOS'
+        env:
+          NEOLINK_UNIVERSAL: 1
+          NEOLINK_REQUIRE_UNIVERSAL: 1
         run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
           scripts/build-app.sh
           scripts/package-release.sh
           python3 scripts/test-installer.py

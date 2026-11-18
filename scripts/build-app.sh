@@ -2,7 +2,9 @@
 # Builds NeoLink.app (macOS) at target/NeoLink.app from the release binary.
 # The version comes from Cargo.toml; the bundle identifier is com.neolink.app, as for every release.
 # Set NEOLINK_SIGNING_IDENTITY to sign with a certificate (folder permissions then survive updates);
-# otherwise the app is ad-hoc signed. Run from anywhere: scripts/build-app.sh
+# otherwise the app is ad-hoc signed. NEOLINK_UNIVERSAL=1 builds for Apple silicon and Intel and joins
+# them into one universal binary (releases do; needs `rustup target add x86_64-apple-darwin
+# aarch64-apple-darwin`). Run from anywhere: scripts/build-app.sh
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,13 +12,23 @@ ROOT="$PWD"
 APP="$ROOT/target/NeoLink.app"
 ICON_SRC="$ROOT/Resources/AppIcon.png"
 
-echo "Building the release binary..."
-cargo build --release -p neolink --locked
+if [[ "${NEOLINK_UNIVERSAL:-0}" == 1 ]]; then
+  echo "Building the release binary for Apple silicon and Intel..."
+  for TARGET in aarch64-apple-darwin x86_64-apple-darwin; do
+    MACOSX_DEPLOYMENT_TARGET=13.0 cargo build --release -p neolink --locked --target "$TARGET"
+  done
+  BINARY=$(mktemp -d "${TMPDIR:-/tmp}/NeoLinkBinary.XXXXXX")/neolink
+  lipo -create -output "$BINARY" "$ROOT/target/aarch64-apple-darwin/release/neolink" "$ROOT/target/x86_64-apple-darwin/release/neolink"
+else
+  echo "Building the release binary..."
+  cargo build --release -p neolink --locked
+  BINARY="$ROOT/target/release/neolink"
+fi
 
 echo "Creating $APP ..."
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$ROOT/target/release/neolink" "$APP/Contents/MacOS/NeoLink"
+cp "$BINARY" "$APP/Contents/MacOS/NeoLink"
 # Debug information stays in target/release for profiling; the shipped binary does without it.
 strip -S -x "$APP/Contents/MacOS/NeoLink"
 chmod +x "$APP/Contents/MacOS/NeoLink"
@@ -45,4 +57,4 @@ rm -rf "$(dirname "$ICONSET")"
 
 codesign --force --sign "${NEOLINK_SIGNING_IDENTITY:--}" "$APP" >/dev/null
 codesign --verify --deep --strict "$APP"
-echo "Built $APP (NeoLink $VERSION, build $BUILD)"
+echo "Built $APP (NeoLink $VERSION, build $BUILD, $(lipo -archs "$APP/Contents/MacOS/NeoLink"))"

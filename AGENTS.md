@@ -45,8 +45,11 @@ Control, ACP and terminal coding agents. Versions 1.x were a Swift app; that cod
 - The fallback editor's saves keep line endings and refuse to overwrite files changed on disk.
 - Platform conventions: macOS shortcuts use ⌘; on Windows app shortcuts use Ctrl+Shift (Ctrl belongs
   to the terminal), except in the built-in editor. Word movement is Option on macOS, Ctrl on Windows.
-- Keep the bundle identifier `com.neolink.app` and the release asset names: `scripts/install.sh` and
-  existing installs depend on them.
+- Keep the bundle identifier `com.neolink.app` and the release asset names
+  (`NeoLink-macos-universal.zip`, `NeoLink-macos-arm64.zip`, `NeoLink-windows-x64.zip`): `scripts/install.sh`,
+  older installers and links depend on them. Releases are universal (`NEOLINK_UNIVERSAL=1`).
+- Commands live once in `commands.rs`: the macOS menu bar and the command palette (⇧⌘P, F1) are built
+  from it. A new menu command goes there; `App::menu_command` runs its id.
 - The code builds with no warnings on macOS and Windows; CI's "No warnings" step enforces it
   (`cargo check --target x86_64-pc-windows-msvc` from a Mac catches Windows-only ones).
 - Crashes: `crash.rs` writes a report per panic (`~/Library/Logs/NeoLink`, `%LOCALAPPDATA%\NeoLink\Logs`;
