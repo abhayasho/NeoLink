@@ -1317,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "neolink"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -1355,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "neolink-acp"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "neolink-core",
  "parking_lot",
@@ -1364,11 +1364,11 @@ dependencies = [
 
 [[package]]
 name = "neolink-core"
-version = "2.0.2"
+version = "2.0.3"
 
 [[package]]
 name = "neolink-nvim"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "neolink-core",
  "rmpv",
