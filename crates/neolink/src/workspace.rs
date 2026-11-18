@@ -3307,11 +3307,6 @@ impl Content for Workspace {
                 Next::Soon => Next::Soon,
             };
         }
-        // A modal sheet dims what it covers, so it reads as in front of the workspace.
-        if self.creation.is_some() || self.closing.is_some() || self.recent_sheet.is_some() || self.launcher.is_some() || self.git.is_some() || self.connections.sheet_is_open() {
-            painter.scene.set_clip(None);
-            painter.scene.fill(0.0, 0.0, self.window.0, self.window.1, [0, 0, 0, 90]);
-        }
         self.draw_creation(painter);
         self.draw_closing(painter);
         self.draw_recent(painter);

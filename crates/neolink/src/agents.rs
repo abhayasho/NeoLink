@@ -259,9 +259,28 @@ impl Conversation {
             blocks.push(text_block(self, ui, "Ask about your project or describe a change.", inner, 13.0, false, theme::TEXT_SECONDARY));
             blocks.push(Block::Space(gap));
         }
-        for message in &state.messages {
-            blocks.push(Block::Text { lines: std::rc::Rc::new(vec![message.role.clone()]), points: 10.0, monospace: false, color: theme::TEXT_SECONDARY, row: ui.px(13.0), weight: 600 });
-            blocks.push(Block::Space(ui.px(6.0)));
+        // Messages and tool calls in the order they happened: each tool after the messages that came
+        // before it (they were all drawn after every message, so a reply's last words sat above the
+        // tool calls that preceded them).
+        let tool_block = |this: &mut Conversation, ui: &mut Ui, blocks: &mut Vec<Block>, tool: &neolink_acp::Tool| {
+            let open = this.open_tools.contains(&tool.id);
+            blocks.push(Block::Disclosure { label: tool.title.clone(), sub: Some(tool.status.clone()), open, what: format!("tool:{}", tool.id) });
+            if open {
+                blocks.push(text_block(this, ui, &tool.details, inner - ui.px(16.0), 10.0, true, theme::TEXT_PRIMARY));
+            }
+            blocks.push(Block::Space(gap));
+        };
+        let mut previous_role: Option<&str> = None;
+        for (index, message) in state.messages.iter().enumerate() {
+            for tool in state.tools.iter().filter(|tool| tool.after_message == index) {
+                tool_block(self, ui, &mut blocks, tool);
+            }
+            // One reply reads as one: its name is not repeated after a tool call.
+            if previous_role != Some(message.role.as_str()) {
+                blocks.push(Block::Text { lines: std::rc::Rc::new(vec![message.role.clone()]), points: 10.0, monospace: false, color: theme::TEXT_SECONDARY, row: ui.px(13.0), weight: 600 });
+                blocks.push(Block::Space(ui.px(6.0)));
+            }
+            previous_role = Some(message.role.as_str());
             if Some(message.id) == streaming {
                 // While text streams in, each paragraph is wrapped on its own, so a chunk lays out only
                 // the last paragraph.
@@ -284,13 +303,8 @@ impl Conversation {
             }
             blocks.push(Block::Space(gap));
         }
-        for tool in &state.tools {
-            let open = self.open_tools.contains(&tool.id);
-            blocks.push(Block::Disclosure { label: tool.title.clone(), sub: Some(tool.status.clone()), open, what: format!("tool:{}", tool.id) });
-            if open {
-                blocks.push(text_block(self, ui, &tool.details, inner - ui.px(16.0), 10.0, true, theme::TEXT_PRIMARY));
-            }
-            blocks.push(Block::Space(gap));
+        for tool in state.tools.iter().filter(|tool| tool.after_message >= state.messages.len()) {
+            tool_block(self, ui, &mut blocks, tool);
         }
         if let Some(error) = &state.error {
             blocks.push(text_block(self, ui, error, inner, 11.0, false, theme::rgb(0xC6B28E)));
@@ -435,6 +449,8 @@ pub struct Launcher {
     arguments: String,
     mcp: String,
     focus: Option<Field>,
+    /// The focused field's text is selected: the next key replaces it (as text fields do on focus).
+    selected_all: bool,
     pub error: Option<String>,
     claude_found: bool,
     buttons: Vec<(Rect, &'static str)>,
@@ -443,7 +459,7 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn new(directory: Option<PathBuf>, custom_name: String, custom_executable: String) -> Launcher {
-        Launcher { directory, acp: false, custom: false, continue_session: false, docked: true, mcp_open: false, name: custom_name, executable: custom_executable, arguments: String::new(), mcp: String::new(), focus: None, error: None, claude_found: executable("claude").is_some(), buttons: Vec::new(), frame: Rect::default() }
+        Launcher { directory, acp: false, custom: false, continue_session: false, docked: true, mcp_open: false, name: custom_name, executable: custom_executable, arguments: String::new(), mcp: String::new(), focus: None, selected_all: false, error: None, claude_found: executable("claude").is_some(), buttons: Vec::new(), frame: Rect::default() }
     }
 
     /// The custom agent's name and executable, which are remembered between launches.
@@ -481,6 +497,19 @@ impl Launcher {
             Some(Field::Mcp) => Some(&mut self.mcp),
             None => None,
         };
+        // A field entered with its text selected: typing or Backspace replaces all of it (the agent name
+        // is prefilled with "My agent", and typing used to append to it).
+        let replacing = std::mem::take(&mut self.selected_all);
+        let field = match field {
+            Some(field) if replacing && (matches!(key, Key::Named(NamedKey::Backspace)) || text.is_some_and(|text| !text.is_empty() && !text.chars().any(char::is_control))) => {
+                field.clear();
+                if matches!(key, Key::Named(NamedKey::Backspace)) {
+                    return Some(Outcome::Nothing);
+                }
+                Some(field)
+            }
+            field => field,
+        };
         match key {
             Key::Named(NamedKey::Escape) => return None,
             Key::Named(NamedKey::Enter) if multiline => {
@@ -495,6 +524,7 @@ impl Launcher {
                 }
             }
             Key::Named(NamedKey::Tab) => {
+                self.selected_all = true;
                 self.focus = match (self.focus, self.custom) {
                     (Some(Field::Name), true) => Some(Field::Executable),
                     (Some(Field::Executable), true) => Some(Field::Arguments),
@@ -530,6 +560,7 @@ impl Launcher {
             "custom" => {
                 self.custom = true;
                 self.focus = Some(Field::Name);
+                self.selected_all = true;
             }
             "continue" => self.continue_session = !self.continue_session,
             "docked" => self.docked = !self.docked,
@@ -537,10 +568,17 @@ impl Launcher {
                 self.mcp_open = !self.mcp_open;
                 self.focus = self.mcp_open.then_some(Field::Mcp);
             }
-            "field-name" => self.focus = Some(Field::Name),
-            "field-executable" => self.focus = Some(Field::Executable),
-            "field-arguments" => self.focus = Some(Field::Arguments),
-            "field-mcp" => self.focus = Some(Field::Mcp),
+            "field-name" | "field-executable" | "field-arguments" | "field-mcp" => {
+                let field = match what {
+                    "field-name" => Field::Name,
+                    "field-executable" => Field::Executable,
+                    "field-arguments" => Field::Arguments,
+                    _ => Field::Mcp,
+                };
+                // Clicking into another field selects its text; clicking the focused one again does not.
+                self.selected_all = self.focus != Some(field);
+                self.focus = Some(field);
+            }
             "choose" => return Some(Outcome::ChooseFolder),
             "cancel" => return None,
             "launch" => return Some(self.launch()),
@@ -559,6 +597,7 @@ impl Launcher {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (&self.directory, self.acp, self.custom, self.continue_session, self.docked, self.mcp_open, &self.name, &self.executable, &self.arguments, &self.mcp, self.focus.map(|field| field as u8), &self.error).hash(&mut hasher);
+        self.selected_all.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -738,13 +777,18 @@ impl Launcher {
         if value.is_empty() {
             ui.text(placeholder, caret.0, caret.1 + row * 0.5, points, 400, monospace, faded(theme::TEXT_SECONDARY, 0.7));
         } else {
+            let selected = focused && self.selected_all;
             for (index, text) in value.split('\n').enumerate() {
                 let y = rect.y + if multiline { ui.px(4.0) } else { (rect.height - row) * 0.5 } + index as f32 * row;
+                if selected && !text.is_empty() {
+                    let width = ui.measure(text, points, 400, monospace);
+                    ui.rounded(Rect::new(rect.x + ui.px(6.0), y + ui.px(1.0), width + ui.px(2.0), row - ui.px(2.0)), 3.0, theme::TERMINAL_SELECTION);
+                }
                 let width = if text.is_empty() { 0.0 } else { ui.text(text, rect.x + ui.px(7.0), y + row * 0.5, points, 400, monospace, theme::TEXT_PRIMARY) + line };
                 caret = (rect.x + ui.px(7.0) + width, y);
             }
         }
-        if focused {
+        if focused && !(self.selected_all && !value.is_empty()) {
             ui.painter.scene.fill(caret.0, caret.1 + ui.px(1.0), line.max(2.0), row - ui.px(2.0), theme::ACCENT);
         }
         ui.painter.scene.set_clip(None);

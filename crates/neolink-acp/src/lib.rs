@@ -84,6 +84,9 @@ pub struct Tool {
     pub title: String,
     pub status: String,
     pub details: String,
+    /// How many messages there were when the agent first reported it: the view places it after them,
+    /// where it happened (a later update of its status does not move it).
+    pub after_message: usize,
 }
 
 /// What the conversation view shows.
@@ -231,6 +234,10 @@ impl Inner {
         self.state.messages.push(Message { id, role: role.to_string(), text: text.chars().take(128 * 1024).collect() });
         while self.state.messages.len() > 200 || self.state.messages.iter().map(|message| message.text.len()).sum::<usize>() > 2 * 1024 * 1024 {
             self.state.messages.remove(0);
+            // Tool calls keep their place relative to the messages that remain.
+            for tool in &mut self.state.tools {
+                tool.after_message = tool.after_message.saturating_sub(1);
+            }
         }
         id
     }
@@ -413,7 +420,8 @@ impl Inner {
                         tool.details = details(update);
                     }
                 } else {
-                    self.state.tools.push(Tool { id: id.to_string(), title: bounded(update["title"].as_str().unwrap_or("Tool"), 1024), status: bounded(update["status"].as_str().unwrap_or("pending"), 128), details: details(update) });
+                    let after_message = self.state.messages.len();
+                    self.state.tools.push(Tool { id: id.to_string(), title: bounded(update["title"].as_str().unwrap_or("Tool"), 1024), status: bounded(update["status"].as_str().unwrap_or("pending"), 128), details: details(update), after_message });
                     if self.state.tools.len() > 200 {
                         self.state.tools.remove(0);
                     }

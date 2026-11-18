@@ -68,6 +68,10 @@ fn a_turn_streams_text_asks_permission_and_finishes() {
     assert_eq!(state.tools[0].status, "completed");
     assert!(state.tools[0].details.contains("example.py\nBefore:\nbefore\nAfter:\nafter"));
     assert_eq!(state.messages.last().unwrap().text, "Approved.");
+    // The tool call came after the user's prompt and the first words, before "Approved.": the view
+    // places it there.
+    assert_eq!(state.tools[0].after_message, 2);
+    assert_eq!(state.messages.len(), 3);
     session.close();
     assert_eq!(session.state().status, "Closed");
 }
