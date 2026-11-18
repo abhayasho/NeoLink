@@ -1686,7 +1686,12 @@ impl Workspace {
             let icon = ui.icon(if creation.is_directory { "folder.badge.plus" } else { "doc.badge.plus" }, 13.0, IconWeight::Semibold, left + ui.px(9.0), y, theme::TEXT_PRIMARY).max(ui.px(18.0));
             ui.text(if creation.is_directory { "New Folder" } else { "New File" }, left + icon + ui.px(6.0), y, 13.0, 600, false, theme::TEXT_PRIMARY);
             y += ui.px(28.0);
-            let directory = creation.directory.display().to_string();
+            // As the status bar shows folders: under the home folder with "~".
+            let directory = match std::env::var_os("HOME").map(std::path::PathBuf::from).and_then(|home| creation.directory.strip_prefix(&home).ok().map(|rest| rest.to_path_buf())) {
+                Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+                Some(rest) => format!("~/{}", rest.display()),
+                None => creation.directory.display().to_string(),
+            };
             let shown = ui.fit_middle(&directory, width - 2.0 * pad, 10.0, 400, false);
             ui.text(&shown, left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
             y += ui.px(16.0);
@@ -2919,6 +2924,22 @@ impl Workspace {
                 ui.painter.scene.fill(rect.x, rect.bottom() - line, rect.width, line, theme::ACCENT);
             }
             x += width;
+        }
+        // Tabs hidden past an edge: that edge fades out, so the strip reads as scrollable.
+        let fade = ui.px(44.0);
+        let [r, g, b, _] = theme::EDITOR_BACKGROUND;
+        const STEPS: usize = 14;
+        for (hidden, left) in [(self.strip_scroll > 0.5, true), (content - self.strip_scroll > viewport + 0.5, false)] {
+            if !hidden {
+                continue;
+            }
+            for step in 0..STEPS {
+                // Opaque at the edge, clear `fade` pixels in.
+                let alpha = (240.0 * (1.0 - step as f32 / STEPS as f32)) as u8;
+                let width = fade / STEPS as f32;
+                let x = if left { strip.x + step as f32 * width } else { strip.x + viewport - (step + 1) as f32 * width };
+                ui.painter.scene.fill(x, strip.y, width, strip.height - line, [r, g, b, alpha]);
+            }
         }
         let x = (strip.x + content - self.strip_scroll).min(strip.x + viewport);
         ui.painter.scene.set_clip(None);
