@@ -924,6 +924,15 @@ impl Explorer {
             let status = self.git.status(&row.path);
             let opacity = if status == Some(Status::Ignored) { 0.55 } else { 1.0 };
             let x = rect.x + ui.px(8.0 + row.depth as f32 * 12.0);
+            // Indent guides: a faint line under each enclosing folder's chevron, so nested rows read
+            // as belonging to their folder.
+            if !self.folder_list {
+                let line = ui.px(1.0).max(1.0).round();
+                for level in 0..row.depth {
+                    let guide = (rect.x + ui.px(8.0 + level as f32 * 12.0 + 5.0)).round();
+                    ui.painter.scene.fill(guide, y, line, self.row_height, theme::white(0.06));
+                }
+            }
             let is_folder = !matches!(row.kind, RowKind::File);
             if let RowKind::Folder { expanded, .. } = row.kind {
                 if !self.folder_list {

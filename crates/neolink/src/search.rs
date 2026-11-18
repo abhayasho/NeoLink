@@ -346,7 +346,28 @@ impl SearchSheet {
                     None => name.to_string(),
                 };
                 let name = ui.fit_middle(&name, available, 12.5, 500, false);
-                let name_width = ui.text(&name, text_x, middle, 12.5, 500, false, faded(theme::TEXT_PRIMARY, opacity));
+                // Quick Open: the letters the query matched are drawn in the primary color.
+                let matched = if self.contents { Vec::new() } else { subsequence(&name, &self.query) };
+                let name_width = if matched.is_empty() {
+                    ui.text(&name, text_x, middle, 12.5, 500, false, faded(theme::TEXT_PRIMARY, opacity))
+                } else {
+                    let characters: Vec<(usize, char)> = name.char_indices().collect();
+                    let mut start = 0;
+                    while start < characters.len() {
+                        let lit = matched.contains(&start);
+                        let mut end = start + 1;
+                        while end < characters.len() && matched.contains(&end) == lit {
+                            end += 1;
+                        }
+                        let (from, to) = (characters[start].0, characters.get(end).map_or(name.len(), |(offset, _)| *offset));
+                        // Each run starts where the whole prefix ends, so spacing matches the plain name.
+                        let x = text_x + if from == 0 { 0.0 } else { ui.measure(&name[..from], 12.5, 500, false) };
+                        let color = if lit { theme::rgb(0x7AA7FF) } else { theme::TEXT_PRIMARY };
+                        ui.text(&name[from..to], x, middle, 12.5, 500, false, faded(color, opacity));
+                        start = end;
+                    }
+                    ui.measure(&name, 12.5, 500, false)
+                };
                 let folder_room = available - name_width - ui.px(8.0);
                 if !folder.is_empty() && folder_room > ui.px(24.0) {
                     let folder = ui.fit_middle(folder, folder_room, 11.5, 400, false);
@@ -389,6 +410,51 @@ impl SearchSheet {
     }
 }
 
+/// Which characters of `name` (by index) spell `query` in order, ignoring case: the letters a fuzzy file
+/// match used, preferring runs (a later start that matches more letters in a row wins). Empty when
+/// the query does not fit in the name (it matched folders instead).
+fn subsequence(name: &str, query: &str) -> Vec<usize> {
+    let name: Vec<char> = name.chars().flat_map(char::to_lowercase).collect();
+    let query: Vec<char> = query.chars().filter(|character| !character.is_whitespace()).flat_map(char::to_lowercase).collect();
+    if query.is_empty() || query.len() > name.len() {
+        return Vec::new();
+    }
+    // runs[i][j]: the fewest runs that spell query[..=i] with query[i] at name[j]; from[i][j] where
+    // query[i - 1] was.
+    let (n, m) = (name.len(), query.len());
+    let mut runs = vec![vec![usize::MAX; n]; m];
+    let mut from = vec![vec![usize::MAX; n]; m];
+    for j in 0..n {
+        if name[j] == query[0] {
+            runs[0][j] = 1;
+        }
+    }
+    for i in 1..m {
+        for j in i..n {
+            if name[j] != query[i] {
+                continue;
+            }
+            for k in (i - 1)..j {
+                if runs[i - 1][k] == usize::MAX {
+                    continue;
+                }
+                let total = runs[i - 1][k] + usize::from(k + 1 != j);
+                if total < runs[i][j] {
+                    runs[i][j] = total;
+                    from[i][j] = k;
+                }
+            }
+        }
+    }
+    let Some(last) = (0..n).filter(|&j| runs[m - 1][j] != usize::MAX).min_by_key(|&j| runs[m - 1][j]) else { return Vec::new() };
+    let mut positions = vec![last];
+    for i in (1..m).rev() {
+        positions.push(from[i][*positions.last().unwrap()]);
+    }
+    positions.reverse();
+    positions
+}
+
 /// Where `query` first occurs in `text`, ignoring case, as byte offsets into `text`.
 fn match_span(text: &str, query: &str) -> Option<(usize, usize)> {
     let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
@@ -418,6 +484,14 @@ fn match_span(text: &str, query: &str) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn subsequence_prefers_letters_in_a_row() {
+        assert_eq!(super::subsequence("workspace.rs", "space"), vec![4, 5, 6, 7, 8]);
+        assert_eq!(super::subsequence("scroll.rs", "sc"), vec![0, 1]);
+        assert_eq!(super::subsequence("README.md", "rmd"), vec![0, 7, 8]);
+        assert!(super::subsequence("lib.rs", "xyz").is_empty());
+    }
+
     #[test]
     fn match_span_ignores_case_and_keeps_byte_offsets() {
         assert_eq!(super::match_span("let ScrollSmoother = 1;", "smoother"), Some((10, 18)));
