@@ -626,6 +626,11 @@ impl App {
                     if let Err(error) = workspace.new_tab(&shared) {
                         eprintln!("cannot start a shell: {error}");
                     }
+                    // Without files or a folder named on the command line, the files open last time
+                    // open again.
+                    if arguments.is_empty() {
+                        workspace.restore_documents(&saved.open_documents, saved.active_document.as_deref());
+                    }
                     if std::env::var("NEOLINK_EXPLORER").as_deref() == Ok("0") {
                         workspace.explorer.visible = false;
                     }

@@ -898,7 +898,22 @@ impl Workspace {
         settings.custom_agent_executable = self.custom_agent.1.clone();
         settings.project = Some(self.explorer.root().to_path_buf());
         settings.recent_projects = self.recent.clone();
+        settings.open_documents = self.tabs.iter().filter_map(Tab::document).map(std::path::PathBuf::from).filter(|path| restorable(path)).take(MAX_RESTORED).collect();
+        settings.active_document = self.tabs.get(self.active).and_then(Tab::document).map(std::path::PathBuf::from).filter(|path| restorable(path));
         settings
+    }
+
+    /// Reopens the files that were open when the app last quit (those that still exist), then shows
+    /// the one that was shown, or else the first tab.
+    pub fn restore_documents(&mut self, documents: &[std::path::PathBuf], active: Option<&std::path::Path>) {
+        let first = self.active;
+        for path in documents.iter().filter(|path| path.is_file()).take(MAX_RESTORED) {
+            self.open_document(path);
+        }
+        let shown = active.and_then(|active| self.tabs.iter().position(|tab| tab.document().is_some_and(|path| std::path::Path::new(path) == active)));
+        if let Some(index) = shown.or((!self.tabs.is_empty()).then_some(first.min(self.tabs.len() - 1))) {
+            self.select(index);
+        }
     }
 
     /// Applies remembered settings to a new workspace (the project is opened by the caller).
@@ -3330,6 +3345,16 @@ fn project_directory() -> std::path::PathBuf {
         Ok(directory) if directory.parent().is_some() => directory,
         _ => home_directory().unwrap_or_else(|| std::path::PathBuf::from("/")),
     }
+}
+
+/// At most this many files are reopened on launch.
+const MAX_RESTORED: usize = 30;
+
+/// A document worth reopening next time: a file on this computer, not a remote preview (those are
+/// temporary copies).
+fn restorable(path: &std::path::Path) -> bool {
+    let temporary = neolink_core::paths::canonical(&std::env::temp_dir());
+    path.is_absolute() && !path.starts_with(&temporary) && !path.starts_with(std::env::temp_dir())
 }
 
 fn home_directory() -> Option<std::path::PathBuf> {
