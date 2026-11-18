@@ -270,7 +270,7 @@ impl SearchSheet {
         let width = ui.px(630.0).min(window.0 - ui.px(40.0));
         let list_height = ui.px(340.0).min(window.1 - ui.px(260.0)).max(ui.px(80.0));
         let error_height = if results.error.is_some() { ui.px(16.0 + 12.0) } else { 0.0 };
-        let height = pad + ui.px(22.0 + 12.0 + 24.0 + 12.0) + error_height + list_height + ui.px(12.0 + 13.0 + 12.0 + 13.0) + pad;
+        let height = pad + ui.px(22.0 + 12.0 + 24.0 + 12.0) + error_height + list_height + ui.px(10.0 + 1.0 + 10.0 + 13.0) + pad;
         let frame = Rect::new(((window.0 - width) * 0.5).round(), ui.px(60.0), width, height);
         self.frame = frame;
         ui.shadow(frame, 10.0);
@@ -400,13 +400,18 @@ impl SearchSheet {
             let travel = (list.height - thumb) * self.scroll / (content - list.height);
             ui.rounded(Rect::new(list.right() + ui.px(5.0), list.y + travel, ui.px(4.0), thumb), 2.0, theme::white(0.16));
         }
-        // Footers.
-        y = list.bottom() + ui.px(12.0 + 6.0);
+        // Footer: one line under a hairline, what was searched on the left and what was left out on
+        // the right (when both fit).
+        let separator = list.bottom() + ui.px(10.0);
+        ui.painter.scene.fill(left, separator, right - left, line, theme::SEPARATOR);
+        y = separator + line + ui.px(10.0 + 6.5);
         let status = if self.contents { "Up to 200 matches \u{b7} 20 per file \u{b7} files under 2 MB".to_string() } else { format!("{} indexed files \u{b7} up to 100 shown", results.files) };
         let status = if results.loading { format!("Searching\u{2026}  {status}") } else { status };
-        ui.text(&status, left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
-        y += ui.px(13.0 + 12.0);
-        ui.text("Respects .gitignore. Dependency and build folders are skipped.", left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
+        let status_width = ui.text(&status, left, y, 10.0, 400, false, theme::TEXT_SECONDARY);
+        let note = "Respects .gitignore \u{b7} dependency and build folders skipped";
+        if left + status_width + ui.px(24.0) + ui.measure(note, 10.0, 400, false) <= right {
+            ui.text_right(note, right, y, 10.0, 400, false, faded(theme::TEXT_SECONDARY, 0.8));
+        }
     }
 }
 

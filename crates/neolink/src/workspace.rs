@@ -3213,7 +3213,6 @@ impl Workspace {
         if !recent.is_empty() {
             y += ui.px(28.0);
             section(&mut ui, &mut y, "RECENT");
-            let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
             for folder in recent {
                 let rect = Rect::new(left, y, width, row - ui.px(2.0));
                 if self.welcome_hover == Some(index) {
@@ -3223,11 +3222,7 @@ impl Workspace {
                 ui.icon("folder", 13.0, IconWeight::Regular, rect.x + ui.px(10.0 + 9.0), middle, theme::TEXT_SECONDARY);
                 let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| folder.display().to_string());
                 let name_width = ui.text(&name, rect.x + ui.px(40.0), middle, 13.0, 400, false, theme::TEXT_PRIMARY);
-                let shown = match home.as_ref().and_then(|home| folder.parent().and_then(|parent| parent.strip_prefix(home).ok().map(|rest| rest.to_path_buf()))) {
-                    Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-                    Some(rest) => format!("~/{}", rest.display()),
-                    None => folder.parent().map(|parent| parent.display().to_string()).unwrap_or_default(),
-                };
+                let shown = folder.parent().map(neolink_core::paths::tilde).unwrap_or_default();
                 let room = rect.right() - ui.px(10.0) - (rect.x + ui.px(40.0) + name_width + ui.px(10.0));
                 if room > ui.px(30.0) {
                     let fitted = ui.fit_middle(&shown, room, 11.0, 400, false);

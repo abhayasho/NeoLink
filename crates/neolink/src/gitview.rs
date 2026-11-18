@@ -621,7 +621,7 @@ impl GitSheet {
         }
         let commit_top = note_middle - ui.px(6.0 + 12.0 + 40.0);
         let staged_count = snapshot.as_ref().map(|snapshot| snapshot.changes.iter().filter(|change| change.staged()).count()).unwrap_or(0);
-        let label = format!("Commit {staged_count} staged {}", if staged_count == 1 { "file" } else { "files" });
+        let label = if staged_count == 0 { "Commit".to_string() } else { format!("Commit {staged_count} staged {}", if staged_count == 1 { "file" } else { "files" }) };
         let can_commit = !busy && staged_count > 0 && !self.commit_message.trim().is_empty();
         let commit_width = self.button(ui, &label, frame.right() - ui.px(12.0), commit_top + ui.px(11.0), "commit", can_commit, true);
         let field = Rect::new(frame.x + ui.px(12.0), commit_top, frame.width - ui.px(24.0 + 12.0) - commit_width, ui.px(40.0));
@@ -684,8 +684,9 @@ impl GitSheet {
                 ui.text(&folder, text_x + name_width + ui.px(6.0), middle, 11.0, 400, false, theme::TEXT_SECONDARY);
             }
         }
-        if snapshot.as_ref().is_some_and(|snapshot| snapshot.changes.is_empty()) {
-            ui.text("Working tree clean", list.x + ui.px(12.0), list.y + ui.px(22.0), 13.0, 400, false, theme::TEXT_SECONDARY);
+        let clean = snapshot.as_ref().is_some_and(|snapshot| snapshot.changes.is_empty());
+        if clean {
+            empty_state(ui, list, "checkmark.circle", "No changes", "The working tree is clean.");
         }
         ui.painter.scene.set_clip(None);
         // Diff controls.
@@ -723,7 +724,7 @@ impl GitSheet {
             }
             change.path.clone()
         } else {
-            "Select a changed file".into()
+            String::new()
         };
         let title = ui.fit_middle(&title, right - controls.x - ui.px(20.0), 11.0, 400, false);
         ui.text(&title, controls.x + ui.px(10.0), controls_middle, 11.0, 400, false, theme::TEXT_PRIMARY);
@@ -745,6 +746,13 @@ impl GitSheet {
         };
         self.diff_scroll.1 = self.diff_scroll.1.clamp(0.0, (lines.len() as f32 * line_height + 2.0 * inset - preview.height).max(0.0));
         self.diff_scroll.0 = self.diff_scroll.0.clamp(0.0, ui.px(4000.0));
+        if stash.is_none() && selected.is_none() && snapshot.is_some() {
+            if clean {
+                empty_state(ui, preview, "doc.text", "Nothing to review", "Edits to files in this repository show up here.");
+            } else {
+                empty_state(ui, preview, "doc.text", "No file selected", "Choose a changed file to see its diff.");
+            }
+        }
         ui.painter.scene.set_clip(Some(preview));
         let first = ((self.diff_scroll.1 - inset) / line_height).floor().max(0.0) as usize;
         let shown = (preview.height / line_height).ceil() as usize + 2;
@@ -809,4 +817,21 @@ impl GitSheet {
         }
         let _ = &self.directory;
     }
+}
+
+/// A centered placeholder for an empty area: a large faint icon, a title and one line of help.
+fn empty_state(ui: &mut Ui, area: Rect, icon: &str, title: &str, detail: &str) {
+    if area.height < ui.px(90.0) || area.width < ui.px(120.0) {
+        return;
+    }
+    let center = area.x + area.width * 0.5;
+    let middle = (area.y + area.height * 0.42).round();
+    ui.painter.scene.set_clip(Some(area));
+    ui.icon(icon, 26.0, IconWeight::Light, center, middle - ui.px(26.0), faded(theme::TEXT_SECONDARY, 0.7));
+    let title_width = ui.measure(title, 13.0, 600, false);
+    ui.text(title, center - title_width * 0.5, middle + ui.px(6.0), 13.0, 600, false, theme::TEXT_PRIMARY);
+    let detail = ui.fit_middle(detail, area.width - ui.px(24.0), 11.0, 400, false);
+    let detail_width = ui.measure(&detail, 11.0, 400, false);
+    ui.text(&detail, center - detail_width * 0.5, middle + ui.px(25.0), 11.0, 400, false, theme::TEXT_SECONDARY);
+    ui.painter.scene.set_clip(None);
 }

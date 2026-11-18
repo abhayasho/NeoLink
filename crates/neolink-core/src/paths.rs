@@ -30,9 +30,38 @@ pub fn canonical(path: &Path) -> PathBuf {
     }
 }
 
+/// The user's home folder (`HOME`; `USERPROFILE` on Windows).
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|home| !home.is_empty()).map(PathBuf::from)
+}
+
+/// `path` for display, with the home folder written `~` (`~/Projects/app`, or `~` itself).
+pub fn tilde(path: &Path) -> String {
+    tilde_in(path, home().as_deref())
+}
+
+fn tilde_in(path: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| path.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_is_written_as_a_tilde() {
+        let home = Path::new("/Users/me");
+        let separator = std::path::MAIN_SEPARATOR;
+        assert_eq!(tilde_in(Path::new("/Users/me"), Some(home)), "~");
+        assert_eq!(tilde_in(&home.join("Projects").join("app"), Some(home)), format!("~{separator}Projects{separator}app"));
+        // A folder that only starts with the same letters is not inside home.
+        assert_eq!(tilde_in(Path::new("/Users/meg/app"), Some(home)), "/Users/meg/app");
+        assert_eq!(tilde_in(Path::new("/tmp/x"), None), "/tmp/x");
+    }
 
     #[test]
     fn verbatim_prefixes_are_removed_only_where_they_mean_nothing() {

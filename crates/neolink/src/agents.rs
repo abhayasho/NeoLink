@@ -699,7 +699,7 @@ impl Launcher {
             let choose_width = ui.measure("Choose Folder\u{2026}", 12.0, 500, false) + ui.px(20.0);
             if drawing {
                 ui.text("Project folder", left, y + ui.px(7.0), 11.0, 400, false, theme::TEXT_SECONDARY);
-                let path = self.directory.as_ref().map(|directory| directory.display().to_string()).unwrap_or_else(|| "Choose a folder to work in".into());
+                let path = self.directory.as_ref().map(|directory| neolink_core::paths::tilde(directory)).unwrap_or_else(|| "Choose a folder to work in".into());
                 let path = ui.fit_middle(&path, inner - choose_width - ui.px(12.0), 13.0, 400, false);
                 ui.text(&path, left, y + ui.px(14.0 + 4.0 + 8.0), 13.0, 400, false, theme::TEXT_PRIMARY);
                 let choose = Rect::new(right - choose_width, y + ui.px(6.0), choose_width, ui.px(22.0));
