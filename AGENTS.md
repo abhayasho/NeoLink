@@ -38,6 +38,10 @@ Control, ACP and terminal coding agents. Versions 1.x were a Swift app; that cod
   grid; Windows' stated refresh rate is whole hertz and drifts. `NEOLINK_VBLANK=0` turns it off. The
   1 ms system timer is on only while drawing. Wheel notches glide (`ScrollPhase::Wheel`,
   `WHEEL_GLIDE`); fractional wheel deltas are touchpads and are drawn as they come.
+- Terminal working directory ("Follow terminal", status bar): macOS asks the foreground process;
+  Windows reads the newest shell in the tab's process tree (`win::foreground_shell`) from its PEB
+  (`win::process_directory`). PowerShell's `cd` moves only its own location, so the terminal starts it
+  with a prompt hook (`win::shell`) that sets the process directory at every prompt.
 - Accessibility (`access.rs`) builds its tree only while a client listens and only after a frame was drawn.
 - Scrolling: input goes through `ScrollSmoother` at display cadence; trackpad gestures lock to one axis
   (`AxisLock`) and never forward sideways drift of a vertical gesture to Neovim.

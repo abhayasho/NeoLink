@@ -1,5 +1,6 @@
 //! Windows-only system services: the display's refresh clock, timer resolution, thread priority, wheel
-//! settings, which GPU drives a display, and the PATH as the system has it now.
+//! settings, which GPU drives a display, the PATH as the system has it now, and the terminal shell's
+//! working directory.
 //!
 //! Why the refresh clock matters: on macOS every presented frame reports when it reached the display,
 //! and the pacer follows those times. A wgpu surface on Windows reports nothing, and the monitor's rate
@@ -322,6 +323,158 @@ pub fn fit_grid(samples: &VecDeque<f64>) -> Option<(f64, f64)> {
     Some((intercept + earliest + period * last_k, period))
 }
 
+/// The working directory of process `pid`: the one `SetCurrentDirectory` changes, read from the
+/// process's parameters (what macOS's `proc_pidinfo` answers). 64-bit processes only, as this one is.
+pub fn process_directory(pid: u32) -> Option<std::path::PathBuf> {
+    use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    use windows_sys::Win32::System::Threading::{IsWow64Process, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+    /// `PROCESS_BASIC_INFORMATION`.
+    #[repr(C)]
+    struct Basic {
+        exit_status: i32,
+        peb: usize,
+        affinity: usize,
+        priority: i32,
+        id: usize,
+        parent: usize,
+    }
+    let process = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let read = |address: usize, buffer: &mut [u8]| {
+        let mut done = 0usize;
+        (unsafe { ReadProcessMemory(process, address as *const _, buffer.as_mut_ptr().cast(), buffer.len(), &mut done) }) != 0 && done == buffer.len()
+    };
+    let directory = (|| {
+        let mut wow64 = 0;
+        if unsafe { IsWow64Process(process, &mut wow64) } == 0 || wow64 != 0 {
+            return None;
+        }
+        let mut basic = Basic { exit_status: 0, peb: 0, affinity: 0, priority: 0, id: 0, parent: 0 };
+        let mut length = 0u32;
+        let status = unsafe { NtQueryInformationProcess(process, ProcessBasicInformation, (&mut basic as *mut Basic).cast(), std::mem::size_of::<Basic>() as u32, &mut length) };
+        if status < 0 || basic.peb == 0 {
+            return None;
+        }
+        // 64-bit layouts: PEB.ProcessParameters at 0x20, and in RTL_USER_PROCESS_PARAMETERS the
+        // current directory's path (a UNICODE_STRING: length in bytes, then the buffer at +8) at 0x38.
+        let mut word = [0u8; 8];
+        if !read(basic.peb + 0x20, &mut word) {
+            return None;
+        }
+        let parameters = usize::from_ne_bytes(word);
+        let mut string = [0u8; 16];
+        if parameters == 0 || !read(parameters + 0x38, &mut string) {
+            return None;
+        }
+        let length = u16::from_ne_bytes([string[0], string[1]]) as usize;
+        let buffer = usize::from_ne_bytes(string[8..16].try_into().ok()?);
+        if length == 0 || buffer == 0 {
+            return None;
+        }
+        let mut bytes = vec![0u8; length];
+        if !read(buffer, &mut bytes) {
+            return None;
+        }
+        let units: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_ne_bytes([pair[0], pair[1]])).collect();
+        let mut path = String::from_utf16(&units).ok()?;
+        // `C:\work\` is `C:\work`; a drive's root keeps its backslash.
+        if path.len() > 3 && path.ends_with('\\') {
+            path.pop();
+        }
+        Some(std::path::PathBuf::from(path))
+    })();
+    unsafe { CloseHandle(process) };
+    directory
+}
+
+/// The shell the user is typing into: `shell`, or the newest shell started inside it (and inside that,
+/// and so on): `cmd` run from PowerShell, Git's `bash`. What macOS asks the terminal for as its
+/// foreground process. Other programs (an editor, a build) are passed over: their directory is not
+/// where the user is.
+pub fn foreground_shell(shell: u32) -> u32 {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+    const SHELLS: [&str; 8] = ["cmd.exe", "powershell.exe", "pwsh.exe", "bash.exe", "sh.exe", "zsh.exe", "fish.exe", "nu.exe"];
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return shell;
+    }
+    let mut processes = Vec::new();
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+    while more {
+        let end = entry.szExeFile.iter().position(|unit| *unit == 0).unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16_lossy(&entry.szExeFile[..end]).to_ascii_lowercase();
+        processes.push((entry.th32ProcessID, entry.th32ParentProcessID, SHELLS.contains(&name.as_str())));
+        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+    }
+    unsafe { CloseHandle(snapshot) };
+    let mut current = shell;
+    let mut started = process_started(shell);
+    for _ in 0..8 {
+        // Only a child started after its parent: process ids are reused, and an old process may name
+        // as its parent an id that is now the shell's.
+        let newest = processes
+            .iter()
+            .filter(|(id, parent, is_shell)| *parent == current && *is_shell && *id != current)
+            .filter_map(|(id, _, _)| process_started(*id).filter(|time| started.is_none_or(|started| *time >= started)).map(|time| (*id, time)))
+            .max_by_key(|(_, time)| *time);
+        let Some((id, time)) = newest else { break };
+        current = id;
+        started = Some(time);
+    }
+    current
+}
+
+/// When process `pid` started (100 ns ticks), if it is still running.
+fn process_started(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    let known = unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) } != 0;
+    unsafe { CloseHandle(process) };
+    known.then(|| (created.dwHighDateTime as u64) << 32 | created.dwLowDateTime as u64)
+}
+
+/// The prompt hook: PowerShell's `cd` moves only its own location, which no other program can see.
+/// At every prompt this makes that location the process's working directory too, so the explorer
+/// can follow the terminal. It wraps whatever prompt the user's profile set.
+const PROMPT_HOOK: &str = "$global:__NeoLinkPrompt = $function:prompt
+function global:prompt {
+    $text = & $global:__NeoLinkPrompt
+    if ($PWD.Provider.Name -eq 'FileSystem') { [Environment]::CurrentDirectory = $PWD.ProviderPath }
+    $text
+}
+";
+
+/// The user's shell for a terminal tab: Windows PowerShell with its profile, and the prompt hook.
+pub fn shell() -> (String, Vec<String>) {
+    let units: Vec<u8> = PROMPT_HOOK.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    ("powershell.exe".into(), vec!["-NoExit".into(), "-EncodedCommand".into(), base64(&units)])
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let value = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        for index in 0..4 {
+            text.push(if index <= chunk.len() { ALPHABET[(value >> (18 - 6 * index) & 63) as usize] as char } else { '=' });
+        }
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +499,36 @@ mod tests {
         let phase = ((vblank - 3.0) / period).fract();
         let error = phase.min(1.0 - phase) * period;
         assert!(error < 0.0001, "grid off by {:.3} ms", error * 1000.0);
+    }
+
+    #[test]
+    fn base64_matches_the_standard_encoding() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    fn plain(path: &std::path::Path) -> String {
+        path.to_string_lossy().trim_start_matches(r"\\?\").to_lowercase()
+    }
+
+    #[test]
+    fn another_process_reports_its_working_directory() {
+        let directory = std::env::temp_dir().canonicalize().unwrap();
+        let mut child = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).current_dir(&directory).stdout(std::process::Stdio::null()).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let reported = process_directory(child.id());
+        let _ = child.kill();
+        assert_eq!(reported.as_deref().map(plain), Some(plain(&directory)));
+    }
+
+    #[test]
+    fn the_prompt_hook_moves_the_working_directory_with_cd() {
+        let target = std::env::temp_dir().canonicalize().unwrap();
+        let script = format!("{PROMPT_HOOK}\nSet-Location -LiteralPath '{}'\n$null = prompt\n[Environment]::CurrentDirectory", plain(&target));
+        let output = std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).current_dir(std::env::var("SystemRoot").unwrap()).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim().to_lowercase(), plain(&target));
     }
 }

@@ -408,7 +408,7 @@ impl Workspace {
         }
         let home = home_directory().unwrap_or_default();
         let shown = match std::path::Path::new(path).strip_prefix(&home) {
-            Ok(rest) => format!("~/{}", rest.display()),
+            Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
             Err(_) => path.to_string(),
         };
         let fitted = ui.fit_middle(&shown, (right - bar.x - ui.px(24.0)).max(1.0), 11.0, 400, true);
@@ -1719,9 +1719,9 @@ impl Workspace {
             ui.text(if creation.is_directory { "New Folder" } else { "New File" }, left + icon + ui.px(6.0), y, 13.0, 600, false, theme::TEXT_PRIMARY);
             y += ui.px(28.0);
             // As the status bar shows folders: under the home folder with "~".
-            let directory = match std::env::var_os("HOME").map(std::path::PathBuf::from).and_then(|home| creation.directory.strip_prefix(&home).ok().map(|rest| rest.to_path_buf())) {
+            let directory = match home_directory().and_then(|home| creation.directory.strip_prefix(&home).ok().map(|rest| rest.to_path_buf())) {
                 Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-                Some(rest) => format!("~/{}", rest.display()),
+                Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
                 None => creation.directory.display().to_string(),
             };
             let shown = ui.fit_middle(&directory, width - 2.0 * pad, 10.0, 400, false);
@@ -3389,7 +3389,7 @@ impl Content for Workspace {
             let directory = directory.unwrap_or(root);
             self.shown_directory = match directory.strip_prefix(&home) {
                 Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-                Ok(rest) => format!("~/{}", rest.display()),
+                Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
                 Err(_) => directory.display().to_string(),
             };
         }

@@ -12,6 +12,11 @@ What changed in each NeoLink release. Downloads and full notes are on the
   the display the window is on and draws exactly one frame per refresh: on a 280 Hz monitor the median
   time between frames went from 7.4 ms to 3.6 ms and the scroll's typical jerk halved. Short waits use
   a high-resolution timer instead of Windows' 15.6 ms tick, and the drawing thread runs at high priority.
+- **The explorer follows the terminal on Windows**, as on macOS. "Follow terminal" and the status bar's
+  folder now track `cd` in the shell, including in a `cmd` or Git `bash` started inside it. The terminal
+  runs Windows PowerShell with your profile, plus a prompt hook that tells Windows where PowerShell is.
+  Tabs are titled "shell" instead of the path to `powershell.exe`, and folders under your home folder
+  show as `~\…`.
 - **The right GPU, through Direct3D 12.** On a PC with both integrated and dedicated graphics, NeoLink
   draws on the one that drives the window's monitor instead of always the integrated one (which copied
   every frame across), and uses Direct3D 12 rather than Vulkan, whose windows are often presented

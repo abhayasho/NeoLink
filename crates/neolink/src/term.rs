@@ -61,7 +61,11 @@ impl EventListener for Listener {
             }
             Event::PtyWrite(text) => self.reply(text),
             Event::Title(title) => {
-                *self.title.lock() = Some(title);
+                // Windows' console names itself after the program's full path
+                // (`C:\WINDOWS\System32\...\powershell.exe`): that is no title, as on macOS a shell that
+                // sets none shows the tab's own name.
+                let path = cfg!(windows) && title.contains('\\') && title.to_ascii_lowercase().ends_with(".exe");
+                *self.title.lock() = (!path).then_some(title);
                 self.invalidate();
             }
             Event::ResetTitle => {
@@ -188,7 +192,11 @@ fn process_directory(pid: u32) -> Option<std::path::PathBuf> {
     {
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        crate::win::process_directory(pid)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         None
@@ -289,6 +297,9 @@ impl Terminal {
         let mut env = std::collections::HashMap::new();
         env.insert("TERM_PROGRAM".to_string(), "NeoLink".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
+        // Windows: the user's shell is PowerShell with a prompt hook, so its directory can be followed.
+        #[cfg(windows)]
+        let program = program.or_else(|| Some(crate::win::shell()));
         let shell = program.map(|(program, arguments)| tty::Shell::new(program, arguments));
         let options = tty::Options { shell, working_directory: directory, drain_on_exit: false, env, ..tty::Options::default() };
         let start_directory = options.working_directory.clone();
@@ -300,7 +311,9 @@ impl Terminal {
             use std::os::fd::AsRawFd;
             (Some(pty.child().id()), Some(pty.file().as_raw_fd()))
         };
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let (child, master): (Option<u32>, Option<i32>) = (pty.child_watcher().pid().map(|pid| pid.get()), None);
+        #[cfg(not(any(unix, windows)))]
         let (child, master): (Option<u32>, Option<i32>) = (None, None);
         let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, false, false)?;
         let sender = event_loop.channel();
@@ -348,7 +361,10 @@ impl Terminal {
             self.directory_checked = (output, now);
             #[cfg(unix)]
             let foreground = if self.has_exited() { None } else { self.master.map(|descriptor| unsafe { libc::tcgetpgrp(descriptor) }).filter(|pid| *pid > 0).map(|pid| pid as u32) };
-            #[cfg(not(unix))]
+            // Windows has no foreground process group: the newest shell started inside this one.
+            #[cfg(windows)]
+            let foreground = if self.has_exited() { None } else { self.child.map(crate::win::foreground_shell) };
+            #[cfg(not(any(unix, windows)))]
             let foreground: Option<u32> = None;
             if let Some(directory) = foreground.and_then(process_directory).or_else(|| self.child.and_then(process_directory)) {
                 self.directory = Some(directory);
@@ -1076,5 +1092,56 @@ mod tests {
         let changed: Vec<u64> = vec![41, 42, 43, 44, 45, 46, 47, 48, 99];
         assert_eq!(row_shift(&old, &changed, 1), None);
         assert_eq!(row_shift(&old, &old, 1), None);
+    }
+
+    /// The terminal's own shell on a real ConPTY, with the user's profile: `cd` as typed is the directory
+    /// the explorer follows, and so is a `cmd` started inside it, and PowerShell again once that exits.
+    #[cfg(windows)]
+    #[test]
+    fn the_shell_directory_follows_cd_on_windows() {
+        use alacritty_terminal::event::{VoidListener, WindowSize};
+        use alacritty_terminal::event_loop::{EventLoop, Msg};
+        use alacritty_terminal::term::{test::TermSize, Config, Term};
+        use alacritty_terminal::tty;
+        use std::borrow::Cow;
+        use std::time::{Duration, Instant};
+        let size = WindowSize { num_lines: 24, num_cols: 80, cell_width: 8, cell_height: 16 };
+        let term = std::sync::Arc::new(alacritty_terminal::sync::FairMutex::new(Term::new(Config::default(), &TermSize::new(80, 24), VoidListener)));
+        let start = std::env::var("SystemRoot").unwrap();
+        let (program, arguments) = crate::win::shell();
+        let options = tty::Options { shell: Some(tty::Shell::new(program, arguments)), working_directory: Some(start.clone().into()), ..tty::Options::default() };
+        let pty = tty::new(&options, size, 0).unwrap();
+        let shell = pty.child_watcher().pid().unwrap().get();
+        let event_loop = EventLoop::new(term, VoidListener, pty, false, false).unwrap();
+        let sender = event_loop.channel();
+        let thread = event_loop.spawn();
+        let followed = || crate::win::process_directory(crate::win::foreground_shell(shell)).map(|path| path.to_string_lossy().to_lowercase());
+        let wait_for = |expected: &str| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while Instant::now() < deadline {
+                if followed().as_deref() == Some(expected) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            false
+        };
+        let type_line = |line: &str| {
+            let _ = sender.send(Msg::Input(Cow::Owned(format!("{line}\r").into_bytes())));
+        };
+        let windows = start.to_lowercase();
+        let system = format!(r"{windows}\system32");
+        let fonts = format!(r"{windows}\fonts");
+        assert!(wait_for(&windows), "the shell starts where it was asked: {:?}", followed());
+        std::thread::sleep(Duration::from_secs(2)); // the profile has run and the prompt is up
+        type_line("cd System32");
+        assert!(wait_for(&system), "after cd in PowerShell: {:?}", followed());
+        type_line(r"cmd /k cd ..\Fonts");
+        assert!(wait_for(&fonts), "in a cmd started inside it: {:?}", followed());
+        type_line("exit");
+        assert!(wait_for(&system), "back in PowerShell: {:?}", followed());
+        type_line("exit");
+        let _ = sender.send(Msg::Shutdown);
+        let _ = thread.join();
     }
 }
