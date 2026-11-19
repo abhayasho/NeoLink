@@ -99,6 +99,7 @@ struct App {
     /// Frames drawn when the tree was last described: nothing on screen changes without one.
     access_frames: u64,
     /// When the last wheel report of a fraction of a notch came (a precision touchpad).
+    #[cfg(windows)]
     fine_wheel_at: std::cell::Cell<f64>,
 }
 
@@ -106,11 +107,6 @@ struct App {
 #[cfg(windows)]
 fn wheel_settings() -> (Option<f64>, f64) {
     win::wheel_settings()
-}
-
-#[cfg(not(windows))]
-fn wheel_settings() -> (Option<f64>, f64) {
-    (Some(3.0), 3.0)
 }
 
 /// The GDI name of the display showing the window (`\.\DISPLAY1`), for the vblank clock and the
@@ -985,6 +981,13 @@ impl ApplicationHandler<UserEvent> for App {
                 });
                 let (delta_x, delta_y, phase) = match delta {
                     MouseScrollDelta::PixelDelta(position) => (position.x, position.y, phase),
+                    // A wheel notch: three lines. macOS (and Linux) scroll as they always have.
+                    #[cfg(not(windows))]
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        let cell = self.with_workspace(|workspace, _| workspace.cell).map(|cell| cell.height as f64).unwrap_or(30.0);
+                        (x as f64 * 3.0 * cell, y as f64 * 3.0 * cell, phase)
+                    }
+                    #[cfg(windows)]
                     MouseScrollDelta::LineDelta(x, y) => {
                         let (cell, rows) = self.with_workspace(|workspace, _| (workspace.cell, workspace.grid.1)).map(|(cell, rows)| ((cell.width as f64, cell.height as f64), rows as f64)).unwrap_or(((15.0, 30.0), 30.0));
                         let (lines, columns) = wheel_settings();
@@ -1144,6 +1147,7 @@ fn main() {
         access_sent: 0,
         access_at: 0.0,
         access_frames: u64::MAX,
+        #[cfg(windows)]
         fine_wheel_at: std::cell::Cell::new(f64::NEG_INFINITY),
     };
     event_loop.run_app(&mut app).expect("the event loop");

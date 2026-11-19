@@ -19,8 +19,11 @@ impl Gpu {
         let backends = if cfg!(windows) && std::env::var_os("WGPU_BACKEND").is_none() { wgpu::Backends::DX12 } else { wgpu::Backends::all() };
         let open = |backends: wgpu::Backends| {
             let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            descriptor.backends = backends;
-            let descriptor = descriptor.with_env();
+            // Elsewhere (macOS) the instance is wgpu's default, as it always was.
+            if cfg!(windows) {
+                descriptor.backends = backends;
+                descriptor = descriptor.with_env();
+            }
             let instance = wgpu::Instance::new(descriptor);
             // The adapter that drives the window's display: on a desktop with monitors on the graphics
             // card, the low-power choice is the integrated GPU, and every frame would be copied across.
