@@ -4,7 +4,7 @@ What changed in each NeoLink release. Downloads and full notes are on the
 [releases page](https://github.com/abhayasho/NeoLink/releases); each version's notes are also in
 [`docs/releases`](docs/releases).
 
-## Unreleased
+## 2.3.0 (2026-11-19)
 
 - **Smoother scrolling.** Trackpad reports that arrived two in one frame and none in the next made the
   terminal and editor stutter (steps of 0 and 24 pixels); each report is now drawn in its own frame.
