@@ -23,7 +23,7 @@ NeoLink 2.0 is a ground-up rewrite in Rust that runs on **macOS and Windows**. V
 
 ## Download
 
-**macOS** (Apple silicon, macOS 13+): **[NeoLink-macos-arm64.zip](https://github.com/abhayasho/NeoLink/releases/latest/download/NeoLink-macos-arm64.zip)**. Unzip and drag **NeoLink.app** to Applications, or quit NeoLink and run:
+**macOS** (Apple silicon or Intel, macOS 13+): **[NeoLink-macos-universal.zip](https://github.com/abhayasho/NeoLink/releases/latest/download/NeoLink-macos-universal.zip)**. Unzip and drag **NeoLink.app** to Applications, or quit NeoLink and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/abhayasho/NeoLink/main/scripts/install.sh | bash

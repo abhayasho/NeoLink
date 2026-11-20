@@ -4,6 +4,12 @@ What changed in each NeoLink release. Downloads and full notes are on the
 [releases page](https://github.com/abhayasho/NeoLink/releases); each version's notes are also in
 [`docs/releases`](docs/releases).
 
+## Unreleased
+
+- **Input methods.** Chinese, Japanese, Korean and other input methods, and dead keys, work in the
+  terminal, the editor and the built-in editor: the text being composed is shown underlined at the
+  cursor, and the candidate window appears beside it.
+
 ## 2.2.0 (2026-11-18)
 
 - **Command palette.** ⇧⌘P or F1 (Ctrl+Shift+Alt+P on Windows) lists every command with its

@@ -25,9 +25,17 @@ AccessKit exposes the toolbar and editor buttons (named as their help tags), the
 checked with VoiceOver speech or Narrator; text ranges for character-by-character reading and live
 announcements of terminal output are not implemented.
 
+## Input methods
+
+Composition (preedit) and committed text are handled for the terminal, Neovim and the built-in editor,
+checked with injected input-method events (`ime-preedit:`, `ime-commit:` capture controls) and against
+winit's macOS key handling. Not yet checked by typing with a real Chinese, Japanese or Korean input
+method, nor on Windows. Text fields in sheets (Quick Open, the palette) take committed text but do not
+show the composition.
+
 ## Known gaps
 
-IME (input methods for Chinese, Japanese, Korean and others); PDF tabs on Windows (they open in the
+PDF tabs on Windows (they open in the
 system viewer); editing remote files in place (remote previews are read-only); restoring unsaved work
 after a crash; two documents side by side; progress and cancellation for remote transfers and project
 search; Developer ID signing and notarization on macOS, code signing on Windows.
