@@ -98,7 +98,7 @@ impl Horizontal {
                 window: None,
                 previous: Vec::new(),
                 position: 0.0,
-                smoother: ScrollSmoother::new(Smoothing::Auto),
+                smoother: ScrollSmoother::new(Smoothing::from_environment()),
                 pending: None,
                 mouse: (row, column),
                 width: cell,

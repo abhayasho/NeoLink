@@ -74,5 +74,15 @@ Control, ACP and terminal coding agents. Versions 1.x were a Swift app; that cod
   direction (side-by-side spreads released two events in one frame and almost nothing in the next;
   queuing them instead added ~30 ms of lag to slow scrolling). The editor keeps Neovim's window
   ahead in the direction of travel (8 hidden rows) and re-centers it at rest.
+- Dense input (reports at least once a frame) is *queued*: each report released over its own sample
+  gap after the one before, never more than a frame late. Drawn on arrival, a 120 Hz trackpad bunched
+  two reports into one frame and none into the next (0/24 px steps; editor jerk p95 24 px, flicks up to
+  59 px). `NEOLINK_SCROLL_SMOOTHING=spread` restores the old rule for same-binary A/B runs.
+- While a scroll is live (and 250 ms after its last event, `NEOLINK_STEADY_SCROLL_MS`), every refresh is
+  presented, repeating the frame when nothing moved a whole pixel. A ProMotion panel follows the app's
+  frame rate; presenting only on pixel changes gave 8-90 ms gaps in slow scrolls, the refresh rate
+  changed every few frames and dark backgrounds visibly pulsed. Recorded frames had no brightness change,
+  so such flicker is the display's, not the pixels'. The benchmark's lag/jerk for crawls rise with
+  repeats (it samples every presented frame), not what is on screen.
 - Settings and saved connections are not read or written during benchmarks/captures unless
   `NEOLINK_SETTINGS_FILE` / `NEOLINK_SESSIONS_FILE` name files.

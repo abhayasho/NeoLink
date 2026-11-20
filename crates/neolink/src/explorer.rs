@@ -210,7 +210,7 @@ impl Explorer {
             shared: Weak::new(),
             scroll: 0.0,
             drawn_scroll: 0.0,
-            smoother: ScrollSmoother::new(Smoothing::Auto),
+            smoother: ScrollSmoother::new(Smoothing::from_environment()),
             hover: None,
             visible: std::env::var("NEOLINK_EXPLORER").as_deref() != Ok("0"),
             rect: Rect::default(),

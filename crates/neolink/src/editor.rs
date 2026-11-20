@@ -136,7 +136,7 @@ impl Editor {
             }
         })
         .map_err(|error| format!("Neovim did not start: {error}"))?;
-        Ok(Editor { caret: None, client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::Auto), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_total: 0, recentered: true, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), pixel_sideways: false, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
+        Ok(Editor { caret: None, client, grid: (columns.max(20), rows), next_token: 1, requested: None, frozen: None, speculative: None, speculated: 0, waited: 0, wheel: 0.0, smooth, smoother: neolink_core::scroll::ScrollSmoother::new(neolink_core::scroll::Smoothing::from_environment()), position: 0.0, position_path: String::new(), commanded_top: 0, last_wheel: 0.0, drawn_total: 0, recentered: true, drawn_shift: 0.0, sideways: 0.0, horizontal: crate::horizontal::Horizontal::new(), pixel_sideways: false, axis_lock: neolink_core::scroll::AxisLock::new(), received: 0.0, received_x: 0.0, drawn_position: 0.0, scratch: Vec::new(), drawn_generation: 0 })
     }
 
     pub fn has_exited(&self) -> bool {

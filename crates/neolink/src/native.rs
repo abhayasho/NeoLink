@@ -141,7 +141,7 @@ impl NativeEditor {
             typing: false,
             disk: signature(path),
             scroll: 0.0,
-            smoother: ScrollSmoother::new(Smoothing::Auto),
+            smoother: ScrollSmoother::new(Smoothing::from_environment()),
             rect: Rect::default(),
             gutter: 0.0,
             cell,

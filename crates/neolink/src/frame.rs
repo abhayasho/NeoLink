@@ -32,6 +32,8 @@ pub struct Shared {
     pub skipped: AtomicU64,
     /// When the user last did something (bits of an `f64` on the app's clock).
     last_input: AtomicU64,
+    /// When the last scroll input arrived (see `note_scroll`).
+    last_scroll: AtomicU64,
     /// When the last presented frames reached the display (the Performance Monitor's intervals).
     pub displayed: parking_lot::Mutex<std::collections::VecDeque<f64>>,
     /// How long the last frame took to build, in milliseconds (`f64` bits).
@@ -171,6 +173,7 @@ impl Shared {
             displayed: parking_lot::Mutex::new(std::collections::VecDeque::new()),
             build_cost: AtomicU64::new(0f64.to_bits()),
             last_input: AtomicU64::new(0f64.to_bits()),
+            last_scroll: AtomicU64::new(0f64.to_bits()),
             render_cpu: AtomicU64::new(0f64.to_bits()),
             main_cpu: AtomicU64::new(0f64.to_bits()),
         })
@@ -185,6 +188,13 @@ impl Shared {
         if now - previous > 0.2 {
             self.nudge();
         }
+    }
+
+    /// Scroll input arrived (a gesture or its momentum). Until shortly after the last one, every
+    /// refresh is presented, moved or not (see the render loop).
+    pub fn note_scroll(&self) {
+        self.last_scroll.store(clock::now().to_bits(), Ordering::Release);
+        self.invalidate();
     }
 
     /// Something visible changed: draw a frame. Lock-free; callable from any thread.
@@ -263,6 +273,12 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
     let env_number = |name: &str, default: f64| std::env::var(name).ok().and_then(|value| value.parse::<f64>().ok()).unwrap_or(default);
     let warm_interval = env_number("NEOLINK_WARM_MS", 250.0) / 1000.0;
     let warm_seconds = env_number("NEOLINK_WARM_SECONDS", 3.0);
+    // While a scroll is live, and this long after its last input, every refresh is presented (the
+    // last frame repeats when the content moved less than a pixel). A ProMotion display follows the
+    // app's frame rate: frames presented only when the text moved a whole pixel came 8-90 ms apart in
+    // a slow scroll, the panel changed its refresh rate every few frames, and dark backgrounds pulsed
+    // in brightness. A steady rate during the gesture changes it once, at the end.
+    let steady_scroll = env_number("NEOLINK_STEADY_SCROLL_MS", 250.0) / 1000.0;
     let mut last_frame_at = 0.0f64;
     // Display time of a frame the content asked for.
     let mut scheduled: Option<f64> = None;
@@ -330,7 +346,8 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
             shared.dirty.store(true, Ordering::Release);
         }
         let mut warming = false;
-        if !(shared.dirty.load(Ordering::Acquire) && visible) {
+        let scrolling = visible && steady_scroll > 0.0 && clock::now() - f64::from_bits(shared.last_scroll.load(Ordering::Acquire)) < steady_scroll;
+        if !(shared.dirty.load(Ordering::Acquire) && visible) && !scrolling {
             // Idle. A display that is given no frames lowers its refresh rate within a second, and the
             // next frame then waits for a slow refresh (measured in full screen: 6 ms after a 0.2-0.4 s
             // pause, 13 ms after 1 s, about 50 ms after several). While the user is active, repeat the
@@ -433,7 +450,7 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
                 std::process::exit(0);
             }
         }
-        if built.changed || warming || force_present || size != presented_size {
+        if built.changed || warming || scrolling || force_present || size != presented_size {
             let committed = with_pool(|| {
                 let started = clock::now();
                 let frame = presenter.acquire(size.0, size.1)?;
@@ -463,7 +480,7 @@ fn run(shared: Arc<Shared>, gpu: Gpu, mut presenter: Presenter, mut text: TextSy
             pacer.submitted(now, committed, latch);
             last_frame_at = committed;
             shared.frames.fetch_add(1, Ordering::Relaxed);
-            if warming {
+            if warming || (scrolling && !built.changed) {
                 shared.warm_frames.fetch_add(1, Ordering::Relaxed);
             }
             if let Some(marks) = marks {

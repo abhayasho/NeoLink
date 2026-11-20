@@ -7,6 +7,14 @@
 //! over the measured report interval, beginning with the next frame. Nothing waits for a later event, so
 //! the first part of every event is on screen as soon as it would have been anyway, and the last part is
 //! late by at most the interval minus one frame (capped). The delay in effect is reported.
+//!
+//! Input that comes at least once a frame (a 120 Hz trackpad) is not slower than the display, but it is
+//! not in step with it either: reports sampled evenly arrive two in one frame and none in the next
+//! (the trackpad's clock beats against the display's, and a busy main thread bunches them), and drawn
+//! as they arrive they move 0, 24, 12, 24, 0 pixels. Each such report is *queued*: released over its own
+//! sample interval, starting when the one before it is done. A report that arrives on time is still
+//! drawn whole in the next frame; one that arrives together with another is drawn in the frame after.
+//! The queue never holds anything back by more than one frame.
 
 use std::collections::VecDeque;
 
@@ -19,8 +27,21 @@ pub const SAME_GESTURE_GAP: f64 = 0.3;
 pub enum Smoothing {
     /// Every event is drawn whole in the next frame.
     Off,
-    /// Spread only when reports are at least 1.5 display frames apart.
+    /// Spread reports at least 1.5 display frames apart; queue denser ones (see the module notes).
     Auto,
+    /// Spread slow reports only; dense ones are drawn as they arrive (NeoLink 2.2 and before).
+    SpreadOnly,
+}
+
+impl Smoothing {
+    /// From `NEOLINK_SCROLL_SMOOTHING`: "off", "spread" (2.2's rule, for comparisons) or the default.
+    pub fn from_environment() -> Smoothing {
+        match std::env::var("NEOLINK_SCROLL_SMOOTHING").as_deref() {
+            Ok("off") => Smoothing::Off,
+            Ok("spread") => Smoothing::SpreadOnly,
+            _ => Smoothing::Auto,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -30,14 +51,20 @@ struct Spread {
     /// Display time of the first frame that showed part of it.
     start: f64,
     duration: f64,
+    /// A queued report (see the module notes): released between `start` and `start + duration` in
+    /// display time, rather than from the frame it arrived in.
+    queued: bool,
 }
 
 /// One scroll axis of one pane.
 #[derive(Clone, Debug)]
 pub struct ScrollSmoother {
     smoothing: Smoothing,
-    pending: Vec<(f64, f64)>,
+    /// `(distance, spread duration, sample interval when queued)`.
+    pending: Vec<(f64, f64, Option<f64>)>,
     spreads: VecDeque<Spread>,
+    /// Display time when the last queued report is fully released.
+    queue_end: Option<f64>,
     last_event: Option<f64>,
     gaps: [f64; 3],
     gap_count: usize,
@@ -53,6 +80,7 @@ impl ScrollSmoother {
             smoothing,
             pending: Vec::new(),
             spreads: VecDeque::new(),
+            queue_end: None,
             last_event: None,
             gaps: [0.0; 3],
             gap_count: 0,
@@ -86,11 +114,13 @@ impl ScrollSmoother {
     pub fn begin_gesture(&mut self) {
         self.last_event = None;
         self.gap_count = 0;
+        self.queue_end = None;
     }
 
     /// An event moved the content by `delta` pixels. `time` is when the input was sampled; `period` is
     /// the display's refresh interval.
     pub fn push(&mut self, time: f64, delta: f64, period: f64) {
+        let previous = self.last_event;
         if let Some(last) = self.last_event {
             let gap = time - last;
             if gap > SAME_GESTURE_GAP {
@@ -109,22 +139,45 @@ impl ScrollSmoother {
             return;
         }
         self.events += 1;
-        let duration = match (self.smoothing, self.report_interval()) {
-            (Smoothing::Auto, Some(interval)) if interval >= 1.5 * period => interval.min(MAX_SPREAD),
+        let interval = self.report_interval();
+        let duration = match (self.smoothing, interval) {
+            (Smoothing::Auto | Smoothing::SpreadOnly, Some(interval)) if interval >= 1.5 * period => interval.min(MAX_SPREAD),
             _ => 0.0,
         };
         if duration > period {
             self.spread_events += 1;
             self.max_delay = self.max_delay.max(duration - period);
         }
-        self.pending.push((delta, duration));
+        // Dense input is queued, each report over its own sample gap (bounded, so a late or early one
+        // does not stretch or squeeze the queue much).
+        let queued = match (self.smoothing, interval, previous) {
+            (Smoothing::Auto, Some(interval), Some(previous)) if interval < 1.5 * period && duration == 0.0 => Some((time - previous).clamp(0.5 * period, 2.0 * period)),
+            _ => None,
+        };
+        self.pending.push((delta, duration, queued));
+    }
+
+    /// Where a queued report released over `gap` starts, for a frame displayed at `frame_time`: right
+    /// away (whole in this frame) unless the reports before it are still being released, and never
+    /// later than one frame from now.
+    fn queued_start(queue_end: Option<f64>, frame_time: f64, gap: f64) -> f64 {
+        let at_once = frame_time - gap;
+        queue_end.map_or(at_once, |end| end.max(at_once)).min(frame_time)
     }
 
     /// The distance to move in the frame that will be displayed at `frame_time`.
     pub fn advance(&mut self, frame_time: f64, period: f64) -> f64 {
         let mut step = 0.0;
-        for (amount, duration) in self.pending.drain(..) {
-            if duration <= period {
+        for (amount, duration, queued) in std::mem::take(&mut self.pending) {
+            if let Some(gap) = queued {
+                // A reversal is not queued behind motion the other way.
+                if self.spreads.back().is_some_and(|last| last.amount.signum() != amount.signum()) {
+                    self.queue_end = None;
+                }
+                let start = Self::queued_start(self.queue_end, frame_time, gap);
+                self.queue_end = Some(start + gap);
+                self.spreads.push_back(Spread { amount, released: 0.0, start, duration: gap, queued: true });
+            } else if duration <= period {
                 step += amount;
             } else {
                 // A new event in the same direction takes over what is left of the one still being
@@ -137,7 +190,7 @@ impl ScrollSmoother {
                     amount += last.amount - last.released;
                     last.amount = last.released;
                 }
-                self.spreads.push_back(Spread { amount, released: 0.0, start: frame_time, duration });
+                self.spreads.push_back(Spread { amount, released: 0.0, start: frame_time, duration, queued: false });
             }
         }
         for spread in self.spreads.iter_mut() {
@@ -145,7 +198,7 @@ impl ScrollSmoother {
             if spread.released == spread.amount {
                 continue;
             }
-            let fraction = (frame_time - spread.start + period) / spread.duration;
+            let fraction = Self::fraction(spread, frame_time, period);
             // Frame times are not exact multiples of the period: the last part is not left for a
             // frame of its own.
             let target = if fraction >= 1.0 - 1e-6 { spread.amount } else { spread.amount * fraction.max(0.0) };
@@ -153,7 +206,19 @@ impl ScrollSmoother {
             spread.released = target;
         }
         self.spreads.retain(|spread| spread.released != spread.amount);
+        if self.spreads.is_empty() && self.queue_end.is_some_and(|end| end <= frame_time) {
+            self.queue_end = None;
+        }
         step
+    }
+
+    /// How much of `spread` is released by the frame displayed at `frame_time`.
+    fn fraction(spread: &Spread, frame_time: f64, period: f64) -> f64 {
+        if spread.queued {
+            (frame_time - spread.start) / spread.duration
+        } else {
+            (frame_time - spread.start + period) / spread.duration
+        }
     }
 
     /// What [`advance`](Self::advance) would return for a frame displayed at `frame_time`, without
@@ -164,15 +229,23 @@ impl ScrollSmoother {
             if spread.released == spread.amount {
                 return 0.0;
             }
-            let fraction = (frame_time - spread.start + period) / spread.duration;
+            let fraction = Self::fraction(spread, frame_time, period);
             let target = if fraction >= 1.0 - 1e-6 { spread.amount } else { spread.amount * fraction.max(0.0) };
             target - spread.released
         };
         // Not yet anchored: each would start in this frame, taking over what is left of the spread in
         // the same direction before it (see `advance`).
         let mut spreads: Vec<Spread> = self.spreads.iter().copied().collect();
-        for (amount, duration) in &self.pending {
-            if *duration <= period {
+        let mut queue_end = self.queue_end;
+        for (amount, duration, queued) in &self.pending {
+            if let Some(gap) = queued {
+                if spreads.last().is_some_and(|last| last.amount.signum() != amount.signum()) {
+                    queue_end = None;
+                }
+                let start = Self::queued_start(queue_end, frame_time, *gap);
+                queue_end = Some(start + gap);
+                spreads.push(Spread { amount: *amount, released: 0.0, start, duration: *gap, queued: true });
+            } else if *duration <= period {
                 step += amount;
             } else {
                 let mut amount = *amount;
@@ -180,7 +253,7 @@ impl ScrollSmoother {
                     amount += last.amount - last.released;
                     last.amount = last.released;
                 }
-                spreads.push(Spread { amount, released: 0.0, start: frame_time, duration: *duration });
+                spreads.push(Spread { amount, released: 0.0, start: frame_time, duration: *duration, queued: false });
             }
         }
         for spread in &spreads {
@@ -223,6 +296,7 @@ impl ScrollSmoother {
     pub fn cancel(&mut self) {
         self.pending.clear();
         self.spreads.clear();
+        self.queue_end = None;
     }
 
     /// `(events spread, all events, longest delay given to any distance in ms)`.
@@ -475,6 +549,44 @@ mod tests {
             total += step;
         }
         assert!((total - 30.0 * times.len() as f64).abs() < 1e-6, "moved {total}");
+    }
+
+    #[test]
+    fn bunched_dense_reports_are_drawn_one_per_frame() {
+        // 120 Hz reports sampled evenly but delivered in pairs: two before one frame, none before the
+        // next. Drawn as they arrive they move 24, 0, 24, 0 pixels.
+        let period = 1.0 / 120.0;
+        let mut smoother = ScrollSmoother::new(Smoothing::Auto);
+        let mut steps = Vec::new();
+        let mut sent = 0;
+        let mut received = 0.0;
+        let mut drawn = 0.0;
+        for frame in 1..=120 {
+            let display = frame as f64 * period;
+            if frame % 2 == 1 {
+                for _ in 0..2 {
+                    smoother.push(sent as f64 * period, 12.0, period);
+                    sent += 1;
+                    received += 12.0;
+                }
+            }
+            let step = smoother.advance(display, period);
+            drawn += step;
+            assert!(received - drawn <= 12.0 + 1e-9, "never more than one report behind (frame {frame})");
+            if frame > 6 {
+                steps.push(step);
+            }
+        }
+        assert!(steps.iter().all(|step| (step - 12.0).abs() < 1e-6), "{steps:?}");
+        // Reports that come on time are still drawn whole in the next frame.
+        let mut smoother = ScrollSmoother::new(Smoothing::Auto);
+        for frame in 1..=10 {
+            smoother.push((frame - 1) as f64 * period, 12.0, period);
+            let step = smoother.advance(frame as f64 * period, period);
+            if frame > 1 {
+                assert!((step - 12.0).abs() < 1e-6, "frame {frame}: {step}");
+            }
+        }
     }
 
     #[test]

@@ -306,10 +306,7 @@ impl Terminal {
         let sender = event_loop.channel();
         let _ = listener.sender.set(sender.clone());
         event_loop.spawn();
-        let smoothing = match std::env::var("NEOLINK_SCROLL_SMOOTHING").as_deref() {
-            Ok("off") => Smoothing::Off,
-            _ => Smoothing::Auto,
-        };
+        let smoothing = Smoothing::from_environment();
         Ok(Terminal {
             term,
             caret: None,

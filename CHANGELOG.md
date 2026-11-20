@@ -6,6 +6,14 @@ What changed in each NeoLink release. Downloads and full notes are on the
 
 ## Unreleased
 
+- **Smoother scrolling.** Trackpad reports that arrived two in one frame and none in the next made the
+  terminal and editor stutter (steps of 0 and 24 pixels); each report is now drawn in its own frame.
+  In measured runs the worst stutter in the editor fell from 24 pixels to 2, and in fast flicks from up
+  to 59 pixels to under 4, for about 4 ms of extra delay.
+- **No more dimming flicker while scrolling** on ProMotion displays: frames are presented at a steady
+  rate for the whole scroll, so the display no longer changes its refresh rate (and, on dark
+  backgrounds, its brightness) every few frames.
+
 - **Input methods.** Chinese, Japanese, Korean and other input methods, and dead keys, work in the
   terminal, the editor and the built-in editor: the text being composed is shown underlined at the
   cursor, and the candidate window appears beside it.

@@ -211,6 +211,9 @@ impl App {
     /// A scroll report in device pixels.
     fn scroll(&self, time: f64, delta_x: f64, delta_y: f64, phase: ScrollPhase) {
         self.with_workspace(|workspace, _| workspace.scroll(time, delta_x, delta_y, phase));
+        if let Some(shared) = &self.shared {
+            shared.note_scroll();
+        }
         self.invalidate();
     }
 
